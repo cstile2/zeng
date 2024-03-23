@@ -6,4 +6,4 @@ zig-out/
 /build-*/
 /docgen_tmp/
 
-extras/command_input.txt
+#assets/extras/command_input.txt
