@@ -1,0 +1,1 @@
+add 4 sine_mover; add 1 sine_mover; freeze; freeze
