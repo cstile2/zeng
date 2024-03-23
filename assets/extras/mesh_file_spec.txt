@@ -1,0 +1,93 @@
+This is how my custom mesh files are laid out. This pattern is repeated.
+
+// START OF MESH DATA
+[4 bytes as 1 u32] size of data below
+[_ bytes][floats] mesh vertex data
+
+[4 bytes as 1u32] size of data below
+[_ bytes as _ i32's] indices for mesh data
+
+[4 bytes as 1 u32] size of data below
+[4*13 bytes as 13 floats] local position, rotation, scale, of this mesh respectively
+// END OF MESH DATA
+// REPEAT
+
+
+
+
+
+I need to design a file that contains everything - mesh data, transforms, component values, everything.
+An entire scene file. A scene file is a file that defines a snapshot of game state.
+
+I need to write code to output scene files based on game state. This will make the game become an editor. Boom.
+
+Now all that is needed is to load that file, and everything should be as it was supposed to.
+
+Data needs to be in binary.
+
+This gives me the ideal file type, but what is the ideal way to edit.
+Blender would only output meshes and animation data ans such. There is no sense of component data.
+
+The usual workflow is to create something in blender, then export to TSCN. Then that is supposed to be left untouched or copied to mutable.
+If copied to mutable, then the result can be changed with full control. But then the actual modeling phase is over. Is there a way to retain
+both edit capabilities throughout? Is there some way to reexport a blend file without throwing away components and extra stuff? Perhaps using
+blender names or some unique identifier. Then when the new blend file comes in, I can simply use it to change the mesh data, as long as
+everything else is laid out the same. There just needs to be a sense of object persistence accross platforms. Maybe python/plugin could do it.
+Added objects are fine - they are simply added with nothing but mesh component and transform and such. Persisting objects need update on only those
+types of things, while retaining component data as is. Deleted item simply get deleted. We need some kind of git merge process, but with some way
+to tie the old and new versions of the same objects together.
+
+One thing that the command-focused idea had was that it allowed more interesting behavior and interoperability in a way that is intuitive and
+imperitive. You could simply query for an object named "bridge" and attach components to that. This process would have the file author make sure
+to have everything named precisely. This also views a blender-ouput file as being somewhat separate from the commands. It's a black box on paper.
+Seems prone to bugs because of unknowns at runtime. But there is merits to this method.
+
+example:
+
+entity(1) position(1,4,9) velocity(0,0,0) name("Player")
+1.0<d91jfj29fj>1<ofqh008r>5<Player>
+
+entity(2) mesh([0.002, 0.3453, 234.034, ...], [0, 1, 4, 0, 2, 3, 1, 5, 8, ...]) transform(1,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0)
+2.7<04th08t19834983h4t98h08ha0e8fh0q8794hr0q8374t9780871gt19834983h4t98h08ha0e8fh0q8794hr0q8374t9780871gt>9<501659601856792745693>
+
+import "assets/file.blend"
+find bridge within id 11 and add wood(10,3) to it
+
+11!<assets/file.blend>
+11?<bridge>0<mf92hf8>
+
+
+
+
+Ok so scene files exported from blender will be immutable like in Godot. Scene files can contain multiple other scene files.
+This suggests that scenes should be hierarchical. Should nodes be part of a hierarchy as well, or flat within each file?
+
+Let's go full hierarchical. In this way, objects that are parented are rigidly "part" of their parent. Game logic can modify any
+local transform so animations are possible. Game logic can also modify parenting tree structure itself. So the hierarchy can be completely
+changed by the game systems. But right when that scene is loaded, things are rigid. This is useful essentially so that a scene feels more
+like a individual part of the game, rather than all of its pieces drifting away from each other. Traditionally this is for the editor's feel,
+not the game's feel.
+
+So our file will preserve blender hierarchy. Every root within the file will be parented underneath a per-file root, so that the entire
+scene can be moved all together in the editor. (MAYBE NOT)
+
+Should our file include processing, such as adding colliders? Blender-export files cannot directly contain colliders, but an encapsulating
+scene file could provide such commands.
+
+Ignore blender cameras. Probably try to retain materials and lights.
+
+
+
+Ok so new plan - use blender for modeling things that are individual - individual objects that are self-contained. This is basically how Godot works.
+If I want to make an entire level, it's simply best to make it in the "editor" because I can then just add components and things and it will be
+interactive. So a moving platform could be part of a big level blend file, but since I want to treat it differently from other things, it needs
+to be a seperate blend file. Then I can add components to it, and those added components will be stored in the main scene file.
+
+So scene file - defines entire game state during a snapshot.
+
+Exported scene file - same thing but can only ever define models, transforms, animations, etc.
+
+So the strategy is to have an encapsulating mutable scene file created within engine, which contains exported scene files that I process and manipulate.
+This is tried and true for now.
+
+OPTIONAL - for better results I could flatten embedded scene files to make one single main scene file. This would be best for final game export.
