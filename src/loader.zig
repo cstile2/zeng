@@ -1,8 +1,6 @@
 const std = @import("std");
 const gl = @import("gl");
-const Engine = struct {
-    usingnamespace @import("data_types.zig");
-};
+const Engine = @import("engine.zig");
 
 pub fn GetBytesFromFile(filepath: []const u8, allocator: std.mem.Allocator) []u8 {
     // open file from filepath > close after done

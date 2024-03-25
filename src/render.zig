@@ -1,7 +1,5 @@
 const gl = @import("gl");
-const Engine = struct {
-    usingnamespace @import("data_types.zig");
-};
+const Engine = @import("engine.zig");
 
 pub fn DrawMesh(entity: Engine.Entity, projection_matrix: [16]f32, inv_camera_matrix: [16]f32) void {
     // use shader program > bind VAO > bind texture

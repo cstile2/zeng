@@ -4,10 +4,7 @@ const gl = @import("gl");
 const c = @cImport({
     @cInclude("stb_image.h");
 });
-const Engine = struct {
-    usingnamespace @import("render.zig");
-    usingnamespace @import("data_types.zig");
-};
+const Engine = @import("engine.zig");
 
 const GlobalData = @import("main.zig").GlobalData;
 
@@ -22,8 +19,8 @@ pub fn SYSTEM_Constant(gd: *GlobalData) void {
 pub fn SYSTEM_SineMover(gd: *GlobalData) void {
     for (gd.entity_slice) |*entity| {
         if (entity.component_flags.sine_mover) {
-            entity.world_matrix[14] = @sin(gd.elapsed_time);
-            entity.world_matrix[12] = @cos(gd.elapsed_time);
+            entity.world_matrix[14] = @sin(gd.elapsed_time * 6.28);
+            entity.world_matrix[12] = @cos(gd.elapsed_time * 6.28);
         }
     }
 }

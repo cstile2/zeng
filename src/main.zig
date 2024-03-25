@@ -4,11 +4,8 @@ const gl = @import("gl");
 const c = @cImport({
     @cInclude("stb_image.h");
 });
-const Engine = struct {
-    usingnamespace @import("loader.zig");
-    usingnamespace @import("data_types.zig");
-    const systems = @import("systems.zig");
-};
+
+const Engine = @import("engine.zig");
 
 pub const GlobalData = struct {
     elapsed_time: f32 = 0.0,
@@ -273,11 +270,10 @@ pub fn main() !void {
     Engine.systems.AddSystem(Engine.systems.SYSTEM_SineMover, &systems_slice);
     Engine.systems.AddSystem(Engine.systems.SYSTEM_Ghost, &systems_slice);
     Engine.systems.AddSystem(Engine.systems.SYSTEM_CameraControls, &systems_slice);
+    Engine.systems.AddSystem(Engine.systems.SYSTEM_MeshDrawer, &systems_slice);
 
     // run a command to import the scene
     RunCommand(&gd, "import assets/blender_files/custom_export.bin");
-
-    Engine.Deserialize(window);
 
     // repeat until user closes the window
     while (!window.shouldClose()) {
@@ -289,6 +285,14 @@ pub fn main() !void {
             const input_read: []u8 = Engine.GetBytesFromFile("assets/extras/command_input.txt", std.heap.c_allocator);
             defer std.heap.c_allocator.free(input_read);
             RunCommand(&gd, input_read);
+
+            const imported = Engine.ImportModelAsset("assets/blender_files/simple.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+            for (imported[0], imported[1]) |entity, name| {
+                if (std.mem.eql(u8, name, "circ")) {
+                    entity.world_matrix[13] += 10.0;
+                    entity.component_flags.sine_mover = true;
+                }
+            }
         }
         t_pressed_last_frame = window.getKey(glfw.Key.t) == glfw.Action.press;
 
@@ -298,12 +302,11 @@ pub fn main() !void {
                 system(&gd);
             }
         }
-        Engine.systems.SYSTEM_MeshDrawer(&gd); // render should be last
 
         // poll events
         glfw.pollEvents();
 
         // calculate frame delta
-        gd.frame_delta = @as(f64, @floatFromInt(@divTrunc(std.time.nanoTimestamp() - start_frame_time, 100))) / 10000000.0;
+        gd.frame_delta = @as(f64, @floatFromInt(@divTrunc(std.time.nanoTimestamp() - start_frame_time, 1000))) / 1000000.0;
     }
 }
