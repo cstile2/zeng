@@ -98,7 +98,8 @@ pub fn RunCommand(gd: *GlobalData, input_read: []const u8) void {
         if (std.mem.eql(u8, parsed[0], "import")) {
             if (parsed.len >= 2) {
                 const ents = Engine.ImportModelAsset(parsed[1], std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
-                defer std.heap.c_allocator.free(ents);
+                defer std.heap.c_allocator.free(ents[0]);
+                defer std.heap.c_allocator.free(ents[1]);
             } else {
                 std.debug.print("No path specified", .{});
             }

@@ -44,9 +44,13 @@ pub fn SeparateText(text: []const u8, comptime delimiter: u8) [][]u8 {
     return ret[0..ret_count];
 }
 
-pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture: u32, entity_array: *[]Engine.Entity) []*Engine.Entity {
+pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture: u32, entity_array: *[]Engine.Entity) struct { []*Engine.Entity, [][]u8 } {
     var res = allocator.alloc(*Engine.Entity, 64) catch unreachable;
     var res_count: u32 = 0;
+
+    var names = allocator.alloc([]u8, 64) catch unreachable;
+    var names_count: u32 = 0;
+
     // open file from filepath > close after done
     const file = std.fs.cwd().openFile(filepath, .{}) catch unreachable;
     defer file.close();
@@ -69,6 +73,16 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
             gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, 0);
             gl.bindBuffer(gl.ARRAY_BUFFER, 0);
         }
+
+        // read current place as a u32 > increment current byte by size of this u32 (4 bytes)
+        const size_name: u32 = @as(*u32, @alignCast(@ptrCast(data_bytes[curr_byte .. curr_byte + 4]))).*;
+        curr_byte = curr_byte + 4;
+        std.debug.print("size of name: {}\n", .{size_name});
+
+        // read in the name (there may be padding so that an alignment of 4 is maintained)
+        const name_data = data_bytes[curr_byte .. curr_byte + size_name];
+        curr_byte = curr_byte + size_name;
+        std.debug.print("'{s}' :\n", .{name_data});
 
         // read current place as a u32 > increment current byte by size of this u32 (4 bytes)
         const sizea: u32 = @as(*u32, @alignCast(@ptrCast(data_bytes[curr_byte .. curr_byte + 4]))).*;
@@ -125,7 +139,9 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
         Engine.CreateEntity(entity_array, Engine.Entity{ .vao_gpu = VAO, .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4), .world_matrix = transform, .material = Engine.Material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture }, .component_flags = Engine.ComponentFlags{ .mesh = true }, .camera = undefined });
         res[res_count] = &entity_array.*[entity_array.len - 1];
         res_count += 1;
+        names[names_count] = name_data;
+        names_count += 1;
     }
 
-    return res[0..res_count];
+    return .{ res[0..res_count], names[0..names_count] };
 }
