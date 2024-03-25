@@ -1,12 +1,20 @@
 const std = @import("std");
-const glfw = @import("mach-glfw");
-const gl = @import("gl");
-const c = @cImport({
-    @cInclude("stb_image.h");
-});
-const Engine = @import("engine.zig");
+pub const Engine = @import("engine.zig");
 
-const GlobalData = @import("main.zig").GlobalData;
+pub const GlobalData = struct {
+    elapsed_time: f32 = 0.0,
+    active_window: *Engine.glfw.Window,
+    active_camera_matrix: *[16]f32,
+    active_camera: *Engine.Camera,
+    cur_pos: Engine.glfw.Window.CursorPos,
+    entity_slice: []Engine.Entity,
+    frame_delta: f64 = 0.001,
+    frozen: bool = false,
+    shader_program_GPU: u32,
+    texture_GPU: u32,
+    window_width: u32,
+    window_height: u32,
+};
 
 pub fn SYSTEM_Input(gd: *GlobalData) void {
     gd.cur_pos = gd.active_window.getCursorPos();
@@ -19,8 +27,8 @@ pub fn SYSTEM_Constant(gd: *GlobalData) void {
 pub fn SYSTEM_SineMover(gd: *GlobalData) void {
     for (gd.entity_slice) |*entity| {
         if (entity.component_flags.sine_mover) {
-            entity.world_matrix[14] = @sin(gd.elapsed_time * 6.28);
-            entity.world_matrix[12] = @cos(gd.elapsed_time * 6.28);
+            entity.world_matrix[14] = @sin(gd.elapsed_time * 3.0);
+            entity.world_matrix[12] = @cos(gd.elapsed_time * 5.0);
         }
     }
 }
@@ -30,37 +38,37 @@ pub fn SYSTEM_Ghost(gd: *GlobalData) void {
     for (gd.entity_slice) |*entity| {
         if (entity.component_flags.ghost) {
             var speed: f32 = @floatCast(gd.frame_delta * 100.0);
-            if (gd.active_window.getKey(glfw.Key.left_shift) == glfw.Action.press) {
+            if (gd.active_window.getKey(Engine.glfw.Key.left_shift) == Engine.glfw.Action.press) {
                 speed *= 0.2;
             } else {
                 speed *= 0.05;
             }
-            if (gd.active_window.getKey(glfw.Key.a) == glfw.Action.press) {
+            if (gd.active_window.getKey(Engine.glfw.Key.a) == Engine.glfw.Action.press) {
                 entity.world_matrix[12] -= entity.world_matrix[0] * speed;
                 entity.world_matrix[13] -= entity.world_matrix[1] * speed;
                 entity.world_matrix[14] -= entity.world_matrix[2] * speed;
             }
-            if (gd.active_window.getKey(glfw.Key.d) == glfw.Action.press) {
+            if (gd.active_window.getKey(Engine.glfw.Key.d) == Engine.glfw.Action.press) {
                 entity.world_matrix[12] += entity.world_matrix[0] * speed;
                 entity.world_matrix[13] += entity.world_matrix[1] * speed;
                 entity.world_matrix[14] += entity.world_matrix[2] * speed;
             }
-            if (gd.active_window.getKey(glfw.Key.q) == glfw.Action.press) {
+            if (gd.active_window.getKey(Engine.glfw.Key.q) == Engine.glfw.Action.press) {
                 entity.world_matrix[12] -= entity.world_matrix[4] * speed;
                 entity.world_matrix[13] -= entity.world_matrix[5] * speed;
                 entity.world_matrix[14] -= entity.world_matrix[6] * speed;
             }
-            if (gd.active_window.getKey(glfw.Key.e) == glfw.Action.press) {
+            if (gd.active_window.getKey(Engine.glfw.Key.e) == Engine.glfw.Action.press) {
                 entity.world_matrix[12] += entity.world_matrix[4] * speed;
                 entity.world_matrix[13] += entity.world_matrix[5] * speed;
                 entity.world_matrix[14] += entity.world_matrix[6] * speed;
             }
-            if (gd.active_window.getKey(glfw.Key.w) == glfw.Action.press) {
+            if (gd.active_window.getKey(Engine.glfw.Key.w) == Engine.glfw.Action.press) {
                 entity.world_matrix[12] -= entity.world_matrix[8] * speed;
                 entity.world_matrix[13] -= entity.world_matrix[9] * speed;
                 entity.world_matrix[14] -= entity.world_matrix[10] * speed;
             }
-            if (gd.active_window.getKey(glfw.Key.s) == glfw.Action.press) {
+            if (gd.active_window.getKey(Engine.glfw.Key.s) == Engine.glfw.Action.press) {
                 entity.world_matrix[12] += entity.world_matrix[8] * speed;
                 entity.world_matrix[13] += entity.world_matrix[9] * speed;
                 entity.world_matrix[14] += entity.world_matrix[10] * speed;
@@ -71,8 +79,8 @@ pub fn SYSTEM_Ghost(gd: *GlobalData) void {
 
 pub fn SYSTEM_MeshDrawer(gd: *GlobalData) void {
     // set color and clear the screen
-    gl.clearColor(0.2, 0.3, 0.3, 1.0);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    Engine.gl.clearColor(0.2, 0.3, 0.3, 1.0);
+    Engine.gl.clear(Engine.gl.COLOR_BUFFER_BIT | Engine.gl.DEPTH_BUFFER_BIT);
     const inv_camera_matrix: [16]f32 = Engine.InvertMatrix(gd.active_camera_matrix.*);
     for (gd.entity_slice) |*entity| {
         if (entity.component_flags.mesh) {

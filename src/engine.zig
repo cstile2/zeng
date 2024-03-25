@@ -1,12 +1,9 @@
 const std = @import("std");
 pub usingnamespace @import("loader.zig");
-pub const systems = @import("systems.zig");
+pub usingnamespace @import("systems.zig");
 pub usingnamespace @import("render.zig");
-const glfw = @import("mach-glfw");
-
-pub const Camera = struct {
-    projection_matrix: [16]f32,
-};
+pub const glfw = @import("mach-glfw");
+pub const gl = @import("gl");
 
 pub const Vec3 = packed struct {
     x: f32,
@@ -36,25 +33,58 @@ pub const Material = struct {
     texture_GPU: u32,
 };
 
+// mesh component
+pub const Mesh = struct {
+    vao_gpu: u32,
+    indices_length: i32,
+    material: Material,
+};
+
+// camera component
+pub const Camera = struct {
+    projection_matrix: [16]f32,
+};
+
+// transform component
+pub const Transform = [16]f32;
+
+// meta data
 pub const ComponentFlags = packed struct {
-    sine_mover: bool = false,
-    ghost: bool = false,
+    sine_mover: bool = false, // tag
+    ghost: bool = false, // tag
     mesh: bool = false,
     camera: bool = false,
 
     _padding: u28 = 0,
 };
 
+// entity
 pub const Entity = struct {
-    vao_gpu: u32,
-    indices_length: i32,
-    world_matrix: [16]f32,
-    material: Material,
+    mesh: Mesh,
     camera: Camera,
+    world_matrix: Transform,
 
     component_flags: ComponentFlags,
 };
 
+// add/remove components
+fn SetComponent(entity: *Entity, component: []u8, comptime value: bool) !void {
+    if (std.mem.eql(u8, component, "sine_mover")) {
+        entity.component_flags.sine_mover = value;
+    } else if (std.mem.eql(u8, component, "ghost")) {
+        entity.component_flags.ghost = value;
+    } else {
+        return error.InvalidParam;
+    }
+}
+pub fn AddComponent(entity: *Entity, component: []u8) !void {
+    return SetComponent(entity, component, true);
+}
+pub fn RemoveComponent(entity: *Entity, component: []u8) !void {
+    return SetComponent(entity, component, false);
+}
+
+// identity 4x4 matrix
 pub fn identity() [16]f32 {
     return [16]f32{
         1, 0, 0, 0, //
