@@ -1,4 +1,5 @@
 const glfw = @import("mach-glfw");
+const std = @import("std");
 
 pub const Camera = struct {
     projection_matrix: [16]f32,
@@ -311,4 +312,56 @@ pub fn perspective_projection_matrix(fov: f32, aspect_ratio: f32, near: f32, far
     result[15] = 0.0;
 
     return result;
+}
+
+pub fn Deserialize(payload: anytype) void {
+    switch (@typeInfo(@TypeOf(payload))) {
+        .Int => {
+            std.debug.print("{any} = {any}\n", .{ @TypeOf(payload), payload });
+        },
+        .Float => {
+            std.debug.print("{any} = {any}\n", .{ @TypeOf(payload), payload });
+        },
+        .ComptimeInt => {
+            std.debug.print("{any} = {any}\n", .{ @TypeOf(payload), payload });
+        },
+        .ComptimeFloat => {
+            std.debug.print("{any} = {any}\n", .{ @TypeOf(payload), payload });
+        },
+        .Struct => {
+            inline for (std.meta.fields(@TypeOf(payload))) |f| {
+                switch (@typeInfo(f.type)) {
+                    .Int => {
+                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
+                    },
+                    .Float => {
+                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
+                    },
+                    .ComptimeInt => {
+                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
+                    },
+                    .ComptimeFloat => {
+                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
+                    },
+                    .Bool => {
+                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
+                    },
+                    .Array => {
+                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
+                    },
+                    .Pointer => |info| {
+                        if (info.size == .Slice) {
+                            std.debug.print("{s}: {} = {*}, length: {}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)), @as(f.type, @field(payload, f.name)).len });
+                        } else {
+                            std.debug.print("{s}: {} = {*}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
+                        }
+                    },
+                    else => {
+                        Deserialize(@field(payload, f.name));
+                    },
+                }
+            }
+        },
+        else => {},
+    }
 }

@@ -11,7 +11,7 @@ const Engine = struct {
 };
 
 pub const GlobalData = struct {
-    time: f32 = 0.0,
+    elapsed_time: f32 = 0.0,
     active_window: *glfw.Window,
     active_camera_matrix: *[16]f32,
     active_camera: *Engine.Camera,
@@ -21,6 +21,8 @@ pub const GlobalData = struct {
     frozen: bool = false,
     shader_program_GPU: u32,
     texture_GPU: u32,
+    window_width: u32,
+    window_height: u32,
 };
 
 // Add/Remove components
@@ -69,8 +71,10 @@ fn glLogError() !void {
 pub fn OnWindowResize(window: glfw.Window, width: i32, height: i32) void {
     std.debug.print("Window has been resized\n", .{});
     gl.viewport(0, 0, width, height);
-    if (window.getUserPointer([16]f32)) |ptr| {
-        ptr.* = Engine.perspective_projection_matrix(1.3, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 100.0);
+    if (window.getUserPointer(GlobalData)) |gd| {
+        gd.window_width = @intCast(width);
+        gd.window_height = @intCast(height);
+        gd.active_camera.projection_matrix = Engine.perspective_projection_matrix(1.3, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 100.0);
     }
 }
 
@@ -93,12 +97,12 @@ pub fn RunCommand(gd: *GlobalData, input_read: []const u8) void {
         }
         if (std.mem.eql(u8, parsed[0], "import")) {
             if (parsed.len >= 2) {
-                Engine.ImportModelAsset(parsed[1], std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+                const ents = Engine.ImportModelAsset(parsed[1], std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+                defer std.heap.c_allocator.free(ents);
             } else {
                 std.debug.print("No path specified", .{});
             }
-        }
-        if (std.mem.eql(u8, parsed[0], "freeze") and parsed.len == 1) { // pauses everything in the game except a spectator camera
+        } else if (std.mem.eql(u8, parsed[0], "freeze") and parsed.len == 1) { // pauses everything in the game except a spectator camera
             std.debug.print("FREEZE!\n", .{});
             gd.frozen = !gd.frozen;
         } else if (std.mem.eql(u8, parsed[0], "add")) { // adds a component to an entity
@@ -130,13 +134,14 @@ pub fn RunCommand(gd: *GlobalData, input_read: []const u8) void {
                 std.debug.print("Too few arguments for 'remove' command\n", .{});
             }
         } else { // unrecognized command
-            std.debug.print("Command not recognized\n", .{});
+            std.debug.print("Command not recognized: '{s}'\n", .{sub_command});
         }
     }
 }
 
 // Main
 pub fn main() !void {
+    // set glfw error callback
     glfw.setErrorCallback(errorCallback);
     if (!glfw.init(.{})) {
         std.log.err("failed to initialize GLFW: {?s}", .{glfw.getErrorString()});
@@ -144,8 +149,13 @@ pub fn main() !void {
     }
     defer glfw.terminate();
 
+    // initialize shared data
+    var gd: GlobalData = undefined;
+    gd.window_width = 800;
+    gd.window_height = 500;
+
     // create our window
-    var window = glfw.Window.create(1200, 900, "colsens game window!", null, null, .{
+    var window = glfw.Window.create(gd.window_width, gd.window_height, "colsens game window!", null, null, .{
         .opengl_profile = .opengl_core_profile,
         .context_version_major = 4,
         .context_version_minor = 0,
@@ -154,24 +164,22 @@ pub fn main() !void {
         std.process.exit(1);
     };
     defer window.destroy();
-
-    // allow correct window resizing > other stuff
     window.setSizeCallback(OnWindowResize);
+    window.setUserPointer(&gd);
+
+    // init glfw and opengl
     glfw.makeContextCurrent(window);
     const proc: glfw.GLProc = undefined;
     try gl.load(proc, glGetProcAddress);
 
     // tell opengl the correct viewport size in pixels
-    gl.viewport(0, 0, 1200, 900);
+    gl.viewport(0, 0, @intCast(gd.window_width), @intCast(gd.window_height));
     c.stbi_set_flip_vertically_on_load(1);
 
-    // initialize shared data
-    var gd: GlobalData = undefined;
-
     // import shader from files and create a program stored in shader_program_GPU
-    gd.shader_program_GPU = gl.createProgram();
+    gd.shader_program_GPU = undefined;
     {
-        // get code from vertex shader file as a string (c style).
+        // get code from vertex shader file as a string
         const vert_shader_code = Engine.GetBytesFromFile("assets/shaders/basic.shader", std.heap.c_allocator);
         defer std.heap.c_allocator.free(vert_shader_code);
 
@@ -181,14 +189,14 @@ pub fn main() !void {
         gl.shaderSource(vertex_shader_GPU, 1, &vert_shader_code.ptr, &@intCast(vert_shader_code.len));
         gl.compileShader(vertex_shader_GPU);
 
-        // get any shader compile errors from OpenGL
+        // check for opengl compilation errors
         {
             var infoLog: [512]u8 = undefined;
             gl.getShaderInfoLog(vertex_shader_GPU, 512, null, &infoLog);
             std.debug.print("{s}\n", .{infoLog});
         }
 
-        // get code from fragment shader file as a string (c style).
+        // get code from fragment shader file as a string
         var frag_shader_code = Engine.GetBytesFromFile("assets/shaders/fragment.shader", std.heap.c_allocator);
         defer std.heap.c_allocator.free(frag_shader_code);
 
@@ -198,7 +206,7 @@ pub fn main() !void {
         gl.shaderSource(frag_shader_GPU, 1, &frag_shader_code.ptr, &@intCast(frag_shader_code.len));
         gl.compileShader(frag_shader_GPU);
 
-        // get any shader compile errors from OpenGL
+        // check for opengl compilation errors
         {
             var infoLog: [512]u8 = undefined;
             gl.getShaderInfoLog(frag_shader_GPU, 512, null, &infoLog);
@@ -206,6 +214,7 @@ pub fn main() !void {
         }
 
         // create shader program > attach vertex + fragment shaders
+        gd.shader_program_GPU = gl.createProgram();
         gl.attachShader(gd.shader_program_GPU, vertex_shader_GPU);
         gl.attachShader(gd.shader_program_GPU, frag_shader_GPU);
         gl.linkProgram(gd.shader_program_GPU);
@@ -241,18 +250,19 @@ pub fn main() !void {
     // initialize state
     var t_pressed_last_frame: bool = false;
     gd.active_window = &window;
-    gd.time = 0.0;
+    gd.elapsed_time = 0.0;
 
     // create the array of meshes to be rendered each frame
     var entity_array: [32]Engine.Entity = undefined;
     gd.entity_slice = entity_array[0..0];
 
     // create camera entity
-    Engine.CreateEntity(&gd.entity_slice, Engine.Entity{ .vao_gpu = 0, .indices_length = 0, .material = undefined, .world_matrix = Engine.identity(), .camera = Engine.Camera{ .projection_matrix = Engine.perspective_projection_matrix(1.3, 12.0 / 9.0, 0.01, 100.0) }, .component_flags = Engine.ComponentFlags{ .camera = true, .ghost = true } });
+    Engine.CreateEntity(&gd.entity_slice, Engine.Entity{ .vao_gpu = 0, .indices_length = 0, .material = undefined, .world_matrix = Engine.identity(), .camera = Engine.Camera{ .projection_matrix = undefined }, .component_flags = Engine.ComponentFlags{ .camera = true, .ghost = true } });
     // make this camera the one to be used for rendering
     gd.active_camera_matrix = &gd.entity_slice[gd.entity_slice.len - 1].world_matrix;
     gd.active_camera = &gd.entity_slice[gd.entity_slice.len - 1].camera;
-    window.setUserPointer(&gd.active_camera.projection_matrix);
+    // run window resize to initialize matrices
+    OnWindowResize(window, @intCast(gd.window_width), @intCast(gd.window_height));
 
     // create system schedule
     var systems_array: [32]*const fn (*GlobalData) void = undefined;
@@ -263,7 +273,10 @@ pub fn main() !void {
     Engine.systems.AddSystem(Engine.systems.SYSTEM_Ghost, &systems_slice);
     Engine.systems.AddSystem(Engine.systems.SYSTEM_CameraControls, &systems_slice);
 
+    // run a command to import the scene
     RunCommand(&gd, "import assets/blender_files/custom_export.bin");
+
+    Engine.Deserialize(window);
 
     // repeat until user closes the window
     while (!window.shouldClose()) {

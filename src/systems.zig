@@ -16,14 +16,14 @@ pub fn SYSTEM_Input(gd: *GlobalData) void {
 }
 
 pub fn SYSTEM_Constant(gd: *GlobalData) void {
-    gd.time += @floatCast(gd.frame_delta);
+    gd.elapsed_time += @floatCast(gd.frame_delta);
 }
 
 pub fn SYSTEM_SineMover(gd: *GlobalData) void {
     for (gd.entity_slice) |*entity| {
         if (entity.component_flags.sine_mover) {
-            entity.world_matrix[14] = @sin(gd.time);
-            entity.world_matrix[12] = @cos(gd.time);
+            entity.world_matrix[14] = @sin(gd.elapsed_time);
+            entity.world_matrix[12] = @cos(gd.elapsed_time);
         }
     }
 }

@@ -44,7 +44,9 @@ pub fn SeparateText(text: []const u8, comptime delimiter: u8) [][]u8 {
     return ret[0..ret_count];
 }
 
-pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture: u32, entity_array: *[]Engine.Entity) void {
+pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture: u32, entity_array: *[]Engine.Entity) []*Engine.Entity {
+    var res = allocator.alloc(*Engine.Entity, 64) catch unreachable;
+    var res_count: u32 = 0;
     // open file from filepath > close after done
     const file = std.fs.cwd().openFile(filepath, .{}) catch unreachable;
     defer file.close();
@@ -121,5 +123,9 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
         transform[12..15].* = transform_position.*;
 
         Engine.CreateEntity(entity_array, Engine.Entity{ .vao_gpu = VAO, .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4), .world_matrix = transform, .material = Engine.Material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture }, .component_flags = Engine.ComponentFlags{ .mesh = true }, .camera = undefined });
+        res[res_count] = &entity_array.*[entity_array.len - 1];
+        res_count += 1;
     }
+
+    return res[0..res_count];
 }
