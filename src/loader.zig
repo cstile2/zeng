@@ -44,12 +44,9 @@ pub fn SeparateText(text: []const u8, comptime delimiter: u8) [][]u8 {
     return ret[0..ret_count];
 }
 
-pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture: u32, entity_array: *[]Engine.Entity) struct { []*Engine.Entity, [][]u8 } {
+pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture: u32, entity_array: *[]Engine.Entity) []*Engine.Entity {
     var res = allocator.alloc(*Engine.Entity, 64) catch unreachable;
     var res_count: u32 = 0;
-
-    var names = allocator.alloc([]u8, 64) catch unreachable;
-    var names_count: u32 = 0;
 
     // open file from filepath > close after done
     const file = std.fs.cwd().openFile(filepath, .{}) catch unreachable;
@@ -76,12 +73,13 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
 
         // read current place as a u32 > increment current byte by size of this u32 (4 bytes)
         const size_name: u32 = @as(*u32, @alignCast(@ptrCast(data_bytes[curr_byte .. curr_byte + 4]))).*;
+        const padded_size: u32 = @divTrunc(size_name + 3, 4) * 4; // (len(obj.name) + 3) // 4 * 4
         curr_byte = curr_byte + 4;
         std.debug.print("size of name: {}\n", .{size_name});
 
         // read in the name (there may be padding so that an alignment of 4 is maintained)
-        const name_data = data_bytes[curr_byte .. curr_byte + size_name];
-        curr_byte = curr_byte + size_name;
+        const name_data = data_bytes[curr_byte .. curr_byte + padded_size];
+        curr_byte = curr_byte + padded_size;
         std.debug.print("'{s}' :\n", .{name_data});
 
         // read current place as a u32 > increment current byte by size of this u32 (4 bytes)
@@ -137,11 +135,12 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
         transform[12..15].* = transform_position.*;
 
         Engine.CreateEntity(entity_array, Engine.Entity{ .mesh = .{ .vao_gpu = VAO, .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4), .material = Engine.Material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture } }, .world_matrix = transform, .component_flags = Engine.ComponentFlags{ .mesh = true }, .camera = undefined });
+        entity_array.*[entity_array.len - 1].name = allocator.alloc(u8, size_name) catch unreachable;
+        std.mem.copyForwards(u8, entity_array.*[entity_array.len - 1].name, name_data[0..size_name]);
+
         res[res_count] = &entity_array.*[entity_array.len - 1];
         res_count += 1;
-        names[names_count] = name_data;
-        names_count += 1;
     }
 
-    return .{ res[0..res_count], names[0..names_count] };
+    return res[0..res_count];
 }

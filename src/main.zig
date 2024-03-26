@@ -57,8 +57,7 @@ pub fn RunCommand(gd: *Engine.GlobalData, input_read: []const u8) void {
         if (std.mem.eql(u8, parsed[0], "import")) {
             if (parsed.len >= 2) {
                 const ents = Engine.ImportModelAsset(parsed[1], std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
-                defer std.heap.c_allocator.free(ents[0]);
-                defer std.heap.c_allocator.free(ents[1]);
+                defer std.heap.c_allocator.free(ents);
             } else {
                 std.debug.print("No path specified", .{});
             }
@@ -101,7 +100,7 @@ pub fn RunCommand(gd: *Engine.GlobalData, input_read: []const u8) void {
 
 // Main
 pub fn main() !void {
-    // set Engine.glfw error callback
+    // set glfw error callback
     Engine.glfw.setErrorCallback(errorCallback);
     if (!Engine.glfw.init(.{})) {
         std.log.err("failed to initialize GLFW: {?s}", .{Engine.glfw.getErrorString()});
@@ -127,7 +126,7 @@ pub fn main() !void {
     window.setSizeCallback(OnWindowResize);
     window.setUserPointer(&gd);
 
-    // init Engine.glfw and opengl
+    // init glfw and opengl
     Engine.glfw.makeContextCurrent(window);
     const proc: Engine.glfw.GLProc = undefined;
     try Engine.gl.load(proc, glGetProcAddress);
@@ -235,7 +234,8 @@ pub fn main() !void {
     Engine.AddSystem(Engine.SYSTEM_MeshDrawer, &systems_slice);
 
     // run a command to import the scene
-    RunCommand(&gd, "import assets/blender_files/custom_export.bin");
+    // RunCommand(&gd, "import assets/blender_files/custom_export.bin");
+    _ = Engine.ImportModelAsset("assets/blender_files/custom_export.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
 
     // repeat until user closes the window
     while (!window.shouldClose()) {
@@ -248,9 +248,10 @@ pub fn main() !void {
             defer std.heap.c_allocator.free(input_read);
             RunCommand(&gd, input_read);
 
-            const imported = Engine.ImportModelAsset("assets/blender_files/simple.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
-            for (imported[0], imported[1]) |entity, name| {
-                if (std.mem.eql(u8, name, "circ")) {
+            _ = Engine.ImportModelAsset("assets/blender_files/simple.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+
+            for (gd.entity_slice) |*entity| {
+                if (std.mem.eql(u8, entity.name, "circ")) {
                     entity.world_matrix[13] += 10.0;
                     entity.component_flags.sine_mover = true;
                 }
