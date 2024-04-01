@@ -113,6 +113,7 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
         var VBO: u32 = undefined;
         Engine.gl.genBuffers(1, &VBO);
         Engine.gl.bindBuffer(Engine.gl.ARRAY_BUFFER, VBO);
+        defer Engine.gl.bindBuffer(Engine.gl.ARRAY_BUFFER, 0);
         Engine.gl.bufferData(Engine.gl.ARRAY_BUFFER, sizea, @ptrCast(mesh_vertex_data), Engine.gl.STATIC_DRAW);
 
         // create element buffer object (indices array) > bind it > store the data from the indices array
@@ -122,19 +123,19 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
         Engine.gl.bufferData(Engine.gl.ELEMENT_ARRAY_BUFFER, sizeb, @ptrCast(mesh_indices_data), Engine.gl.STATIC_DRAW);
 
         // data layout is : position.xyz, normal.xyz, uv.xy, repeat
-        Engine.gl.vertexAttribPointer(0, 3, Engine.gl.FLOAT, Engine.gl.FALSE, 8 * @sizeOf(f32), @ptrFromInt(0));
+        Engine.gl.vertexAttribPointer(0, 3, Engine.gl.FLOAT, Engine.gl.FALSE, 8 * @sizeOf(f32), @ptrFromInt(0)); // position
+        Engine.gl.vertexAttribPointer(1, 3, Engine.gl.FLOAT, Engine.gl.FALSE, 8 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32))); // normal
+        Engine.gl.vertexAttribPointer(2, 2, Engine.gl.FLOAT, Engine.gl.FALSE, 8 * @sizeOf(f32), @ptrFromInt(6 * @sizeOf(f32))); // uv
         Engine.gl.enableVertexAttribArray(0);
-        Engine.gl.vertexAttribPointer(1, 3, Engine.gl.FLOAT, Engine.gl.FALSE, 8 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32)));
         Engine.gl.enableVertexAttribArray(1);
-        Engine.gl.vertexAttribPointer(2, 2, Engine.gl.FLOAT, Engine.gl.FALSE, 8 * @sizeOf(f32), @ptrFromInt(6 * @sizeOf(f32)));
         Engine.gl.enableVertexAttribArray(2);
 
-        // create a transformation matrix using the position, rotation read from the file
+        // create a transformation matrix using the position + rotation read from the file
         var transform: [16]f32 = Engine.identity();
         transform = Engine.multiply_matrices(Engine.QuatToMatrix(transform_rotation), transform);
         transform[12..15].* = transform_position.*;
 
-        Engine.CreateEntity(entity_array, Engine.Entity{ .mesh = .{ .vao_gpu = VAO, .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4), .material = Engine.Material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture } }, .world_matrix = transform, .component_flags = Engine.ComponentFlags{ .mesh = true }, .camera = undefined });
+        Engine.CreateEntity(entity_array, Engine.Entity{ .mesh = .{ .vao_gpu = VAO, .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4), .material = Engine.Material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture } }, .transform = transform, .component_flags = Engine.ComponentFlags{ .mesh = true }, .camera = undefined });
         entity_array.*[entity_array.len - 1].name = allocator.alloc(u8, size_name) catch unreachable;
         std.mem.copyForwards(u8, entity_array.*[entity_array.len - 1].name, name_data[0..size_name]);
 

@@ -28,7 +28,7 @@ fn glLogError() !void {
     }
 }
 pub fn OnWindowResize(window: Engine.glfw.Window, width: i32, height: i32) void {
-    std.debug.print("Window has been resized\n", .{});
+    // std.debug.print("Window has been resized\n", .{});
     Engine.gl.viewport(0, 0, width, height);
     if (window.getUserPointer(Engine.GlobalData)) |gd| {
         gd.window_width = @intCast(width);
@@ -36,8 +36,46 @@ pub fn OnWindowResize(window: Engine.glfw.Window, width: i32, height: i32) void 
         gd.active_camera.projection_matrix = Engine.perspective_projection_matrix(1.3, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 100.0);
     }
 }
+pub fn InitializeStuff(gd: *Engine.GlobalData) !void {
+    {
+        // set glfw error callback
+        Engine.glfw.setErrorCallback(errorCallback);
+        if (!Engine.glfw.init(.{})) {
+            std.log.err("failed to initialize GLFW: {?s}", .{Engine.glfw.getErrorString()});
+            std.process.exit(1);
+        }
 
-// Commands
+        // create our window
+        gd.active_window = Engine.glfw.Window.create(gd.window_width, gd.window_height, "colsens game window!", null, null, .{
+            .opengl_profile = .opengl_core_profile,
+            .context_version_major = 4,
+            .context_version_minor = 0,
+        }) orelse {
+            std.log.err("failed to create GLFW window: {?s}", .{Engine.glfw.getErrorString()});
+            std.process.exit(1);
+        };
+        // necessary for window resizing
+        gd.active_window.setSizeCallback(OnWindowResize);
+        gd.active_window.setUserPointer(gd);
+
+        Engine.glfw.makeContextCurrent(gd.active_window);
+        const proc: Engine.glfw.GLProc = undefined;
+        try Engine.gl.load(proc, glGetProcAddress);
+
+        Engine.gl.enable(Engine.gl.DEPTH_TEST);
+        Engine.gl.enable(Engine.gl.CULL_FACE);
+    }
+}
+fn KeyCallback(window: Engine.glfw.Window, key: Engine.glfw.Key, scancode: i32, action: Engine.glfw.Action, mods: Engine.glfw.Mods) void {
+    _ = key; // autofix
+    _ = window; // autofix
+    _ = scancode; // autofix
+    _ = action; // autofix
+    _ = mods; // autofix
+    //std.debug.print("key: {}\n", .{key.getScancode()});
+}
+
+// Console Commands
 pub fn RunCommand(gd: *Engine.GlobalData, input_read: []const u8) void {
     const separated: [][]u8 = Engine.SeparateText(input_read, ';');
     defer {
@@ -100,40 +138,13 @@ pub fn RunCommand(gd: *Engine.GlobalData, input_read: []const u8) void {
 
 // Main
 pub fn main() !void {
-    // set glfw error callback
-    Engine.glfw.setErrorCallback(errorCallback);
-    if (!Engine.glfw.init(.{})) {
-        std.log.err("failed to initialize GLFW: {?s}", .{Engine.glfw.getErrorString()});
-        std.process.exit(1);
-    }
-    defer Engine.glfw.terminate();
-
-    // initialize shared data
+    // initialization
     var gd: Engine.GlobalData = undefined;
     gd.window_width = 800;
     gd.window_height = 500;
-
-    // create our window
-    var window = Engine.glfw.Window.create(gd.window_width, gd.window_height, "colsens game window!", null, null, .{
-        .opengl_profile = .opengl_core_profile,
-        .context_version_major = 4,
-        .context_version_minor = 0,
-    }) orelse {
-        std.log.err("failed to create GLFW window: {?s}", .{Engine.glfw.getErrorString()});
-        std.process.exit(1);
-    };
-    defer window.destroy();
-    window.setSizeCallback(OnWindowResize);
-    window.setUserPointer(&gd);
-
-    // init glfw and opengl
-    Engine.glfw.makeContextCurrent(window);
-    const proc: Engine.glfw.GLProc = undefined;
-    try Engine.gl.load(proc, glGetProcAddress);
-
-    // tell opengl the correct viewport size in pixels
-    Engine.gl.viewport(0, 0, @intCast(gd.window_width), @intCast(gd.window_height));
-    Engine.c.stbi_set_flip_vertically_on_load(1);
+    try InitializeStuff(&gd);
+    defer Engine.glfw.terminate();
+    defer gd.active_window.destroy();
 
     // import shader from files and create a program stored in shader_program_GPU
     gd.shader_program_GPU = undefined;
@@ -180,6 +191,7 @@ pub fn main() !void {
     }
 
     // create a texture from file
+    Engine.c.stbi_set_flip_vertically_on_load(1);
     gd.texture_GPU = undefined;
     {
         // load image texture via stb_image library
@@ -200,76 +212,34 @@ pub fn main() !void {
         Engine.gl.generateMipmap(Engine.gl.TEXTURE_2D);
     }
 
-    // make mouse invisible and locked > enable raw mouse motion > enable depth buffer & backface culling
-    window.setInputModeCursor(Engine.glfw.Window.InputModeCursor.disabled);
-    window.setInputModeRawMouseMotion(true);
-    Engine.gl.enable(Engine.gl.DEPTH_TEST);
-    Engine.gl.enable(Engine.gl.CULL_FACE);
-
-    // initialize state
-    var t_pressed_last_frame: bool = false;
-    gd.active_window = &window;
+    // make mouse invisible and locked / enable raw mouse motion / enable depth buffer & backface culling
+    gd.active_window.setKeyCallback(KeyCallback);
+    gd.active_window.setInputModeCursor(Engine.glfw.Window.InputModeCursor.disabled);
+    gd.active_window.setInputModeRawMouseMotion(true);
     gd.elapsed_time = 0.0;
 
-    // create the array of meshes to be rendered each frame
+    // create the array of entities to be rendered each frame
     var entity_array: [32]Engine.Entity = undefined;
     gd.entity_slice = entity_array[0..0];
 
-    // create camera entity
-    Engine.CreateEntity(&gd.entity_slice, Engine.Entity{ .mesh = .{ .vao_gpu = 0, .indices_length = 0, .material = undefined }, .world_matrix = Engine.identity(), .camera = Engine.Camera{ .projection_matrix = undefined }, .component_flags = Engine.ComponentFlags{ .camera = true, .ghost = true } });
-    // make this camera the one to be used for rendering
-    gd.active_camera_matrix = &gd.entity_slice[gd.entity_slice.len - 1].world_matrix;
+    // create camera entity / use it as main camera / initialize it thru window resize callback
+    Engine.CreateEntity(&gd.entity_slice, Engine.Entity{ .mesh = .{ .vao_gpu = 0, .indices_length = 0, .material = undefined }, .transform = Engine.identity(), .camera = Engine.Camera{ .projection_matrix = undefined }, .component_flags = Engine.ComponentFlags{ .camera = true, .ghost = true } });
+    gd.active_camera_matrix = &gd.entity_slice[gd.entity_slice.len - 1].transform;
     gd.active_camera = &gd.entity_slice[gd.entity_slice.len - 1].camera;
-    // run window resize to initialize stuff
-    OnWindowResize(window, @intCast(gd.window_width), @intCast(gd.window_height));
-
-    // create system schedule
-    var systems_array: [32]*const fn (*Engine.GlobalData) void = undefined;
-    var systems_slice: []*const fn (*Engine.GlobalData) void = systems_array[0..0];
-    Engine.AddSystem(Engine.SYSTEM_Input, &systems_slice);
-    Engine.AddSystem(Engine.SYSTEM_Constant, &systems_slice);
-    Engine.AddSystem(Engine.SYSTEM_SineMover, &systems_slice);
-    Engine.AddSystem(Engine.SYSTEM_Ghost, &systems_slice);
-    Engine.AddSystem(Engine.SYSTEM_CameraControls, &systems_slice);
-    Engine.AddSystem(Engine.SYSTEM_MeshDrawer, &systems_slice);
+    OnWindowResize(gd.active_window, @intCast(gd.window_width), @intCast(gd.window_height));
 
     // run a command to import the scene
     _ = Engine.ImportModelAsset("assets/blender_files/custom_export.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
 
     // repeat until user closes the window
-    while (!window.shouldClose()) {
+    while (!gd.active_window.shouldClose()) {
         // get start time
         const start_frame_time = std.time.nanoTimestamp();
-
-        // run command when t is pressed
-        if (window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press and !t_pressed_last_frame) {
-            const input_read: []u8 = Engine.GetBytesFromFile("assets/extras/command_input.txt", std.heap.c_allocator);
-            defer std.heap.c_allocator.free(input_read);
-
-            RunCommand(&gd, input_read);
-
-            // _ = Engine.ImportModelAsset("assets/blender_files/simple.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
-
-            // for (gd.entity_slice) |*entity| {
-            //     if (std.mem.eql(u8, entity.name, "circ")) {
-            //         entity.world_matrix[13] += 10.0;
-            //         entity.component_flags.sine_mover = true;
-            //     }
-            // }
-        }
-        t_pressed_last_frame = window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press;
-
-        // call all systems
-        for (systems_slice) |system| {
-            if (!gd.frozen or system == &Engine.SYSTEM_CameraControls or system == &Engine.SYSTEM_Ghost or system == &Engine.SYSTEM_Input) {
-                system(&gd);
-            }
+        defer {
+            Engine.glfw.pollEvents();
+            gd.frame_delta = @as(f64, @floatFromInt(@divTrunc(std.time.nanoTimestamp() - start_frame_time, 1000))) / 1000000.0;
         }
 
-        // poll events
-        Engine.glfw.pollEvents();
-
-        // calculate frame delta
-        gd.frame_delta = @as(f64, @floatFromInt(@divTrunc(std.time.nanoTimestamp() - start_frame_time, 1000))) / 1000000.0;
+        Engine.BigUpdate(&gd);
     }
 }

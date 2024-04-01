@@ -45,7 +45,7 @@ pub const Camera = struct {
     projection_matrix: [16]f32,
 };
 
-// transform component
+// .transform component
 pub const Transform = [16]f32;
 
 // name component
@@ -53,20 +53,20 @@ pub const Name = []u8;
 
 // meta data
 pub const ComponentFlags = packed struct {
-    sine_mover: bool = false, // tag
-    ghost: bool = false, // tag
+    sine_mover: bool = false,
+    ghost: bool = false,
     mesh: bool = false,
     camera: bool = false,
     name: bool = false,
 
-    _padding: u28 = 0,
+    _padding: u27 = 0,
 };
 
 // entity
 pub const Entity = struct {
     mesh: Mesh,
     camera: Camera,
-    world_matrix: Transform,
+    transform: Transform,
     name: Name = undefined,
 
     component_flags: ComponentFlags,

@@ -13,8 +13,8 @@ pub fn DrawMesh(entity: Engine.Entity, projection_matrix: [16]f32, inv_camera_ma
     // set uniforms
     const world_location = Engine.gl.getUniformLocation(entity.mesh.material.shader_program_GPU, "world");
     const clip_location = Engine.gl.getUniformLocation(entity.mesh.material.shader_program_GPU, "clip");
-    Engine.gl.uniformMatrix4fv(world_location, 1, Engine.gl.FALSE, &entity.world_matrix);
-    var clip_matrix = Engine.multiply_matrices(projection_matrix, Engine.multiply_matrices(inv_camera_matrix, entity.world_matrix));
+    Engine.gl.uniformMatrix4fv(world_location, 1, Engine.gl.FALSE, &entity.transform);
+    var clip_matrix = Engine.multiply_matrices(projection_matrix, Engine.multiply_matrices(inv_camera_matrix, entity.transform));
     Engine.gl.uniformMatrix4fv(clip_location, 1, Engine.gl.FALSE, &clip_matrix);
 
     // draw object

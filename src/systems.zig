@@ -3,7 +3,7 @@ pub const Engine = @import("engine.zig");
 
 pub const GlobalData = struct {
     elapsed_time: f32 = 0.0,
-    active_window: *Engine.glfw.Window,
+    active_window: Engine.glfw.Window,
     active_camera_matrix: *[16]f32,
     active_camera: *Engine.Camera,
     cur_pos: Engine.glfw.Window.CursorPos,
@@ -16,25 +16,37 @@ pub const GlobalData = struct {
     window_height: u32,
 };
 
-pub fn SYSTEM_Input(gd: *GlobalData) void {
+pub fn BigUpdate(gd: *GlobalData) void {
+    // input system
     gd.cur_pos = gd.active_window.getCursorPos();
-}
 
-pub fn SYSTEM_Constant(gd: *GlobalData) void {
+    // TODO: do a thing when t is pressed
+    if (gd.active_window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press) {
+        // const input_read: []u8 = Engine.GetBytesFromFile("assets/extras/command_input.txt", std.heap.c_allocator);
+        // defer std.heap.c_allocator.free(input_read);
+
+        // _ = Engine.ImportModelAsset("assets/blender_files/simple.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+
+        // for (gd.entity_slice) |*entity| {
+        //     if (std.mem.eql(u8, entity.name, "circ")) {
+        //         entity.transform[13] += 10.0;
+        //         entity.component_flags.sine_mover = true;
+        //     }
+        // }
+    }
+
+    // constant system
     gd.elapsed_time += @floatCast(gd.frame_delta);
-}
 
-pub fn SYSTEM_SineMover(gd: *GlobalData) void {
+    // sine mover system
     for (gd.entity_slice) |*entity| {
         if (entity.component_flags.sine_mover) {
-            entity.world_matrix[14] = @sin(gd.elapsed_time * 3.0);
-            entity.world_matrix[12] = @cos(gd.elapsed_time * 5.0);
+            entity.transform[14] = @sin(gd.elapsed_time * 3.0);
+            entity.transform[12] = @cos(gd.elapsed_time * 5.0);
         }
     }
-}
 
-// used to move spectator-like objects
-pub fn SYSTEM_Ghost(gd: *GlobalData) void {
+    // ghost system
     for (gd.entity_slice) |*entity| {
         if (entity.component_flags.ghost) {
             var speed: f32 = @floatCast(gd.frame_delta * 100.0);
@@ -44,41 +56,55 @@ pub fn SYSTEM_Ghost(gd: *GlobalData) void {
                 speed *= 0.05;
             }
             if (gd.active_window.getKey(Engine.glfw.Key.a) == Engine.glfw.Action.press) {
-                entity.world_matrix[12] -= entity.world_matrix[0] * speed;
-                entity.world_matrix[13] -= entity.world_matrix[1] * speed;
-                entity.world_matrix[14] -= entity.world_matrix[2] * speed;
+                entity.transform[12] -= entity.transform[0] * speed;
+                entity.transform[13] -= entity.transform[1] * speed;
+                entity.transform[14] -= entity.transform[2] * speed;
             }
             if (gd.active_window.getKey(Engine.glfw.Key.d) == Engine.glfw.Action.press) {
-                entity.world_matrix[12] += entity.world_matrix[0] * speed;
-                entity.world_matrix[13] += entity.world_matrix[1] * speed;
-                entity.world_matrix[14] += entity.world_matrix[2] * speed;
+                entity.transform[12] += entity.transform[0] * speed;
+                entity.transform[13] += entity.transform[1] * speed;
+                entity.transform[14] += entity.transform[2] * speed;
             }
             if (gd.active_window.getKey(Engine.glfw.Key.q) == Engine.glfw.Action.press) {
-                entity.world_matrix[12] -= entity.world_matrix[4] * speed;
-                entity.world_matrix[13] -= entity.world_matrix[5] * speed;
-                entity.world_matrix[14] -= entity.world_matrix[6] * speed;
+                entity.transform[12] -= entity.transform[4] * speed;
+                entity.transform[13] -= entity.transform[5] * speed;
+                entity.transform[14] -= entity.transform[6] * speed;
             }
             if (gd.active_window.getKey(Engine.glfw.Key.e) == Engine.glfw.Action.press) {
-                entity.world_matrix[12] += entity.world_matrix[4] * speed;
-                entity.world_matrix[13] += entity.world_matrix[5] * speed;
-                entity.world_matrix[14] += entity.world_matrix[6] * speed;
+                entity.transform[12] += entity.transform[4] * speed;
+                entity.transform[13] += entity.transform[5] * speed;
+                entity.transform[14] += entity.transform[6] * speed;
             }
             if (gd.active_window.getKey(Engine.glfw.Key.w) == Engine.glfw.Action.press) {
-                entity.world_matrix[12] -= entity.world_matrix[8] * speed;
-                entity.world_matrix[13] -= entity.world_matrix[9] * speed;
-                entity.world_matrix[14] -= entity.world_matrix[10] * speed;
+                entity.transform[12] -= entity.transform[8] * speed;
+                entity.transform[13] -= entity.transform[9] * speed;
+                entity.transform[14] -= entity.transform[10] * speed;
             }
             if (gd.active_window.getKey(Engine.glfw.Key.s) == Engine.glfw.Action.press) {
-                entity.world_matrix[12] += entity.world_matrix[8] * speed;
-                entity.world_matrix[13] += entity.world_matrix[9] * speed;
-                entity.world_matrix[14] += entity.world_matrix[10] * speed;
+                entity.transform[12] += entity.transform[8] * speed;
+                entity.transform[13] += entity.transform[9] * speed;
+                entity.transform[14] += entity.transform[10] * speed;
             }
         }
     }
-}
 
-pub fn SYSTEM_MeshDrawer(gd: *GlobalData) void {
-    // set color and clear the screen
+    // camera mouse look system
+    for (gd.entity_slice) |*entity| {
+        if (entity.component_flags.camera) {
+            var pos: [3]f32 = undefined;
+            pos[0] = entity.transform[12];
+            pos[1] = entity.transform[13];
+            pos[2] = entity.transform[14];
+            const rot_mat_hor = Engine.axis_angle_to_matrix(.{ .x = 0, .y = 1, .z = 0 }, @floatCast(gd.cur_pos.xpos * -0.0015));
+            const rot_mat_vert = Engine.axis_angle_to_matrix(.{ .x = 1, .y = 0, .z = 0 }, @floatCast(gd.cur_pos.ypos * -0.0015));
+            entity.transform = Engine.multiply_matrices(rot_mat_hor, rot_mat_vert);
+            entity.transform[12] = pos[0];
+            entity.transform[13] = pos[1];
+            entity.transform[14] = pos[2];
+        }
+    }
+
+    // render system
     Engine.gl.clearColor(0.2, 0.3, 0.3, 1.0);
     Engine.gl.clear(Engine.gl.COLOR_BUFFER_BIT | Engine.gl.DEPTH_BUFFER_BIT);
     const inv_camera_matrix: [16]f32 = Engine.InvertMatrix(gd.active_camera_matrix.*);
@@ -87,28 +113,5 @@ pub fn SYSTEM_MeshDrawer(gd: *GlobalData) void {
             Engine.DrawMesh(entity.*, gd.active_camera.projection_matrix, inv_camera_matrix);
         }
     }
-    // display pixels to the screen
     gd.active_window.swapBuffers();
-}
-
-pub fn SYSTEM_CameraControls(gd: *GlobalData) void {
-    for (gd.entity_slice) |*entity| {
-        if (entity.component_flags.camera) {
-            var pos: [3]f32 = undefined;
-            pos[0] = entity.world_matrix[12];
-            pos[1] = entity.world_matrix[13];
-            pos[2] = entity.world_matrix[14];
-            const rot_mat_hor = Engine.axis_angle_to_matrix(.{ .x = 0, .y = 1, .z = 0 }, @floatCast(gd.cur_pos.xpos * -0.0015));
-            const rot_mat_vert = Engine.axis_angle_to_matrix(.{ .x = 1, .y = 0, .z = 0 }, @floatCast(gd.cur_pos.ypos * -0.0015));
-            entity.world_matrix = Engine.multiply_matrices(rot_mat_hor, rot_mat_vert);
-            entity.world_matrix[12] = pos[0];
-            entity.world_matrix[13] = pos[1];
-            entity.world_matrix[14] = pos[2];
-        }
-    }
-}
-
-pub fn AddSystem(system: *const fn (*GlobalData) void, schedule: *[]*const fn (*GlobalData) void) void {
-    schedule.len += 1;
-    schedule.*[schedule.len - 1] = system;
 }
