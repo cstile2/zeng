@@ -220,7 +220,7 @@ pub fn main() !void {
     // make this camera the one to be used for rendering
     gd.active_camera_matrix = &gd.entity_slice[gd.entity_slice.len - 1].world_matrix;
     gd.active_camera = &gd.entity_slice[gd.entity_slice.len - 1].camera;
-    // run window resize to initialize matrices
+    // run window resize to initialize stuff
     OnWindowResize(window, @intCast(gd.window_width), @intCast(gd.window_height));
 
     // create system schedule
@@ -234,7 +234,6 @@ pub fn main() !void {
     Engine.AddSystem(Engine.SYSTEM_MeshDrawer, &systems_slice);
 
     // run a command to import the scene
-    // RunCommand(&gd, "import assets/blender_files/custom_export.bin");
     _ = Engine.ImportModelAsset("assets/blender_files/custom_export.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
 
     // repeat until user closes the window
@@ -246,16 +245,17 @@ pub fn main() !void {
         if (window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press and !t_pressed_last_frame) {
             const input_read: []u8 = Engine.GetBytesFromFile("assets/extras/command_input.txt", std.heap.c_allocator);
             defer std.heap.c_allocator.free(input_read);
+
             RunCommand(&gd, input_read);
 
-            _ = Engine.ImportModelAsset("assets/blender_files/simple.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+            // _ = Engine.ImportModelAsset("assets/blender_files/simple.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
 
-            for (gd.entity_slice) |*entity| {
-                if (std.mem.eql(u8, entity.name, "circ")) {
-                    entity.world_matrix[13] += 10.0;
-                    entity.component_flags.sine_mover = true;
-                }
-            }
+            // for (gd.entity_slice) |*entity| {
+            //     if (std.mem.eql(u8, entity.name, "circ")) {
+            //         entity.world_matrix[13] += 10.0;
+            //         entity.component_flags.sine_mover = true;
+            //     }
+            // }
         }
         t_pressed_last_frame = window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press;
 

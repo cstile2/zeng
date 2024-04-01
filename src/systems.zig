@@ -98,8 +98,8 @@ pub fn SYSTEM_CameraControls(gd: *GlobalData) void {
             pos[0] = entity.world_matrix[12];
             pos[1] = entity.world_matrix[13];
             pos[2] = entity.world_matrix[14];
-            const rot_mat_hor = Engine.axis_angle_to_matrix(.{ .x = 0, .y = 1, .z = 0 }, @floatCast(gd.cur_pos.xpos * -0.002));
-            const rot_mat_vert = Engine.axis_angle_to_matrix(.{ .x = 1, .y = 0, .z = 0 }, @floatCast(gd.cur_pos.ypos * -0.002));
+            const rot_mat_hor = Engine.axis_angle_to_matrix(.{ .x = 0, .y = 1, .z = 0 }, @floatCast(gd.cur_pos.xpos * -0.0015));
+            const rot_mat_vert = Engine.axis_angle_to_matrix(.{ .x = 1, .y = 0, .z = 0 }, @floatCast(gd.cur_pos.ypos * -0.0015));
             entity.world_matrix = Engine.multiply_matrices(rot_mat_hor, rot_mat_vert);
             entity.world_matrix[12] = pos[0];
             entity.world_matrix[13] = pos[1];
