@@ -14,29 +14,28 @@ pub const GlobalData = struct {
     texture_GPU: u32,
     window_width: u32,
     window_height: u32,
+    t_down_consume: bool = false,
 };
 
 pub fn BigUpdate(gd: *GlobalData) void {
-    // input system
+    // first system
     gd.cur_pos = gd.active_window.getCursorPos();
-
-    // TODO: do a thing when t is pressed
-    if (gd.active_window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press) {
-        // const input_read: []u8 = Engine.GetBytesFromFile("assets/extras/command_input.txt", std.heap.c_allocator);
-        // defer std.heap.c_allocator.free(input_read);
-
-        // _ = Engine.ImportModelAsset("assets/blender_files/simple.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
-
-        // for (gd.entity_slice) |*entity| {
-        //     if (std.mem.eql(u8, entity.name, "circ")) {
-        //         entity.transform[13] += 10.0;
-        //         entity.component_flags.sine_mover = true;
-        //     }
-        // }
-    }
-
-    // constant system
     gd.elapsed_time += @floatCast(gd.frame_delta);
+
+    // t button press / import scene
+    if (gd.active_window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press and !gd.t_down_consume) {
+        const input_read: []u8 = Engine.GetBytesFromFile("assets/extras/command_input.txt", std.heap.c_allocator);
+        defer std.heap.c_allocator.free(input_read);
+
+        const imported = Engine.ImportModelAsset("assets/blender_files/simple.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+        for (imported) |entity| {
+            if (std.mem.eql(u8, entity.name, "circ")) {
+                entity.transform[13] += 10.0;
+                entity.component_flags.sine_mover = true;
+            }
+        }
+    }
+    gd.t_down_consume = gd.active_window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press;
 
     // sine mover system
     for (gd.entity_slice) |*entity| {

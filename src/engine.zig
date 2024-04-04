@@ -5,6 +5,8 @@ pub usingnamespace @import("render.zig");
 pub const glfw = @import("mach-glfw");
 pub const gl = @import("gl");
 
+const Engine = @This();
+
 pub const Vec3 = packed struct {
     x: f32,
     y: f32,
@@ -402,4 +404,174 @@ pub fn Deserialize(payload: anytype) void {
         },
         else => {},
     }
+}
+
+// GLFW + GL
+fn glGetProcAddress(p: Engine.glfw.GLProc, proc: [:0]const u8) ?Engine.gl.FunctionPointer {
+    _ = p;
+    return Engine.glfw.getProcAddress(proc);
+}
+fn errorCallback(error_code: Engine.glfw.ErrorCode, description: [:0]const u8) void {
+    std.log.err("Engine.glfw error: {}: {s}\n", .{ error_code, description });
+}
+fn glLogError() !void {
+    var err: Engine.gl.GLenum = Engine.gl.getError();
+    // const hasErrored = err != Engine.gl.NO_ERROR;
+    while (err != Engine.gl.NO_ERROR) {
+        const errorString = switch (err) {
+            Engine.gl.INVALID_ENUM => "INVALID_ENUM",
+            Engine.gl.INVALID_VALUE => "INVALID_VALUE",
+            Engine.gl.INVALID_OPERATION => "INVALID_OPERATION",
+            Engine.gl.OUT_OF_MEMORY => "OUT_OF_MEMORY",
+            Engine.gl.INVALID_FRAMEBUFFER_OPERATION => "INVALID_FRAMEBUFFER_OPERATION",
+            else => "unknown error",
+        };
+
+        std.log.err("Found OpenGL error: {s}", .{errorString});
+
+        err = Engine.gl.getError();
+    }
+}
+pub fn OnWindowResize(window: Engine.glfw.Window, width: i32, height: i32) void {
+    // std.debug.print("Window has been resized\n", .{});
+    Engine.gl.viewport(0, 0, width, height);
+    if (window.getUserPointer(Engine.GlobalData)) |gd| {
+        gd.window_width = @intCast(width);
+        gd.window_height = @intCast(height);
+        gd.active_camera.projection_matrix = Engine.perspective_projection_matrix(1.3, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 100.0);
+    }
+}
+pub fn InitializeStuff(gd: *Engine.GlobalData) !void {
+    {
+        // set glfw error callback
+        Engine.glfw.setErrorCallback(errorCallback);
+        if (!Engine.glfw.init(.{})) {
+            std.log.err("failed to initialize GLFW: {?s}", .{Engine.glfw.getErrorString()});
+            std.process.exit(1);
+        }
+
+        // create our window
+        gd.active_window = Engine.glfw.Window.create(gd.window_width, gd.window_height, "colsens game window!", null, null, .{
+            .opengl_profile = .opengl_core_profile,
+            .context_version_major = 4,
+            .context_version_minor = 0,
+        }) orelse {
+            std.log.err("failed to create GLFW window: {?s}", .{Engine.glfw.getErrorString()});
+            std.process.exit(1);
+        };
+        // necessary for window resizing
+        gd.active_window.setSizeCallback(OnWindowResize);
+        gd.active_window.setUserPointer(gd);
+        gd.active_window.setKeyCallback(KeyCallback);
+
+        Engine.glfw.makeContextCurrent(gd.active_window);
+        const proc: Engine.glfw.GLProc = undefined;
+        try Engine.gl.load(proc, glGetProcAddress);
+
+        Engine.gl.enable(Engine.gl.DEPTH_TEST);
+        Engine.gl.enable(Engine.gl.CULL_FACE);
+    }
+    gd.entity_slice = std.heap.c_allocator.alloc(Engine.Entity, 32) catch unreachable;
+    gd.entity_slice.len = 0;
+}
+
+pub fn DeinitializeStuff(gd: *Engine.GlobalData) void {
+    gd.active_window.destroy();
+    Engine.glfw.terminate();
+}
+
+fn KeyCallback(window: Engine.glfw.Window, key: Engine.glfw.Key, scancode: i32, action: Engine.glfw.Action, mods: Engine.glfw.Mods) void {
+    _ = key; // autofix
+    _ = window; // autofix
+    _ = scancode; // autofix
+    _ = action; // autofix
+    _ = mods; // autofix
+    //std.debug.print("key: {}\n", .{key.getScancode()});
+}
+
+pub fn RunCommand(gd: *Engine.GlobalData, input_read: []const u8) void {
+    const separated: [][]u8 = Engine.SeparateText(input_read, ';');
+    defer {
+        for (separated) |string| {
+            std.heap.c_allocator.free(string);
+        }
+        std.heap.c_allocator.free(separated);
+    }
+    for (separated) |sub_command| {
+        const parsed: [][]u8 = Engine.SeparateText(sub_command, ' ');
+        defer {
+            for (parsed) |string| {
+                std.heap.c_allocator.free(string);
+            }
+            std.heap.c_allocator.free(parsed);
+        }
+        if (std.mem.eql(u8, parsed[0], "import")) {
+            if (parsed.len >= 2) {
+                const ents = Engine.ImportModelAsset(parsed[1], std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+                defer std.heap.c_allocator.free(ents);
+            } else {
+                std.debug.print("No path specified", .{});
+            }
+        } else if (std.mem.eql(u8, parsed[0], "freeze") and parsed.len == 1) { // pauses everything in the game except a spectator camera
+            std.debug.print("FREEZE!\n", .{});
+            gd.frozen = !gd.frozen;
+        } else if (std.mem.eql(u8, parsed[0], "add")) { // adds a component to an entity
+            if (parsed.len >= 3) {
+                if (std.fmt.parseInt(u32, parsed[1], 10)) |parsed_int| {
+                    const index: u32 = parsed_int;
+                    std.debug.print("modifying index: {any}\n", .{index});
+                    Engine.AddComponent(&gd.entity_slice[index], parsed[2]) catch {
+                        std.debug.print("Could not add component: '{s}'", .{parsed[2]});
+                    };
+                } else |_| {
+                    std.debug.print("Invalid numerical field in command\n", .{});
+                }
+            } else {
+                std.debug.print("Too few arguments for 'add' command\n", .{});
+            }
+        } else if (std.mem.eql(u8, parsed[0], "remove")) { // removes a component from an entity
+            if (parsed.len >= 3) {
+                if (std.fmt.parseInt(u32, parsed[1], 10)) |parsed_int| {
+                    const index: u32 = parsed_int;
+                    std.debug.print("modifying index: {any}\n", .{index});
+                    Engine.RemoveComponent(&gd.entity_slice[index], parsed[2]) catch {
+                        std.debug.print("Could not remove component: '{s}'", .{parsed[2]});
+                    };
+                } else |_| {
+                    std.debug.print("Invalid numerical field in command\n", .{});
+                }
+            } else {
+                std.debug.print("Too few arguments for 'remove' command\n", .{});
+            }
+        } else { // unrecognized command
+            std.debug.print("Command not recognized: '{s}'\n", .{sub_command});
+        }
+    }
+}
+
+pub fn MakeStruct(comptime in: anytype) type {
+    var fields: [in.len]std.builtin.Type.StructField = undefined;
+    for (in, 0..) |t, i| {
+        const fieldType: type = t;
+        const fieldName = @typeName(fieldType); //[:0]const u8 = t[0][0..];
+        fields[i] = .{
+            .name = fieldName,
+            .type = fieldType,
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = 0,
+        };
+    }
+    return @Type(.{
+        .Struct = .{
+            .layout = .Auto,
+            .fields = fields[0..],
+            .decls = &[_]std.builtin.Type.Declaration{},
+            .is_tuple = false,
+        },
+    });
+}
+
+pub fn Query(comptime readwrite: anytype, comptime read: anytype) type {
+    return MakeStruct(readwrite ++ read);
 }

@@ -20,3 +20,17 @@ pub fn DrawMesh(entity: Engine.Entity, projection_matrix: [16]f32, inv_camera_ma
     // draw object
     Engine.gl.drawElements(Engine.gl.TRIANGLES, entity.mesh.indices_length, Engine.gl.UNSIGNED_INT, @ptrFromInt(0));
 }
+
+const std = @import("std");
+pub fn Dumb0() void {
+    std.debug.log("Hello!\n");
+}
+pub fn Dumb1() void {
+    std.debug.log("My!\n");
+}
+pub fn Dumb2() void {
+    std.debug.log("Name!\n");
+}
+pub fn Dumb3() void {
+    std.debug.log("Is!\n");
+}
