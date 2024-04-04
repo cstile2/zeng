@@ -14,20 +14,46 @@ pub const Velocity = struct {
 pub fn main() !void {
     std.debug.print("\n{}\n", .{comptime ECS.ComponentHash(Sine_mover)});
 
-    var AS: ECS.ArchetypeTable = undefined;
-    AS.Init(64);
-    AS.AddComponentType(std.heap.c_allocator, Sine_mover);
-    AS.AddComponentType(std.heap.c_allocator, Velocity);
+    var world: ECS.ECSWorld = undefined;
+    world.Init(std.heap.c_allocator);
 
-    AS.AddEntity(.{
-        Sine_mover{ .x = 0 },
-        Velocity{},
-    });
+    var edl: ECS.EntityDataLocation = undefined;
+    var edl2: ECS.EntityDataLocation = undefined;
+    if (world.AddEntity(.{ Sine_mover{ .x = 143 }, Velocity{} }, std.heap.c_allocator)) |new_guy| {
+        edl = new_guy;
+    }
+    if (world.AddEntity(.{ Sine_mover{ .x = 143 }, Velocity{ .x = -10.0, .y = 1.2, .z = 99.9 } }, std.heap.c_allocator)) |new_guy| {
+        edl2 = new_guy;
+    }
 
-    std.debug.print("got value: {}\n", .{AS.GetComponent(Velocity, 0) catch unreachable});
+    if (world.GetComponent(Sine_mover, edl)) |comp| {
+        std.debug.print("GOT: {}\n", .{comp});
+    }
+    if (world.GetComponent(Velocity, edl)) |comp| {
+        std.debug.print("GOT: {}\n", .{comp});
+    }
+    if (world.GetComponent(Sine_mover, edl2)) |comp| {
+        std.debug.print("GOT: {}\n", .{comp});
+    }
+    if (world.GetComponent(Velocity, edl2)) |comp| {
+        std.debug.print("GOT: {}\n", .{comp});
+    }
 
-    // const position = as.At(0, "position") catch unreachable;
-    // AS(*u32, position.?).* = 115;
+    // var AS: ECS.ArchetypeTable = undefined;
+    // AS.Init(64);
+    // AS.AddComponentType(std.heap.c_allocator, Sine_mover);
+    // AS.AddComponentType(std.heap.c_allocator, Velocity);
+
+    // AS.AddEntity(.{
+    //     Sine_mover{ .x = 143 },
+    //     Velocity{},
+    // });
+
+    // const E: ECS.EntityDataLocation = .{ .table_index = 0, .archetype_hash = comptime ECS.ComponentHash(Sine_mover) & ECS.ComponentHash(Velocity) };
+    // _ = E; // autofix
+
+    // std.debug.print("got value: {}\n", .{(AS.GetComponent(Velocity, 0) catch unreachable).*});
+    // std.debug.print("got value: {}\n", .{(AS.GetComponent(Sine_mover, 0) catch unreachable).*});
 
     // initialization
     var gd: Engine.GlobalData = undefined;
@@ -35,10 +61,6 @@ pub fn main() !void {
     gd.window_height = 500;
     try Engine.InitializeStuff(&gd);
     defer Engine.DeinitializeStuff(&gd);
-
-    // var guy: Engine.MakeStruct(.{i32}) = undefined;
-    // guy.i32 = 15;
-    // std.debug.print("{}\n", .{guy.i32});
 
     // import shader from files and create a program stored in shader_program_GPU
     gd.shader_program_GPU = undefined;

@@ -1,84 +1,5 @@
 const std = @import("std");
 
-// pub const void_archetype_hash = std.math.maxInt(u64);
-
-// // this is the entire ECS world
-// pub const Entities = struct {
-//     pub fn init(allocator: std.mem.Allocator) !Entities {
-//         var entities = Entities{ .allocator = allocator };
-
-//         try entities.archetypes.put(allocator, void_archetype_hash, ArchetypeStorage{
-//             .allocator = allocator,
-//             .components = .{},
-//             .hash = void_archetype_hash,
-//         });
-
-//         return entities;
-//     }
-//     pub fn initErasedStorage(entities: *const Entities, total_rows: *usize, comptime Component: type) !ErasedComponentStorage {
-//         const new_ptr = try entities.allocator.create(ComponentStorage(Component));
-//         new_ptr.* = ComponentStorage(Component){ .total_rows = total_rows };
-
-//         return ErasedComponentStorage{
-//             .ptr = new_ptr,
-//             .deinit = (struct {
-//                 pub fn deinit(erased: *anyopaque, allocator: std.mem.Allocator) void {
-//                     var ptr = ErasedComponentStorage.cast(erased, Component);
-//                     ptr.deinit(allocator);
-//                     allocator.destroy(ptr);
-//                 }
-//             }).deinit,
-//         };
-//     }
-// };
-
-// // this is an archetype table
-// pub const ArchetypeStorage = struct {
-//     allocator: std.mem.Allocator,
-
-//     /// The hash of every component name in this archetype, i.e. the name of this archetype.
-//     hash: u64,
-
-//     /// A string hashmap of component_name -> type-erased *ComponentStorage(Component)
-//     components: std.StringArrayHashMapUnmanaged(ErasedComponentStorage),
-
-//     pub fn deinit(storage: *ArchetypeStorage) void {
-//         for (storage.components.values()) |erased| {
-//             erased.deinit(erased.ptr, storage.allocator);
-//         }
-//         storage.components.deinit(storage.allocator);
-//     }
-// };
-
-// // this is an array of a singular component type
-// pub fn ComponentStorage(comptime Component: type) type {
-//     return struct {
-//         /// A reference to the total number of entities with the same type as is being stored here.
-//         total_rows: *usize,
-
-//         /// The actual densely stored component data.
-//         data: std.ArrayListUnmanaged(Component) = .{},
-
-//         const Self = @This();
-
-//         pub fn deinit(storage: *Self, allocator: std.mem.Allocator) void {
-//             storage.data.deinit(allocator);
-//         }
-//     };
-// }
-
-// /// A type-erased representation of ComponentStorage(T) (where T is unknown).
-// pub const ErasedComponentStorage = struct {
-//     ptr: *anyopaque,
-
-//     // Casts this `ErasedComponentStorage` into `*ComponentStorage(Component)` with the given type
-//     // (unsafe).
-//     pub fn cast(ptr: *anyopaque, comptime Component: type) *ComponentStorage(Component) {
-//         const aligned: *anyopaque = @as(*ComponentStorage(Component), @alignCast(ptr));
-//         return @as(*ComponentStorage(Component), @ptrCast(aligned));
-//     }
-// };
-
 pub const StringHash = [_][]const u8{
     "Transform",
     "Velocity",
@@ -127,23 +48,70 @@ const ArchetypeError = error{
 };
 
 fn AddressOffset(T: type, ptr: anytype, offset: usize) *T {
-    return @ptrFromInt(@intFromPtr(ptr) + offset);
+    return @ptrFromInt(@intFromPtr(ptr) + offset * @sizeOf(T));
 }
 
 pub const EntityDataLocation = struct {
     table_index: u64,
-    storage_point: *ArchetypeTable,
+    archetype_hash: u64,
+};
+
+pub const ECSWorld = struct {
+    Tables: std.AutoArrayHashMap(u64, ArchetypeTable),
+    pub fn Init(self: *ECSWorld, allocator: std.mem.Allocator) void {
+        self.Tables = std.AutoArrayHashMap(u64, ArchetypeTable).init(allocator);
+    }
+    pub fn AddEntity(self: *ECSWorld, tuple: anytype, allocator: std.mem.Allocator) ?EntityDataLocation {
+        comptime var curr_hash = 0;
+        inline for (tuple) |field| {
+            const hash = comptime ComponentHash(@TypeOf(field));
+            curr_hash = curr_hash ^ hash;
+        }
+
+        const thing = self.Tables.getOrPut(curr_hash) catch unreachable;
+
+        if (!thing.found_existing) {
+            thing.value_ptr.* = ArchetypeTable{};
+            thing.value_ptr.Init(32);
+            inline for (tuple) |field| {
+                thing.value_ptr.AddComponentType(allocator, @TypeOf(field));
+            }
+            thing.value_ptr.AddEntity(tuple);
+
+            return EntityDataLocation{ .archetype_hash = curr_hash, .table_index = thing.value_ptr.Size - 1 };
+        }
+
+        thing.value_ptr.AddEntity(tuple);
+        return EntityDataLocation{ .archetype_hash = curr_hash, .table_index = thing.value_ptr.Size - 1 };
+    }
+    pub fn GetComponent(self: *ECSWorld, T: type, edl: EntityDataLocation) ?*T {
+        std.debug.print("Hash: {}\n", .{edl.archetype_hash});
+        if (self.Tables.getEntry(edl.archetype_hash)) |entry| {
+            return entry.value_ptr.GetComponent(T, edl.table_index);
+        } else {
+            std.debug.print("Hash was not found\n", .{});
+            return null;
+        }
+    }
+    // TODO: implement me
+    pub fn SetComponent(self: *ECSWorld, T: type, edl: EntityDataLocation) void {
+        _ = self; // autofix
+        _ = T; // autofix
+        _ = edl; // autofix
+
+    }
 };
 
 pub const ArchetypeTable = struct {
-    Map: [64]?OpaqueComponentStorage,
-    Size: u64,
-    Archetype: u64 = 0,
-    Capacity: u64,
+    Map: [64]?OpaqueComponentStorage = undefined,
+    Size: u64 = undefined,
+    Archetype: u64 = undefined,
+    Capacity: u64 = undefined,
     pub fn Init(self: *ArchetypeTable, capacity: u64) void {
         self.Map = .{null} ** 64;
         self.Capacity = capacity;
         self.Size = 0;
+        self.Archetype = 0;
     }
     pub fn AddComponentType(self: *ArchetypeTable, allocator: std.mem.Allocator, T: type) void {
         if (self.Map[comptime ComponentIndex(T)]) |component_storage| {
@@ -166,14 +134,14 @@ pub const ArchetypeTable = struct {
         }
         self.Size += 1;
     }
-    pub fn GetComponent(self: *ArchetypeTable, T: type, index: u64) !T {
+    pub fn GetComponent(self: *ArchetypeTable, T: type, index: u64) ?*T {
         const row: u64 = comptime ComponentIndex(T);
         if (self.Map[row]) |component_storage| {
             const ptr = @as(*T, @alignCast(@ptrCast(component_storage.array)));
-            return AddressOffset(T, ptr, index).*;
+            return AddressOffset(T, ptr, index);
         } else {
             std.debug.print("ERROR: Tried get component type that does not exist yet", .{});
-            return ArchetypeError.Invalid;
+            return null;
         }
     }
 };
