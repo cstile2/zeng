@@ -3,58 +3,20 @@ const Engine = @import("engine.zig");
 const ECS = @import("ecs.zig");
 
 pub const Sine_mover = struct {
-    x: u32,
+    x: u32 = 0,
 };
 pub const Velocity = struct {
     x: f32 = 1.1,
     y: f32 = 4.4,
     z: f32 = 9.9,
 };
+pub const Mesh = struct {
+    id: u32 = 121,
+};
+
+pub const Camera = struct {};
 
 pub fn main() !void {
-    std.debug.print("\n{}\n", .{comptime ECS.ComponentHash(Sine_mover)});
-
-    var world: ECS.ECSWorld = undefined;
-    world.Init(std.heap.c_allocator);
-
-    var edl: ECS.EntityDataLocation = undefined;
-    var edl2: ECS.EntityDataLocation = undefined;
-    if (world.AddEntity(.{ Sine_mover{ .x = 143 }, Velocity{} }, std.heap.c_allocator)) |new_guy| {
-        edl = new_guy;
-    }
-    if (world.AddEntity(.{ Sine_mover{ .x = 143 }, Velocity{ .x = -10.0, .y = 1.2, .z = 99.9 } }, std.heap.c_allocator)) |new_guy| {
-        edl2 = new_guy;
-    }
-
-    if (world.GetComponent(Sine_mover, edl)) |comp| {
-        std.debug.print("GOT: {}\n", .{comp});
-    }
-    if (world.GetComponent(Velocity, edl)) |comp| {
-        std.debug.print("GOT: {}\n", .{comp});
-    }
-    if (world.GetComponent(Sine_mover, edl2)) |comp| {
-        std.debug.print("GOT: {}\n", .{comp});
-    }
-    if (world.GetComponent(Velocity, edl2)) |comp| {
-        std.debug.print("GOT: {}\n", .{comp});
-    }
-
-    // var AS: ECS.ArchetypeTable = undefined;
-    // AS.Init(64);
-    // AS.AddComponentType(std.heap.c_allocator, Sine_mover);
-    // AS.AddComponentType(std.heap.c_allocator, Velocity);
-
-    // AS.AddEntity(.{
-    //     Sine_mover{ .x = 143 },
-    //     Velocity{},
-    // });
-
-    // const E: ECS.EntityDataLocation = .{ .table_index = 0, .archetype_hash = comptime ECS.ComponentHash(Sine_mover) & ECS.ComponentHash(Velocity) };
-    // _ = E; // autofix
-
-    // std.debug.print("got value: {}\n", .{(AS.GetComponent(Velocity, 0) catch unreachable).*});
-    // std.debug.print("got value: {}\n", .{(AS.GetComponent(Sine_mover, 0) catch unreachable).*});
-
     // initialization
     var gd: Engine.GlobalData = undefined;
     gd.window_width = 800;
