@@ -55,6 +55,7 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
     const stat = file.stat() catch unreachable;
     // read the file and store it into a dynamically allocated array of u8
     var data_bytes = file.reader().readAllAlloc(allocator, stat.size) catch unreachable;
+    defer allocator.free(data_bytes);
     std.debug.print("{}, size: {}\n", .{ @TypeOf(data_bytes), data_bytes.len });
     var curr_byte: u32 = 0;
     var index: u8 = 0;
@@ -137,11 +138,11 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
 
         Engine.CreateEntity(entity_array, Engine.Entity{ .mesh = .{ .vao_gpu = VAO, .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4), .material = Engine.Material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture } }, .transform = transform, .component_flags = Engine.ComponentFlags{ .mesh = true }, .camera = undefined });
         entity_array.*[entity_array.len - 1].name = allocator.alloc(u8, size_name) catch unreachable;
-        std.mem.copyForwards(u8, entity_array.*[entity_array.len - 1].name, name_data[0..size_name]);
+        std.mem.copyForwards(u8, entity_array.*[entity_array.len - 1].name.?, name_data[0..size_name]);
 
         res[res_count] = &entity_array.*[entity_array.len - 1];
         res_count += 1;
     }
 
-    return res[0..res_count];
+    return allocator.realloc(res, res_count) catch unreachable;
 }

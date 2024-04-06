@@ -2,21 +2,118 @@ const std = @import("std");
 const Engine = @import("engine.zig");
 const ECS = @import("ecs.zig");
 
-pub const Sine_mover = struct {
-    x: u32 = 0,
-};
 pub const Velocity = struct {
-    x: f32 = 1.1,
-    y: f32 = 4.4,
-    z: f32 = 9.9,
+    speed: u8 = 25,
+};
+pub const Sine_mover = struct {
+    hor: u8 = 14,
+    vert: u8 = 88,
 };
 pub const Mesh = struct {
-    id: u32 = 121,
+    tris: u8 = 11,
+    tex: u8 = 245,
+    tick: u8 = 111,
 };
 
-pub const Camera = struct {};
+fn Mockup() void {
+    var iter = ECS.iterator(.{ Sine_mover, Velocity });
+
+    // expose table disjointness - implementation specific
+    // seems fastest
+    while (iter.next()) {
+        const S_: []Sine_mover = iter.field(Sine_mover);
+        const V_: []Velocity = iter.field(Velocity);
+        for (S_, V_) |*s, *v| {
+            v += s;
+            s += v;
+        }
+    }
+
+    // go per entity - get copy of the data and auto send the mutations back
+    // seems to be the slowest - copies must be made twice
+    while (iter.next()) {
+        var s: Sine_mover = iter.get_component(Sine_mover);
+        defer iter.set_component(s);
+        var v: Velocity = iter.get_component(Velocity);
+        defer iter.set_component(v);
+
+        v += s;
+        s += v;
+    }
+
+    // go per entity and get components by pointer - could modify to have copies
+    // seems optimizable (unlikely?)
+    while (iter.next()) {
+        const s: *Sine_mover = iter.get_ptr(Sine_mover);
+        const v: *Velocity = iter.get_ptr(Velocity);
+
+        v.* += s.*;
+        s.* += v.*;
+    }
+}
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer {
+        _ = gpa.deinit();
+    }
+    var world: ECS.ECSWorld = undefined;
+    world.InitEmptyWorld(allocator);
+
+    _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
+    _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
+    _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
+
+    var M = try world.SpawnEntity(.{Mesh{}});
+
+    world.Print();
+    world.SetComponent(Velocity{ .speed = 166 }, &M) catch unreachable;
+    world.Print();
+    world.SetComponent(Sine_mover{ .hor = 44, .vert = 4 }, &M) catch unreachable;
+    world.Print();
+    var N = try world.SpawnEntity(.{Mesh{ .tex = 5, .tick = 5, .tris = 5 }});
+    world.Print();
+    world.SetComponent(Velocity{ .speed = 34 }, &N) catch unreachable;
+    world.Print();
+    world.RemoveComponent(Velocity, &N) catch unreachable;
+    world.Print();
+    world.RemoveComponent(Mesh, &M) catch unreachable;
+    world.Print();
+    world.RemoveComponent(Velocity, &M) catch unreachable;
+    world.Print();
+    var V = try world.SpawnEntity(.{});
+    world.Print();
+    world.SetComponent(Mesh{ .tex = 255, .tick = 255, .tris = 255 }, &V) catch unreachable;
+    world.Print();
+    _ = try world.SpawnEntity(.{ Sine_mover{ .hor = 31, .vert = 32 }, Velocity{ .speed = 65 }, Mesh{} });
+    world.Print();
+
+    var curr = try ECS.QueryIterator.create(&world, .{ Sine_mover, Velocity });
+    while (curr.next()) {
+        const S_: []Sine_mover = curr.field(Sine_mover);
+        const V_: []Velocity = curr.field(Velocity);
+        for (S_, V_) |*s, *v| {
+            std.debug.print("retrieved: {} + {}\n", .{ s, v });
+            s.vert = 77;
+            s.hor = 77;
+            v.speed = 77;
+        }
+    }
+
+    var curr2 = try ECS.QueryIterator.create(&world, .{Mesh});
+    while (curr2.next()) {
+        const M_ = curr2.field(Mesh);
+        for (M_) |*m| {
+            m.tex = 222;
+            m.tick = 222;
+            m.tris = 222;
+        }
+    }
+    world.Print();
+
+    try world.Destroy();
+
     // initialization
     var gd: Engine.GlobalData = undefined;
     gd.window_width = 800;
@@ -28,8 +125,8 @@ pub fn main() !void {
     gd.shader_program_GPU = undefined;
     {
         // get code from vertex shader file as a string
-        const vert_shader_code = Engine.GetBytesFromFile("assets/shaders/basic.shader", std.heap.c_allocator);
-        defer std.heap.c_allocator.free(vert_shader_code);
+        const vert_shader_code = Engine.GetBytesFromFile("assets/shaders/basic.shader", allocator);
+        defer allocator.free(vert_shader_code);
 
         // take vertex shader code > send to GPU > compile
         const vertex_shader_GPU: u32 = Engine.gl.createShader(Engine.gl.VERTEX_SHADER);
@@ -45,8 +142,8 @@ pub fn main() !void {
         }
 
         // get code from fragment shader file as a string
-        var frag_shader_code = Engine.GetBytesFromFile("assets/shaders/fragment.shader", std.heap.c_allocator);
-        defer std.heap.c_allocator.free(frag_shader_code);
+        var frag_shader_code = Engine.GetBytesFromFile("assets/shaders/fragment.shader", allocator);
+        defer allocator.free(frag_shader_code);
 
         // take fragment shader code > send to GPU > compile
         const frag_shader_GPU: u32 = Engine.gl.createShader(Engine.gl.FRAGMENT_SHADER);
@@ -96,13 +193,14 @@ pub fn main() !void {
     gd.elapsed_time = 0.0;
 
     // create camera entity / use it as main camera / initialize it thru window resize callback
-    Engine.CreateEntity(&gd.entity_slice, Engine.Entity{ .mesh = .{ .vao_gpu = 0, .indices_length = 0, .material = undefined }, .transform = Engine.identity(), .camera = Engine.Camera{ .projection_matrix = undefined }, .component_flags = Engine.ComponentFlags{ .camera = true, .ghost = true } });
+    Engine.CreateEntity(&gd.entity_slice, Engine.Entity{ .mesh = .{ .vao_gpu = 0, .indices_length = 0, .material = undefined }, .name = null, .transform = Engine.identity(), .camera = Engine.Camera{ .projection_matrix = undefined }, .component_flags = Engine.ComponentFlags{ .camera = true, .ghost = true } });
     gd.active_camera_matrix = &gd.entity_slice[gd.entity_slice.len - 1].transform;
     gd.active_camera = &gd.entity_slice[gd.entity_slice.len - 1].camera;
     Engine.OnWindowResize(gd.active_window, @intCast(gd.window_width), @intCast(gd.window_height));
 
-    // run a command to import the scene
-    _ = Engine.ImportModelAsset("assets/blender_files/custom_export.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+    // import the scene
+    const list = Engine.ImportModelAsset("assets/blender_files/custom_export.bin", allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+    allocator.free(list);
 
     // repeat until user closes the window
     while (!gd.active_window.shouldClose()) {
@@ -113,5 +211,9 @@ pub fn main() !void {
         }
 
         Engine.BigUpdate(&gd);
+    }
+
+    for (gd.entity_slice) |entity| {
+        allocator.free((entity.name orelse continue));
     }
 }

@@ -51,7 +51,7 @@ pub const Camera = struct {
 pub const Transform = [16]f32;
 
 // name component
-pub const Name = []u8;
+pub const Name = ?[]u8;
 
 // meta data
 pub const ComponentFlags = packed struct {

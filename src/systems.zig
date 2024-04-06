@@ -29,7 +29,7 @@ pub fn BigUpdate(gd: *GlobalData) void {
 
         const imported = Engine.ImportModelAsset("assets/blender_files/simple.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
         for (imported) |entity| {
-            if (std.mem.eql(u8, entity.name, "circ")) {
+            if (std.mem.eql(u8, entity.name.?, "circ")) {
                 entity.transform[13] += 10.0;
                 entity.component_flags.sine_mover = true;
             }
