@@ -1,56 +1,42 @@
 const std = @import("std");
 const Engine = @import("engine.zig");
-const ECS = @import("ecs.zig");
 
-pub const Velocity = struct {
-    speed: u8 = 25,
-};
-pub const Sine_mover = struct {
-    hor: u8 = 14,
-    vert: u8 = 88,
-};
-pub const Mesh = struct {
-    tris: u8 = 11,
-    tex: u8 = 245,
-    tick: u8 = 111,
-};
+// fn Mockup() void {
+//     var iter = ECS.iterator(.{ Sine_mover, Velocity });
 
-fn Mockup() void {
-    var iter = ECS.iterator(.{ Sine_mover, Velocity });
+//     // expose table disjointness - implementation specific
+//     // seems fastest
+//     while (iter.next()) {
+//         const S_: []Sine_mover = iter.field(Sine_mover);
+//         const V_: []Velocity = iter.field(Velocity);
+//         for (S_, V_) |*s, *v| {
+//             v += s;
+//             s += v;
+//         }
+//     }
 
-    // expose table disjointness - implementation specific
-    // seems fastest
-    while (iter.next()) {
-        const S_: []Sine_mover = iter.field(Sine_mover);
-        const V_: []Velocity = iter.field(Velocity);
-        for (S_, V_) |*s, *v| {
-            v += s;
-            s += v;
-        }
-    }
+//     // go per entity - get copy of the data and auto send the mutations back
+//     // seems to be the slowest - copies must be made twice
+//     while (iter.next()) {
+//         var s: Sine_mover = iter.get_component(Sine_mover);
+//         defer iter.set_component(s);
+//         var v: Velocity = iter.get_component(Velocity);
+//         defer iter.set_component(v);
 
-    // go per entity - get copy of the data and auto send the mutations back
-    // seems to be the slowest - copies must be made twice
-    while (iter.next()) {
-        var s: Sine_mover = iter.get_component(Sine_mover);
-        defer iter.set_component(s);
-        var v: Velocity = iter.get_component(Velocity);
-        defer iter.set_component(v);
+//         v += s;
+//         s += v;
+//     }
 
-        v += s;
-        s += v;
-    }
+//     // go per entity and get components by pointer - could modify to have copies
+//     // seems optimizable (unlikely?)
+//     while (iter.next()) {
+//         const s: *Sine_mover = iter.get_ptr(Sine_mover);
+//         const v: *Velocity = iter.get_ptr(Velocity);
 
-    // go per entity and get components by pointer - could modify to have copies
-    // seems optimizable (unlikely?)
-    while (iter.next()) {
-        const s: *Sine_mover = iter.get_ptr(Sine_mover);
-        const v: *Velocity = iter.get_ptr(Velocity);
-
-        v.* += s.*;
-        s.* += v.*;
-    }
-}
+//         v.* += s.*;
+//         s.* += v.*;
+//     }
+// }
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -58,61 +44,6 @@ pub fn main() !void {
     defer {
         _ = gpa.deinit();
     }
-    var world: ECS.ECSWorld = undefined;
-    world.InitEmptyWorld(allocator);
-
-    _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-    _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-    _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-
-    var M = try world.SpawnEntity(.{Mesh{}});
-
-    world.Print();
-    world.SetComponent(Velocity{ .speed = 166 }, &M) catch unreachable;
-    world.Print();
-    world.SetComponent(Sine_mover{ .hor = 44, .vert = 4 }, &M) catch unreachable;
-    world.Print();
-    var N = try world.SpawnEntity(.{Mesh{ .tex = 5, .tick = 5, .tris = 5 }});
-    world.Print();
-    world.SetComponent(Velocity{ .speed = 34 }, &N) catch unreachable;
-    world.Print();
-    world.RemoveComponent(Velocity, &N) catch unreachable;
-    world.Print();
-    world.RemoveComponent(Mesh, &M) catch unreachable;
-    world.Print();
-    world.RemoveComponent(Velocity, &M) catch unreachable;
-    world.Print();
-    var V = try world.SpawnEntity(.{});
-    world.Print();
-    world.SetComponent(Mesh{ .tex = 255, .tick = 255, .tris = 255 }, &V) catch unreachable;
-    world.Print();
-    _ = try world.SpawnEntity(.{ Sine_mover{ .hor = 31, .vert = 32 }, Velocity{ .speed = 65 }, Mesh{} });
-    world.Print();
-
-    var curr = try ECS.QueryIterator.create(&world, .{ Sine_mover, Velocity });
-    while (curr.next()) {
-        const S_: []Sine_mover = curr.field(Sine_mover);
-        const V_: []Velocity = curr.field(Velocity);
-        for (S_, V_) |*s, *v| {
-            std.debug.print("retrieved: {} + {}\n", .{ s, v });
-            s.vert = 77;
-            s.hor = 77;
-            v.speed = 77;
-        }
-    }
-
-    var curr2 = try ECS.QueryIterator.create(&world, .{Mesh});
-    while (curr2.next()) {
-        const M_ = curr2.field(Mesh);
-        for (M_) |*m| {
-            m.tex = 222;
-            m.tick = 222;
-            m.tris = 222;
-        }
-    }
-    world.Print();
-
-    try world.Destroy();
 
     // initialization
     var gd: Engine.GlobalData = undefined;
@@ -217,3 +148,4 @@ pub fn main() !void {
         allocator.free((entity.name orelse continue));
     }
 }
+

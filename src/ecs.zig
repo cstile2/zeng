@@ -84,7 +84,7 @@ pub const QueryIterator = struct {
     pub fn create(world: *ECSWorld, comptime tuple: anytype) !QueryIterator {
         const hash = comptime TupleTypeHash(tuple);
         var ret: QueryIterator = undefined;
-        ret._tables = std.AutoArrayHashMap(*ArchetypeTable, void).init(std.heap.c_allocator);
+        ret._tables = std.AutoArrayHashMap(*ArchetypeTable, void).init(world._allocator);
         ret._world = world;
         ret._tables_index = 0;
         for (world._tables.values()) |*table| {
@@ -92,8 +92,11 @@ pub const QueryIterator = struct {
                 ret._tables.put(table, void{}) catch unreachable;
             }
         }
-        ret._table = ret._tables.keys()[ret._tables_index];
+        ret._table = ret._tables.keys()[0];
         return ret;
+    }
+    pub fn destroy(self: *QueryIterator) !void {
+        self._tables.deinit();
     }
     pub fn next(this: *QueryIterator) bool {
         if (this._tables_index >= this._tables.keys().len) {
@@ -102,6 +105,10 @@ pub const QueryIterator = struct {
         this._table = this._tables.keys()[this._tables_index];
         this._tables_index += 1;
         return true;
+    }
+    pub fn reset(self: *QueryIterator) void {
+        self._tables_index = 0;
+        self._table = self._tables.keys()[0];
     }
     pub fn field(this: *QueryIterator, T: type) []T {
         var slice: []T = undefined;
@@ -122,10 +129,11 @@ pub const ECSWorld = struct {
     }
     pub fn Destroy(self: *ECSWorld) !void {
         for (self._tables.values()) |*value| {
-            try value.Destory(self._allocator);
+            try value.Destroy(self._allocator);
         }
         self._tables.deinit();
     }
+    // internal helper function - retrieve an archetype table and create one if none exists
     pub fn _GetCreateTableRuntime(self: *ECSWorld, archetype_hash: u64, allocator: std.mem.Allocator) !*ArchetypeTable {
         const table_query = try self._tables.getOrPut(archetype_hash);
         const table = table_query.value_ptr;
@@ -143,12 +151,14 @@ pub const ECSWorld = struct {
         }
         return table;
     }
+    // spawn an entity with component values specified in a tuple
     pub fn SpawnEntity(self: *ECSWorld, tuple: anytype) !EntityDataLocation {
         const tuple_hash = comptime TupleHash(tuple);
         var table = try self._GetCreateTableRuntime(tuple_hash, self._allocator);
         try table.AppendEntityNew(tuple);
         return EntityDataLocation{ .archetype_hash = table.archetype_hash, .row = table.count - 1 };
     }
+    // set the value of or add a new component of specified type and value
     pub fn SetComponent(self: *ECSWorld, V: anytype, edl: *EntityDataLocation) !void {
         // calculate the new hash
         const old_hash = edl.archetype_hash;
@@ -171,18 +181,23 @@ pub const ECSWorld = struct {
         // swap remove entity from old table
         try old_table.SwapRemoveEntity(edl.row);
 
+        // update edl
         edl.row = new_table.count - 1;
         edl.archetype_hash = new_hash;
     }
+    // retrieve a specific component as a copy
+    pub fn GetComponent(self: *ECSWorld, edl: EntityDataLocation, T: type) !T {
+        const table = (self._tables.getEntry(edl.archetype_hash) orelse return ECSError.RequestFailed).value_ptr;
+        return (try table.GetComponentPtr(T, edl.row)).*;
+    }
+    // removes a component if that component type is on the specified entity
     pub fn RemoveComponent(self: *ECSWorld, T: type, edl: *EntityDataLocation) !void {
         // calculate the new hash
         const old_hash = edl.archetype_hash;
         const new_hash = ~(comptime ComponentHash(T)) & old_hash;
 
         // test if we stay in same table and exit early
-        if (new_hash == old_hash) {
-            return;
-        }
+        if (new_hash == old_hash) return;
 
         // copy values from old table to new table where the new entity is
         const old_table = self._tables.getEntry(old_hash).?.value_ptr;
@@ -192,10 +207,12 @@ pub const ECSWorld = struct {
         // swap remove entity from old table
         try old_table.SwapRemoveEntity(edl.row);
 
+        // update edl
         edl.row = new_table.count - 1;
         edl.archetype_hash = new_hash;
     }
-    pub fn Print(self: ECSWorld) void {
+    // print world
+    pub fn _Print(self: ECSWorld) void {
         std.debug.print("=================================", .{});
         for (self._tables.values()) |*archetype_table| {
             std.debug.print("\n--", .{});
@@ -225,13 +242,14 @@ pub const ArchetypeTable = struct {
     count: u64 = undefined,
     archetype_hash: u64 = undefined,
     capacity: u64 = undefined,
+    next: ?*ArchetypeTable = null,
     pub fn InitEmptyTable(self: *ArchetypeTable, capacity: u64) void {
         self.storages = .{null} ** 64;
         self.capacity = capacity;
         self.count = 0;
         self.archetype_hash = 0;
     }
-    pub fn Destory(self: *ArchetypeTable, allocator: std.mem.Allocator) !void {
+    pub fn Destroy(self: *ArchetypeTable, allocator: std.mem.Allocator) !void {
         for (self.storages) |maybe_storage| {
             if (maybe_storage) |storage| {
                 allocator.free(storage.array);
