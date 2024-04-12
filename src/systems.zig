@@ -15,6 +15,7 @@ pub const GlobalData = struct {
     window_width: u32,
     window_height: u32,
     t_down_consume: bool = false,
+    allocator: std.mem.Allocator,
 };
 
 pub fn BigUpdate(gd: *GlobalData) void {
@@ -27,7 +28,8 @@ pub fn BigUpdate(gd: *GlobalData) void {
         const input_read: []u8 = Engine.GetBytesFromFile("assets/extras/command_input.txt", std.heap.c_allocator);
         defer std.heap.c_allocator.free(input_read);
 
-        const imported = Engine.ImportModelAsset("assets/blender_files/simple.bin", std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+        const imported = Engine.ImportModelAsset("assets/blender_files/simple.bin", gd.allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+        defer gd.allocator.free(imported);
         for (imported) |entity| {
             if (std.mem.eql(u8, entity.name.?, "circ")) {
                 entity.transform[13] += 10.0;

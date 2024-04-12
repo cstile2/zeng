@@ -84,7 +84,9 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
         std.debug.print("'{s}' :\n", .{name_data});
 
         // read current place as a u32 > increment current byte by size of this u32 (4 bytes)
-        const sizea: u32 = @as(*u32, @alignCast(@ptrCast(data_bytes[curr_byte .. curr_byte + 4]))).*;
+        var sizea: u32 = undefined;
+        @memcpy(@as([*]u8, @ptrCast(&sizea))[0..4], data_bytes[curr_byte .. curr_byte + 4]);
+
         curr_byte = curr_byte + 4;
         std.debug.print("sizea of curr: {}\n", .{sizea});
 
@@ -138,7 +140,7 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
 
         Engine.CreateEntity(entity_array, Engine.Entity{ .mesh = .{ .vao_gpu = VAO, .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4), .material = Engine.Material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture } }, .transform = transform, .component_flags = Engine.ComponentFlags{ .mesh = true }, .camera = undefined });
         entity_array.*[entity_array.len - 1].name = allocator.alloc(u8, size_name) catch unreachable;
-        std.mem.copyForwards(u8, entity_array.*[entity_array.len - 1].name.?, name_data[0..size_name]);
+        @memcpy(entity_array.*[entity_array.len - 1].name.?, name_data[0..size_name]);
 
         res[res_count] = &entity_array.*[entity_array.len - 1];
         res_count += 1;

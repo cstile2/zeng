@@ -1,43 +1,6 @@
 const std = @import("std");
 const Engine = @import("engine.zig");
 
-// fn Mockup() void {
-//     var iter = ECS.iterator(.{ Sine_mover, Velocity });
-
-//     // expose table disjointness - implementation specific
-//     // seems fastest
-//     while (iter.next()) {
-//         const S_: []Sine_mover = iter.field(Sine_mover);
-//         const V_: []Velocity = iter.field(Velocity);
-//         for (S_, V_) |*s, *v| {
-//             v += s;
-//             s += v;
-//         }
-//     }
-
-//     // go per entity - get copy of the data and auto send the mutations back
-//     // seems to be the slowest - copies must be made twice
-//     while (iter.next()) {
-//         var s: Sine_mover = iter.get_component(Sine_mover);
-//         defer iter.set_component(s);
-//         var v: Velocity = iter.get_component(Velocity);
-//         defer iter.set_component(v);
-
-//         v += s;
-//         s += v;
-//     }
-
-//     // go per entity and get components by pointer - could modify to have copies
-//     // seems optimizable (unlikely?)
-//     while (iter.next()) {
-//         const s: *Sine_mover = iter.get_ptr(Sine_mover);
-//         const v: *Velocity = iter.get_ptr(Velocity);
-
-//         v.* += s.*;
-//         s.* += v.*;
-//     }
-// }
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -47,6 +10,7 @@ pub fn main() !void {
 
     // initialization
     var gd: Engine.GlobalData = undefined;
+    gd.allocator = allocator;
     gd.window_width = 800;
     gd.window_height = 500;
     try Engine.InitializeStuff(&gd);
@@ -148,4 +112,3 @@ pub fn main() !void {
         allocator.free((entity.name orelse continue));
     }
 }
-
