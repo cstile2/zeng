@@ -3,6 +3,8 @@ const Engine = @import("engine.zig");
 pub const c = @cImport({
     @cInclude("stb_image.h");
 });
+const ecs = @import("ecs.zig");
+const ECS = @import("main_ECS.zig").ECS;
 
 pub fn GetBytesFromFile(filepath: []const u8, allocator: std.mem.Allocator) []u8 {
     // open file from filepath > close after done
@@ -147,4 +149,105 @@ pub fn ImportModelAsset(filepath: anytype, allocator: std.mem.Allocator, shader_
     }
 
     return allocator.realloc(res, res_count) catch unreachable;
+}
+
+pub fn ImportModelAsset2(world: *ECS.ECSWorld, filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture: u32) ecs.EntityDataLocation {
+    var ret: ecs.EntityDataLocation = undefined;
+
+    // open file from filepath > close after done
+    const file = std.fs.cwd().openFile(filepath, .{}) catch unreachable;
+    defer file.close();
+    // get size of the file (in bytes)
+    const stat = file.stat() catch unreachable;
+    // read the file and store it into a dynamically allocated array of u8
+    var data_bytes = file.reader().readAllAlloc(allocator, stat.size) catch unreachable;
+    defer allocator.free(data_bytes);
+    std.debug.print("{}, size: {}\n", .{ @TypeOf(data_bytes), data_bytes.len });
+    var curr_byte: u32 = 0;
+    var index: u8 = 0;
+    while (curr_byte < data_bytes.len) {
+        defer index += 1;
+
+        // create vao mesh
+        var VAO: u32 = undefined;
+        Engine.gl.genVertexArrays(1, &VAO);
+        Engine.gl.bindVertexArray(VAO);
+        defer {
+            Engine.gl.bindVertexArray(0);
+            Engine.gl.bindBuffer(Engine.gl.ELEMENT_ARRAY_BUFFER, 0);
+            Engine.gl.bindBuffer(Engine.gl.ARRAY_BUFFER, 0);
+        }
+
+        // read current place as a u32 > increment current byte by size of this u32 (4 bytes)
+        const size_name: u32 = @as(*u32, @alignCast(@ptrCast(data_bytes[curr_byte .. curr_byte + 4]))).*;
+        const padded_size: u32 = @divTrunc(size_name + 3, 4) * 4; // (len(obj.name) + 3) // 4 * 4
+        curr_byte = curr_byte + 4;
+        std.debug.print("size of name: {}\n", .{size_name});
+
+        // read in the name (there may be padding so that an alignment of 4 is maintained)
+        const name_data = data_bytes[curr_byte .. curr_byte + padded_size];
+        curr_byte = curr_byte + padded_size;
+        std.debug.print("'{s}' :\n", .{name_data});
+
+        // read current place as a u32 > increment current byte by size of this u32 (4 bytes)
+        var sizea: u32 = undefined;
+        @memcpy(@as([*]u8, @ptrCast(&sizea))[0..4], data_bytes[curr_byte .. curr_byte + 4]);
+
+        curr_byte = curr_byte + 4;
+        std.debug.print("sizea of curr: {}\n", .{sizea});
+
+        // read a bunch of floats (amount is 'sizea') which represents the model's vertex data
+        const mesh_vertex_data = data_bytes[curr_byte .. curr_byte + sizea];
+        curr_byte = curr_byte + sizea;
+
+        // read current place as a u32 > increment current byte by size of this u32 (4 bytes)
+        const sizeb: u32 = @as(*u32, @alignCast(@ptrCast(data_bytes[curr_byte .. curr_byte + 4]))).*;
+        curr_byte = curr_byte + 4;
+        std.debug.print("sizeb of curr: {}\n", .{sizeb});
+
+        // read a bunch of integers (amount is 'sizea') which represents the model's triangle indexes
+        const mesh_indices_data = data_bytes[curr_byte .. curr_byte + sizeb];
+        curr_byte = curr_byte + sizeb;
+
+        // read the default position of this mesh node
+        const transform_position = @as(*[3]f32, @alignCast(@ptrCast(data_bytes[curr_byte .. curr_byte + 4 * 3])));
+        curr_byte = curr_byte + 4 * 3;
+
+        // read the default rotation quaternion of this mesh node
+        const transform_rotation_data = @as(*[4]f32, @alignCast(@ptrCast(data_bytes[curr_byte .. curr_byte + 4 * 4])));
+        curr_byte = curr_byte + 4 * 4;
+        const transform_rotation = Engine.Quat{ .x = transform_rotation_data[0], .y = transform_rotation_data[1], .z = transform_rotation_data[2], .w = transform_rotation_data[3] };
+
+        // create vertex buffer object (holds vertex data) > bind it > store the data from vertices array
+        var VBO: u32 = undefined;
+        Engine.gl.genBuffers(1, &VBO);
+        Engine.gl.bindBuffer(Engine.gl.ARRAY_BUFFER, VBO);
+        defer Engine.gl.bindBuffer(Engine.gl.ARRAY_BUFFER, 0);
+        Engine.gl.bufferData(Engine.gl.ARRAY_BUFFER, sizea, @ptrCast(mesh_vertex_data), Engine.gl.STATIC_DRAW);
+
+        // create element buffer object (indices array) > bind it > store the data from the indices array
+        var EBO: u32 = undefined;
+        Engine.gl.genBuffers(1, &EBO);
+        Engine.gl.bindBuffer(Engine.gl.ELEMENT_ARRAY_BUFFER, EBO);
+        Engine.gl.bufferData(Engine.gl.ELEMENT_ARRAY_BUFFER, sizeb, @ptrCast(mesh_indices_data), Engine.gl.STATIC_DRAW);
+
+        // data layout is : position.xyz, normal.xyz, uv.xy, repeat
+        Engine.gl.vertexAttribPointer(0, 3, Engine.gl.FLOAT, Engine.gl.FALSE, 8 * @sizeOf(f32), @ptrFromInt(0)); // position
+        Engine.gl.vertexAttribPointer(1, 3, Engine.gl.FLOAT, Engine.gl.FALSE, 8 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32))); // normal
+        Engine.gl.vertexAttribPointer(2, 2, Engine.gl.FLOAT, Engine.gl.FALSE, 8 * @sizeOf(f32), @ptrFromInt(6 * @sizeOf(f32))); // uv
+        Engine.gl.enableVertexAttribArray(0);
+        Engine.gl.enableVertexAttribArray(1);
+        Engine.gl.enableVertexAttribArray(2);
+
+        // create a transformation matrix using the position + rotation read from the file
+        var transform: [16]f32 = Engine.identity();
+        transform = Engine.multiply_matrices(Engine.QuatToMatrix(transform_rotation), transform);
+        transform[12..15].* = transform_position.*;
+
+        ret = world.SpawnEntity(.{
+            Engine.Mesh{ .vao_gpu = VAO, .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4), .material = Engine.Material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture } },
+            transform,
+        }) catch unreachable;
+    }
+    return ret;
 }

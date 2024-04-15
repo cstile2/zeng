@@ -1,5 +1,6 @@
 const std = @import("std");
-const ECS = @import("ecs.zig");
+const ecs = @import("ecs.zig");
+
 const Velocity = struct {
     speed: u8 = 25,
 };
@@ -13,10 +14,19 @@ const Mesh = struct {
     tick: u8 = 111,
 };
 
+pub const TypeRegistry = [_]type{
+    Velocity,
+    Sine_mover,
+    Mesh,
+};
+
+const ECS = ecs.CompileECS(TypeRegistry);
+
 test "Spawning" {
     const allocator = std.testing.allocator;
     var world: ECS.ECSWorld = undefined;
     world.InitEmptyWorld(allocator);
+    defer world.Destroy() catch unreachable;
 
     var v: *Velocity = undefined;
     var s: Sine_mover = undefined;
@@ -45,14 +55,13 @@ test "Spawning" {
     try std.testing.expectEqual(Velocity{ .speed = 255 }, v.*);
     try std.testing.expectEqual(Mesh{ .tris = 252, .tick = 253, .tex = 254 }, m.*);
     try std.testing.expectEqual(Sine_mover{ .hor = 250, .vert = 251 }, s);
-
-    try world.Destroy();
 }
 
 test "SingleIteration" {
     const allocator = std.testing.allocator;
     var world: ECS.ECSWorld = undefined;
     world.InitEmptyWorld(allocator);
+    defer world.Destroy() catch unreachable;
 
     {
         _ = try world.SpawnEntity(.{Velocity{}});
@@ -106,14 +115,13 @@ test "SingleIteration" {
             count += 1;
         }
     }
-
-    try world.Destroy();
 }
 
 test "MultipleIteration" {
     const allocator = std.testing.allocator;
     var world: ECS.ECSWorld = undefined;
     world.InitEmptyWorld(allocator);
+    defer world.Destroy() catch unreachable;
 
     {
         _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
@@ -181,7 +189,6 @@ test "MultipleIteration" {
             count += 1;
         }
     }
-    try world.Destroy();
 }
 
 test "EntityLookups" {
@@ -283,7 +290,7 @@ test "ManyEntitiesOfSameArchetype" {
     defer world.Destroy() catch unreachable;
 
     var curr: u64 = 0;
-    var E: ECS.EntityDataLocation = undefined;
+    var E: ecs.EntityDataLocation = undefined;
     while (curr < 2048) {
         defer curr += 1;
         E = try world.SpawnEntity(.{ Sine_mover{}, Velocity{ .speed = @intCast(@mod(curr, 256)) } });
@@ -294,10 +301,10 @@ test "ManyEntitiesOfSameArchetype" {
         defer curr2 += 1;
         var sm: Sine_mover = undefined;
         var v: Velocity = undefined;
-        const F = ECS.EntityDataLocation{ .archetype_hash = E.archetype_hash, .row = curr2 };
+        const F = ecs.EntityDataLocation{ .archetype_hash = E.archetype_hash, .row = curr2 };
         try world.Get(F, .{ &sm, &v });
         try std.testing.expectEqual(Sine_mover{}, sm);
-        try std.testing.expectEqual(Velocity{ .speed = 99 }, v);
+        try std.testing.expectEqual(Velocity{ .speed = @intCast(@mod(curr2, 256)) }, v);
     }
 }
 

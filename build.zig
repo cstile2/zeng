@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const exe = b.addExecutable(.{
         .name = "colsengine",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = .{ .path = "src/main_ECS.zig" },
         .target = target,
         .optimize = optimize,
     });
