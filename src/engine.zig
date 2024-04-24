@@ -12,13 +12,16 @@ pub const Vec3 = packed struct {
     y: f32,
     z: f32,
 
-    fn div(self: Vec3, f: f32) Vec3 {
+    pub fn mult(self: Vec3, f: f32) Vec3 {
+        return .{ .x = self.x * f, .y = self.y * f, .z = self.z * f };
+    }
+    pub fn div(self: Vec3, f: f32) Vec3 {
         return .{ .x = self.x / f, .y = self.y / f, .z = self.z / f };
     }
-    fn length(self: Vec3) f32 {
+    pub fn length(self: Vec3) f32 {
         return @sqrt(self.x * self.x + self.y * self.y + self.z * self.z);
     }
-    fn normalized(self: Vec3) Vec3 {
+    pub fn normalized(self: Vec3) Vec3 {
         return self.div(self.length());
     }
 };
@@ -471,15 +474,11 @@ pub fn InitializeStuff(gd: *Engine.GlobalData) !void {
         Engine.gl.enable(Engine.gl.DEPTH_TEST);
         Engine.gl.enable(Engine.gl.CULL_FACE);
     }
-    gd.entity_slice = std.heap.c_allocator.alloc(Engine.Entity, 32) catch unreachable;
-    gd.entity_slice.len = 0;
 }
-
 pub fn DeinitializeStuff(gd: *Engine.GlobalData) void {
     gd.active_window.destroy();
     Engine.glfw.terminate();
 }
-
 fn KeyCallback(window: Engine.glfw.Window, key: Engine.glfw.Key, scancode: i32, action: Engine.glfw.Action, mods: Engine.glfw.Mods) void {
     _ = key; // autofix
     _ = window; // autofix
@@ -488,27 +487,26 @@ fn KeyCallback(window: Engine.glfw.Window, key: Engine.glfw.Key, scancode: i32, 
     _ = mods; // autofix
     //std.debug.print("key: {}\n", .{key.getScancode()});
 }
-
 pub fn RunCommand(gd: *Engine.GlobalData, input_read: []const u8) void {
     const separated: [][]u8 = Engine.SeparateText(input_read, ';');
     defer {
         for (separated) |string| {
-            std.heap.c_allocator.free(string);
+            gd.allocator.free(string);
         }
-        std.heap.c_allocator.free(separated);
+        gd.allocator.free(separated);
     }
     for (separated) |sub_command| {
         const parsed: [][]u8 = Engine.SeparateText(sub_command, ' ');
         defer {
             for (parsed) |string| {
-                std.heap.c_allocator.free(string);
+                gd.allocator.free(string);
             }
-            std.heap.c_allocator.free(parsed);
+            gd.allocator.free(parsed);
         }
         if (std.mem.eql(u8, parsed[0], "import")) {
             if (parsed.len >= 2) {
-                const ents = Engine.ImportModelAsset(parsed[1], std.heap.c_allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
-                defer std.heap.c_allocator.free(ents);
+                const ents = Engine.ImportModelAsset(parsed[1], gd.allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+                defer gd.allocator.free(ents);
             } else {
                 std.debug.print("No path specified", .{});
             }
@@ -548,7 +546,6 @@ pub fn RunCommand(gd: *Engine.GlobalData, input_read: []const u8) void {
         }
     }
 }
-
 pub fn MakeStruct(comptime in: anytype) type {
     var fields: [in.len]std.builtin.Type.StructField = undefined;
     for (in, 0..) |t, i| {
@@ -571,7 +568,6 @@ pub fn MakeStruct(comptime in: anytype) type {
         },
     });
 }
-
 pub fn Query(comptime readwrite: anytype, comptime read: anytype) type {
     return MakeStruct(readwrite ++ read);
 }

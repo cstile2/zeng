@@ -18,8 +18,16 @@ const ECSError = error{
     NonexistentComponent,
 };
 
+// a struct that is available to all systems
+pub fn Resource(comptime T: type) type {
+    return struct {
+        t: T,
+    };
+}
+
 pub fn CompileECS(comptime __TypeRegistry: anytype) type {
     return struct {
+        // integrate custom type-checking
         const __RuntimeTypeInformation = __GenerateTypeInfos(__TypeRegistry);
         fn __GenerateTypeInfos(comptime TypeReg: anytype) [TypeReg.len]TypeInfo {
             var ret: [TypeReg.len]TypeInfo = undefined;
@@ -31,6 +39,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
             return ret;
         }
 
+        // comptime checkers
         fn GetComponentHash(comptime T: type) u64 {
             var curr: u64 = 1;
             for (__TypeRegistry) |type_| {
@@ -123,7 +132,6 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
 
         /// Contains all entites for an ECS system and is needed to use the ECS
         pub const ECSWorld = struct {
-            //  holds all the archetype tables in a hashmap
             _tables: std.AutoArrayHashMap(ArchetypeID, ArchetypeTable),
             _allocator: std.mem.Allocator,
             /// initializes the ECS world - required for use
@@ -134,7 +142,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
             /// deallocates all memory created within this world
             pub fn Destroy(self: *ECSWorld) !void {
                 for (self._tables.values()) |*table| {
-                    try table.Destroy(self._allocator);
+                    try table.Destroy();
                 }
                 self._tables.deinit();
             }
@@ -256,7 +264,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
 
                         for (&archetype_table.storages) |*maybe_component_storage| {
                             if (maybe_component_storage.* != null) {
-                                std.debug.print("*{any}", .{maybe_component_storage.*.?.AtSlice(curr) catch unreachable});
+                                std.debug.print("*{any}", .{maybe_component_storage.*.?.ElementAsByteSlice(curr) catch unreachable});
                             }
                         }
                     }
@@ -265,7 +273,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
             }
         };
 
-        // holds all of the component storage objects for a given archetype of an entity - allows for simple, fast iteration on arrays
+        /// holds all of the component storage objects for a given archetype of an entity - allows for simple, fast iteration on arrays
         pub const ArchetypeTable = struct {
             archetype_hash: u64 = 0,
             storages: std.AutoArrayHashMap(ComponentID, ComponentColumn),
@@ -281,47 +289,49 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                 self.count = 0;
                 self.next = null;
             }
-            pub fn Destroy(self: *ArchetypeTable, allocator: std.mem.Allocator) !void {
-                for (self.storages.values()) |component_storage| {
-                    allocator.free(component_storage.array);
+            pub fn Destroy(self: *ArchetypeTable) !void {
+                for (self.storages.values()) |*component_storage| {
+                    try component_storage.Destroy(self.allocator);
                 }
-
                 self.storages.deinit();
             }
             pub fn AddComponentTypeRuntime(self: *ArchetypeTable, allocator: std.mem.Allocator, T_run: TypeInfo) !void {
-                const res = try self.storages.getOrPut(T_run.component_id);
-                if (res.found_existing) return ECSError.RedundantOperation;
+                const get_put = try self.storages.getOrPut(T_run.component_id);
+                if (get_put.found_existing) return ECSError.RedundantOperation;
 
-                try res.value_ptr.InstantiateRuntime(T_run, self.capacity, allocator);
+                try get_put.value_ptr.InstantiateRuntime(T_run, self.capacity, allocator);
                 self.archetype_hash = self.archetype_hash | T_run.hash;
             }
-            pub fn AppendEntityNew(self: *ArchetypeTable, tuple: anytype) !void {
+            pub fn _MaybeDoubleSize(self: *ArchetypeTable) !void {
                 if (self.count >= self.capacity) {
-                    inline for (tuple) |field| {
-                        try (self.storages.getEntry(comptime GetComponentID(@TypeOf(field))) orelse return ECSError.NonexistentComponent).value_ptr.DoubleSize(self.allocator);
+                    for (self.storages.values()) |*component_storage| {
+                        try component_storage.DoubleSize(self.allocator);
                     }
                     self.capacity *= 2;
                 }
+            }
+            pub fn AppendEntityNew(self: *ArchetypeTable, tuple: anytype) !void {
+                try self._MaybeDoubleSize();
                 inline for (tuple) |field| {
-                    (try (self.storages.getEntry(comptime GetComponentID(@TypeOf(field))) orelse return ECSError.RequestFailed).value_ptr.AtType(self.count, @TypeOf(field))).* = field;
+                    (try (self.storages.getEntry(comptime GetComponentID(@TypeOf(field))) orelse return ECSError.RequestFailed).value_ptr.ElementAsTypePtr(self.count, @TypeOf(field))).* = field;
                 }
                 self.count += 1;
             }
             pub fn AppendEntityCopy(self: *ArchetypeTable, old_table: *ArchetypeTable, old_row: u64) !void {
-                if (self.count >= self.capacity) {
-                    return ECSError.OutOfBounds;
-                }
+                try self._MaybeDoubleSize();
                 for (self.storages.values()) |*new_storage| {
                     for (old_table.storages.values()) |*old_storage| {
                         if (std.meta.eql(old_storage.type_info, new_storage.type_info)) {
-                            @memcpy(try new_storage.AtSlice(self.count), try old_storage.AtSlice(old_row));
+                            const old = try old_storage.ElementAsByteSlice(old_row);
+                            const new = try new_storage.ElementAsByteSlice(self.count);
+                            @memcpy(new, old);
                         }
                     }
                 }
                 self.count += 1;
             }
             pub fn GetComponentPtr(self: *ArchetypeTable, T: type, row: u64) !*T {
-                return (try self.storages.getEntry(comptime GetComponentID(T)).?.value_ptr.AtType(row, T));
+                return (try self.storages.getEntry(comptime GetComponentID(T)).?.value_ptr.ElementAsTypePtr(row, T));
             }
             pub fn SwapRemoveEntity(self: *ArchetypeTable, row: u64) !void {
                 if (row >= self.count) {
@@ -332,38 +342,44 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                     return;
                 }
                 for (self.storages.values()) |*component_storage| {
-                    const last = try component_storage.AtSlice(self.count - 1);
-                    const curr = try component_storage.AtSlice(row);
-                    @memcpy(curr, last);
+                    const bottom = try component_storage.ElementAsByteSlice(self.count - 1);
+                    const upper = try component_storage.ElementAsByteSlice(row);
+                    @memcpy(upper, bottom);
                 }
                 self.count -= 1;
             }
         };
 
-        // this object is essentially just a pointer to a dynamically allocated array of a singular component type
+        /// this object is essentially just a pointer to a dynamically allocated array of a singular component type
         pub const ComponentColumn = struct {
             array: []u8 = undefined,
             capacity: u64 = undefined,
             type_info: TypeInfo,
             pub fn InstantiateRuntime(self: *ComponentColumn, T_run: TypeInfo, capacity: u64, allocator: std.mem.Allocator) !void {
-                self.array = (allocator.vtable.alloc(allocator.ptr, T_run.type_size * capacity, T_run.type_alignment, @returnAddress()) orelse return ECSError.RequestFailed)[0 .. T_run.type_size * capacity];
                 self.capacity = capacity;
                 self.type_info = T_run;
+                if (self.type_info.type_size == 0) return;
+                self.array = (allocator.vtable.alloc(allocator.ptr, T_run.type_size * capacity, T_run.type_alignment, @returnAddress()) orelse return ECSError.RequestFailed)[0 .. T_run.type_size * capacity];
+            }
+            pub fn Destroy(self: *ComponentColumn, allocator: std.mem.Allocator) !void {
+                if (self.type_info.type_size == 0) return;
+                allocator.vtable.free(allocator.ptr, self.array, self.type_info.type_alignment, @returnAddress());
             }
             pub fn DoubleSize(self: *ComponentColumn, allocator: std.mem.Allocator) !void {
+                self.capacity *= 2;
+                if (self.type_info.type_size == 0) return;
                 const temp = (allocator.vtable.alloc(allocator.ptr, self.type_info.type_size * self.capacity * 2, self.type_info.type_alignment, @returnAddress()) orelse return ECSError.RequestFailed)[0 .. self.type_info.type_size * self.capacity * 2];
                 @memcpy(temp[0..self.array.len], self.array);
-                allocator.free(self.array);
+                allocator.vtable.free(allocator.ptr, self.array, self.type_info.type_alignment, @returnAddress());
                 self.array = temp;
-                self.capacity *= 2;
             }
-            pub fn AtSlice(self: *ComponentColumn, row: u64) ![]u8 {
+            pub fn ElementAsByteSlice(self: *ComponentColumn, row: u64) ![]u8 {
                 if (row >= self.capacity) {
                     return ECSError.OutOfBounds;
                 }
                 return self.array[row * self.type_info.type_size .. (row + 1) * self.type_info.type_size];
             }
-            pub fn AtType(self: *ComponentColumn, row: u64, T: type) !*T {
+            pub fn ElementAsTypePtr(self: *ComponentColumn, row: u64, T: type) !*T {
                 if (row >= self.capacity) {
                     return ECSError.OutOfBounds;
                 }
@@ -372,6 +388,3 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
         };
     };
 }
-
-// commands.spawn(.{ ... });
-// commands
