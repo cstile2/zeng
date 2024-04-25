@@ -13,17 +13,15 @@ pub const CircleCollider = struct { // this component enables sphere-based colli
     radius: f32 = 1.0,
 };
 
-// this is a type registry - when you create a new "component" put the name of it in this list for the engine to use it
+// this is a type registry - put a struct typename in this list to register it as an official "component" to be used in the engine
 pub const TypeRegistry = [_]type{
     Engine.Camera,
     Engine.Mesh,
-    Engine.Name,
     Engine.Transform,
     SineMover,
     CircleCollider,
 };
-
-// this is necessary for the engine to use the components that you made and put them into the ECS
+// this is necessary for the engine to use the components that you made and include them in the ECS system
 pub const ECS = ecs.CompileECS(TypeRegistry);
 
 // entry point
@@ -43,22 +41,22 @@ pub fn main() !void {
     const texture_GPU = Engine.LoadTexture("assets/images/uv_checker.png");
 
     // spawn an entity with these components: Camera, Transform, CircleCollider
-    const cam = try world.SpawnEntity(.{
+    const new_camera_entity = try world.SpawnEntity(.{
         Engine.Camera{ .projection_matrix = undefined },
         Engine.identity(),
         CircleCollider{},
     });
     // get pointers to the camera's data to use as the main rendering camera
-    try world.Get(cam, .{ &gd.active_camera_matrix, &gd.active_camera });
+    try world.Get(new_camera_entity, .{ &gd.active_camera_matrix, &gd.active_camera });
     // call this to tell the game the correct window dimensions - used for camera + rendering
     Engine.OnWindowResize(gd.active_window, @intCast(gd.window_width), @intCast(gd.window_height));
 
-    // import a file containing 3d models (created in Blender)
+    // import a file containing 3d models (created in Blender) and spawn them in the world
     _ = Engine.SpawnModels(&world, "assets/blender_files/main_scene.bin", gd.allocator, shader_program_GPU, texture_GPU);
 
     // MAIN GAME LOOP - runs until user closes the window
     while (!gd.active_window.shouldClose()) {
-        // this is needed to calculate delta_time and other stuff
+        // this is needed to calculate frame time and other stuff - runs at the very end of each frame
         defer Engine.EndOfFrameStuff(&gd);
 
         // update input + time
@@ -98,6 +96,7 @@ pub fn main() !void {
     }
 }
 
+/// Make all entities with a CircleCollider collide with each other
 pub fn CircleCollisionSystem(
     queryA: *ECS.QueryIterator,
     queryB: *ECS.QueryIterator,
@@ -126,6 +125,7 @@ pub fn CircleCollisionSystem(
     }
 }
 
+/// Make all entities with a SineMover component and a transform float around randomly
 pub fn SineMoverSystem(
     gd: *Engine.GlobalData,
     query_sine_mover: *ECS.QueryIterator,
@@ -142,6 +142,7 @@ pub fn SineMoverSystem(
     }
 }
 
+/// Make all entities with a camera and a transform component fly around like a spectator
 pub fn FlySystem(
     gd: *Engine.GlobalData,
     query_fly: *ECS.QueryIterator,
@@ -189,6 +190,7 @@ pub fn FlySystem(
     }
 }
 
+/// Make all entities with a transform and a camera component rotate using FPS mouse controls
 pub fn MouseLookSystem(
     gd: *Engine.GlobalData,
     query_mouse_look: *ECS.QueryIterator,
@@ -210,6 +212,7 @@ pub fn MouseLookSystem(
     }
 }
 
+/// Render all entities with a transform and a mesh
 pub fn RenderSystem(
     gd: *Engine.GlobalData,
     query: *ECS.QueryIterator,

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Engine = @import("engine.zig");
 const ecs = @import("ecs.zig");
-const ECS = @import("main_ECS.zig").ECS;
+const ECS = @import("main.zig").ECS;
 
 pub fn GetBytesFromFile(filepath: []const u8, allocator: std.mem.Allocator) []u8 {
     // open file from filepath > close after done
