@@ -1,9 +1,12 @@
 const std = @import("std");
 pub usingnamespace @import("loader.zig");
-pub usingnamespace @import("systems.zig");
 pub usingnamespace @import("render.zig");
 pub const glfw = @import("mach-glfw");
 pub const gl = @import("gl");
+pub const c = @cImport({
+    @cInclude("windows.h");
+    @cInclude("stb_image.h");
+});
 
 const Engine = @This();
 
@@ -453,6 +456,10 @@ pub fn InitializeStuff(gd: *Engine.GlobalData) !void {
             std.process.exit(1);
         }
 
+        // window dimensions
+        gd.window_width = 800;
+        gd.window_height = 500;
+
         // create our window
         gd.active_window = Engine.glfw.Window.create(gd.window_width, gd.window_height, "colsens game window!", null, null, .{
             .opengl_profile = .opengl_core_profile,
@@ -467,17 +474,30 @@ pub fn InitializeStuff(gd: *Engine.GlobalData) !void {
         gd.active_window.setUserPointer(gd);
         gd.active_window.setKeyCallback(KeyCallback);
 
+        gd.active_window.setInputModeCursor(Engine.glfw.Window.InputModeCursor.disabled);
+        gd.active_window.setInputModeRawMouseMotion(true);
+        gd.elapsed_time = 0.0;
+
         Engine.glfw.makeContextCurrent(gd.active_window);
         const proc: Engine.glfw.GLProc = undefined;
         try Engine.gl.load(proc, glGetProcAddress);
 
         Engine.gl.enable(Engine.gl.DEPTH_TEST);
         Engine.gl.enable(Engine.gl.CULL_FACE);
+
+        Engine.c.stbi_set_flip_vertically_on_load(1);
+
+        WarmupCounter();
+        old_time = GetTime();
+
+        gd.gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        gd.allocator = gd.gpa.allocator();
     }
 }
 pub fn DeinitializeStuff(gd: *Engine.GlobalData) void {
     gd.active_window.destroy();
     Engine.glfw.terminate();
+    _ = gd.gpa.deinit();
 }
 fn KeyCallback(window: Engine.glfw.Window, key: Engine.glfw.Key, scancode: i32, action: Engine.glfw.Action, mods: Engine.glfw.Mods) void {
     _ = key; // autofix
@@ -571,3 +591,44 @@ pub fn MakeStruct(comptime in: anytype) type {
 pub fn Query(comptime readwrite: anytype, comptime read: anytype) type {
     return MakeStruct(readwrite ++ read);
 }
+
+// timing and clock
+var PCFreq: f64 = 0.0;
+pub fn WarmupCounter() void {
+    var li: c.LARGE_INTEGER = undefined;
+    _ = c.QueryPerformanceFrequency(&li);
+    PCFreq = @floatFromInt(li.QuadPart);
+}
+pub fn GetTime() i64 {
+    var li: c.LARGE_INTEGER = undefined;
+    _ = c.QueryPerformanceCounter(&li);
+    return li.QuadPart;
+}
+pub inline fn CalculateTimeDelta(a: i64, b: i64) f64 {
+    return @as(f64, @floatFromInt(b - a)) / PCFreq;
+}
+
+var old_time: i64 = 0;
+pub fn EndOfFrameStuff(gd: *Engine.GlobalData) void {
+    Engine.glfw.pollEvents();
+    const new_time = Engine.GetTime();
+    gd.frame_delta = Engine.CalculateTimeDelta(old_time, new_time);
+    old_time = new_time;
+}
+
+pub const GlobalData = struct {
+    elapsed_time: f32 = 0.0,
+    active_window: Engine.glfw.Window,
+    active_camera_matrix: *[16]f32,
+    active_camera: *Engine.Camera,
+    cur_pos: Engine.glfw.Window.CursorPos,
+    frame_delta: f64 = 0.01666666,
+    frozen: bool = false,
+    shader_program_GPU: u32,
+    texture_GPU: u32,
+    window_width: u32,
+    window_height: u32,
+    t_down_last_frame: bool = false,
+    allocator: std.mem.Allocator,
+    gpa: std.heap.GeneralPurposeAllocator(.{}),
+};

@@ -1,8 +1,5 @@
 const std = @import("std");
 const Engine = @import("engine.zig");
-pub const c = @cImport({
-    @cInclude("stb_image.h");
-});
 const ecs = @import("ecs.zig");
 const ECS = @import("main_ECS.zig").ECS;
 
@@ -46,7 +43,7 @@ pub fn SeparateText(text: []const u8, comptime delimiter: u8, allocator: std.mem
     return ret[0..ret_count];
 }
 
-pub fn ImportModel(world: *ECS.ECSWorld, filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture: u32) ecs.EntityDataLocation {
+pub fn SpawnModels(world: *ECS.ECSWorld, filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture_GPU: u32) ecs.EntityDataLocation {
     var ret: ecs.EntityDataLocation = undefined;
 
     // open file from filepath > close after done
@@ -140,9 +137,82 @@ pub fn ImportModel(world: *ECS.ECSWorld, filepath: anytype, allocator: std.mem.A
         transform[12..15].* = transform_position.*;
 
         ret = world.SpawnEntity(.{
-            Engine.Mesh{ .vao_gpu = VAO, .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4), .material = Engine.Material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture } },
+            Engine.Mesh{
+                .vao_gpu = VAO,
+                .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4),
+                .material = Engine.Material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture_GPU },
+            },
             transform,
         }) catch unreachable;
     }
+    return ret;
+}
+
+pub fn LoadShader(allocator: std.mem.Allocator, vertex_path: anytype, fragment_path: anytype) u32 {
+    var ret: u32 = undefined;
+
+    // get code from vertex shader file as a string
+    const vert_shader_code = Engine.GetBytesFromFile(vertex_path, allocator);
+    defer allocator.free(vert_shader_code);
+
+    // take vertex shader code > send to GPU > compile
+    const vertex_shader_GPU: u32 = Engine.gl.createShader(Engine.gl.VERTEX_SHADER);
+    defer Engine.gl.deleteShader(vertex_shader_GPU);
+    Engine.gl.shaderSource(vertex_shader_GPU, 1, &vert_shader_code.ptr, &@intCast(vert_shader_code.len));
+    Engine.gl.compileShader(vertex_shader_GPU);
+
+    // check for opengl compilation errors
+    {
+        var infoLog: [512]u8 = undefined;
+        Engine.gl.getShaderInfoLog(vertex_shader_GPU, 512, null, &infoLog);
+        std.debug.print("{s}\n", .{infoLog});
+    }
+
+    // get code from fragment shader file as a string
+    var frag_shader_code = Engine.GetBytesFromFile(fragment_path, allocator);
+    defer allocator.free(frag_shader_code);
+
+    // take fragment shader code > send to GPU > compile
+    const frag_shader_GPU: u32 = Engine.gl.createShader(Engine.gl.FRAGMENT_SHADER);
+    defer Engine.gl.deleteShader(frag_shader_GPU);
+    Engine.gl.shaderSource(frag_shader_GPU, 1, &frag_shader_code.ptr, &@intCast(frag_shader_code.len));
+    Engine.gl.compileShader(frag_shader_GPU);
+
+    // check for opengl compilation errors
+    {
+        var infoLog: [512]u8 = undefined;
+        Engine.gl.getShaderInfoLog(frag_shader_GPU, 512, null, &infoLog);
+        std.debug.print("{s}\n", .{infoLog});
+    }
+
+    // create shader program > attach vertex + fragment shaders
+    ret = Engine.gl.createProgram();
+    Engine.gl.attachShader(ret, vertex_shader_GPU);
+    Engine.gl.attachShader(ret, frag_shader_GPU);
+    Engine.gl.linkProgram(ret);
+
+    return ret;
+}
+
+pub fn LoadTexture(path: anytype) u32 {
+    var ret: u32 = undefined;
+
+    // load image texture via stb_image library
+    var width: i32 = undefined;
+    var height: i32 = undefined;
+    var num_channels: i32 = undefined;
+    const image_data: [*c]u8 = Engine.c.stbi_load(path, &width, &height, &num_channels, 3);
+    defer Engine.c.stbi_image_free(image_data);
+
+    // create texture location > bind > set filtering > put the array data into the texture > generate mips
+    Engine.gl.genTextures(1, &ret);
+    Engine.gl.bindTexture(Engine.gl.TEXTURE_2D, ret);
+    defer Engine.gl.bindTexture(Engine.gl.TEXTURE_2D, 0);
+    Engine.gl.texParameteri(Engine.gl.TEXTURE_2D, Engine.gl.TEXTURE_MIN_FILTER, Engine.gl.NEAREST);
+    Engine.gl.texParameteri(Engine.gl.TEXTURE_2D, Engine.gl.TEXTURE_MAG_FILTER, Engine.gl.NEAREST);
+    //Engine.gl.pixelStorei(Engine.gl.UNPACK_ALIGNMENT, 1);
+    Engine.gl.texImage2D(Engine.gl.TEXTURE_2D, 0, Engine.gl.RGB, width, height, 0, Engine.gl.RGB, Engine.gl.UNSIGNED_BYTE, image_data);
+    Engine.gl.generateMipmap(Engine.gl.TEXTURE_2D);
+
     return ret;
 }
