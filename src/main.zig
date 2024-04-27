@@ -1,22 +1,23 @@
 const std = @import("std");
-const Engine = @import("engine.zig");
+const zeng = @import("zeng.zig");
 const ecs = @import("ecs.zig");
 
-pub const SineMover = struct { // this component makes an entity float around randomly
-    offset: f32 = 0.0,
-};
-pub const CircleCollider = struct { // this component enables sphere-based collisions
-    radius: f32 = 1.0,
-};
-
 pub const TypeRegistry = [_]type{
-    Engine.Camera,
-    Engine.Mesh,
-    Engine.Transform,
+    zeng.Camera,
+    zeng.Mesh,
+    zeng.Transform,
     SineMover,
     CircleCollider,
 };
 pub const ECS = ecs.CompileECS(TypeRegistry);
+
+// user-level components
+pub const SineMover = struct {
+    offset: f32 = 0.0,
+};
+pub const CircleCollider = struct {
+    radius: f32 = 1.0,
+};
 
 pub fn main() !void {
     // select network mode - client or server
@@ -33,70 +34,61 @@ pub fn main() !void {
         }
     }
 
-    // initialize global data and engine application and window stuff
-    var gd: Engine.GlobalData = undefined;
-    try Engine.InitializeStuff(&gd);
-    defer Engine.DeinitializeStuff(&gd);
+    var gd: zeng.GlobalData = undefined;
+    try zeng.engine_start(&gd);
+    defer zeng.engine_end(&gd);
 
-    // create ECS world - this contains all entities in the game world - it's the main part of the game engine
     var world: ECS.ECSWorld = undefined;
     world.init(gd.allocator);
     defer world.deinit() catch unreachable;
 
-    // load shader from file and load texture from file
-    const shader_program_GPU = Engine.LoadShader(gd.allocator, "assets/shaders/basic.shader", "assets/shaders/fragment.shader");
-    const texture_GPU = Engine.LoadTexture("assets/images/uv_checker.png");
+    const shader_program_GPU = zeng.load_shader(gd.allocator, "assets/shaders/basic.shader", "assets/shaders/fragment.shader");
+    const texture_GPU = zeng.load_texture("assets/images/uv_checker.png");
 
-    // spawn an entity with these components: Camera, Transform, CircleCollider
     const new_camera_entity = try world.spawn(.{
-        Engine.Camera{ .projection_matrix = undefined },
-        Engine.identity(),
+        zeng.Camera{ .projection_matrix = undefined },
+        zeng.identity_matrix(),
         CircleCollider{},
     });
-    // get pointers to the camera's data to use as the main rendering camera
     try world.get_component(new_camera_entity, .{ &gd.active_camera_matrix, &gd.active_camera });
-    // call this to tell the game the correct window dimensions - used for camera + rendering
-    Engine.OnWindowResize(gd.active_window, @intCast(gd.window_width), @intCast(gd.window_height));
+    zeng.window_resize(gd.active_window, @intCast(gd.window_width), @intCast(gd.window_height));
 
-    // import a file containing 3d models (created in Blender) and spawn them in the world
-    _ = Engine.SpawnModels(&world, "assets/blender_files/main_scene.bin", gd.allocator, shader_program_GPU, texture_GPU);
+    _ = zeng.spawn_models(&world, "assets/blender_files/main_scene.bin", gd.allocator, shader_program_GPU, texture_GPU);
 
-    // networking setup
-    Engine.networking.ClientMap = @TypeOf(Engine.networking.ClientMap).init(gd.allocator);
-    defer Engine.networking.ClientMap.deinit();
+    zeng.networking.client_map = @TypeOf(zeng.networking.client_map).init(gd.allocator);
+    defer zeng.networking.client_map.deinit();
     var net_tup: struct { std.os.socket_t, std.net.Address } = undefined;
     if (is_server) {
-        net_tup = try Engine.networking.CreateSocketAddress("0.0.0.0", 55555, true);
-        try Engine.networking.BindSocketAddress(net_tup);
+        net_tup = try zeng.networking.setup_socket_and_address("0.0.0.0", 55555, true);
+        try zeng.networking.bind_socket_and_address(net_tup);
     } else {
-        net_tup = try Engine.networking.CreateSocketAddress("192.168.0.90", 55555, true);
+        net_tup = try zeng.networking.setup_socket_and_address("192.168.0.90", 55555, true);
         _ = try std.os.sendto(net_tup[0], "I want to connect!", 0, &net_tup[1].any, net_tup[1].getOsSockLen());
     }
 
     // MAIN GAME LOOP - runs until user closes the window
     while (!gd.active_window.shouldClose()) {
-        // this is needed to calculate frame time and other stuff - runs at the very end of each frame
-        defer Engine.EndOfFrameStuff(&gd);
+        defer zeng.late_frame_calculations(&gd);
 
         // server networking
         if (is_server) {
             var packet_data_buffer: [4096]u8 = undefined;
-            var player_update_buffer: [32]struct { Engine.networking.ClientInfo, []u8 } = undefined;
+            var player_update_buffer: [32]struct { zeng.networking.ClientInfo, []u8 } = undefined;
             var player_update_num: u32 = 0;
-            try Engine.networking.ServerSiftPackets(player_update_buffer[0..], &player_update_num, net_tup[0], &packet_data_buffer);
+            try zeng.networking.server_sift_packets(player_update_buffer[0..], &player_update_num, net_tup[0], &packet_data_buffer);
 
             // handle any brand new clients
-            for (Engine.networking.ClientMap.values()) |*maybe_edl| {
+            for (zeng.networking.client_map.values()) |*maybe_edl| {
                 if (maybe_edl.* == null) {
-                    const imported = Engine.SpawnModels(&world, "assets/blender_files/simple.bin", gd.allocator, shader_program_GPU, texture_GPU);
+                    const imported = zeng.spawn_models(&world, "assets/blender_files/simple.bin", gd.allocator, shader_program_GPU, texture_GPU);
                     maybe_edl.* = imported;
                 }
             }
 
             // for each existing client, update local representation
             for (player_update_buffer[0..player_update_num]) |clientinfo_and_data| {
-                const edl = Engine.networking.ClientMap.getEntry(clientinfo_and_data[0]).?.value_ptr.*.?;
-                var transform: *Engine.Transform = undefined;
+                const edl = zeng.networking.client_map.getEntry(clientinfo_and_data[0]).?.value_ptr.*.?;
+                var transform: *zeng.Transform = undefined;
                 try world.get_component(edl, &transform);
                 @memcpy(@as([*]u8, @ptrCast(&(transform.*[12]))), clientinfo_and_data[1][0..4]);
                 @memcpy(@as([*]u8, @ptrCast(&(transform.*[13]))), clientinfo_and_data[1][4..8]);
@@ -109,33 +101,33 @@ pub fn main() !void {
         gd.elapsed_time += @floatCast(gd.frame_delta);
 
         // spawn floating guy when key "t" is pressed (not held)
-        if ((gd.active_window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press) and !gd.t_down_last_frame) {
-            var imported = Engine.SpawnModels(&world, "assets/blender_files/simple.bin", gd.allocator, shader_program_GPU, texture_GPU);
+        if ((gd.active_window.getKey(zeng.glfw.Key.t) == zeng.glfw.Action.press) and !gd.t_down_last_frame) {
+            var imported = zeng.spawn_models(&world, "assets/blender_files/simple.bin", gd.allocator, shader_program_GPU, texture_GPU);
             try world.insert_component(SineMover{ .offset = 0.0 }, &imported);
             try world.insert_component(CircleCollider{}, &imported);
         }
-        gd.t_down_last_frame = gd.active_window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press;
+        gd.t_down_last_frame = gd.active_window.getKey(zeng.glfw.Key.t) == zeng.glfw.Action.press;
 
         // systems - these are what updates all of the data and logic in the game
-        var query_t_s = try ECS.QueryIterator.create(&world, .{ Engine.Transform, SineMover });
+        var query_t_s = try ECS.QueryIterator.create(&world, .{ zeng.Transform, SineMover });
         try SineMoverSystem(&gd, &query_t_s);
         try query_t_s.destroy();
 
-        var query_t_c = try ECS.QueryIterator.create(&world, .{ Engine.Transform, Engine.Camera });
+        var query_t_c = try ECS.QueryIterator.create(&world, .{ zeng.Transform, zeng.Camera });
         try FlySystem(&gd, &query_t_c);
         try query_t_c.destroy();
 
-        var query_t_cc_A = try ECS.QueryIterator.create(&world, .{ Engine.Transform, CircleCollider });
-        var query_t_cc_B = try ECS.QueryIterator.create(&world, .{ Engine.Transform, CircleCollider });
+        var query_t_cc_A = try ECS.QueryIterator.create(&world, .{ zeng.Transform, CircleCollider });
+        var query_t_cc_B = try ECS.QueryIterator.create(&world, .{ zeng.Transform, CircleCollider });
         try CircleCollisionSystem(&query_t_cc_A, &query_t_cc_B);
         try query_t_cc_A.destroy();
         try query_t_cc_B.destroy();
 
-        var query_t_c_2 = try ECS.QueryIterator.create(&world, .{ Engine.Transform, Engine.Camera });
+        var query_t_c_2 = try ECS.QueryIterator.create(&world, .{ zeng.Transform, zeng.Camera });
         try MouseLookSystem(&gd, &query_t_c_2);
         try query_t_c_2.destroy();
 
-        var query_t_m = try ECS.QueryIterator.create(&world, .{ Engine.Transform, Engine.Mesh });
+        var query_t_m = try ECS.QueryIterator.create(&world, .{ zeng.Transform, zeng.Mesh });
         try RenderSystem(&gd, &query_t_m);
         try query_t_m.destroy();
 
@@ -153,16 +145,16 @@ pub fn CircleCollisionSystem(
     queryB: *ECS.QueryIterator,
 ) !void {
     while (queryA.next()) {
-        const transformsA = try queryA.field(Engine.Transform);
+        const transformsA = try queryA.field(zeng.Transform);
         for (transformsA) |*transformA| {
             queryB.reset();
             while (queryB.next()) {
-                const transformsB = try queryB.field(Engine.Transform);
+                const transformsB = try queryB.field(zeng.Transform);
                 for (transformsB) |*transformB| {
                     if (transformA == transformB) {
                         continue;
                     }
-                    var delta = Engine.Vec3{ .x = transformA[12] - transformB[12], .y = transformA[13] - transformB[13], .z = transformA[14] - transformB[14] };
+                    var delta = zeng.Vec3{ .x = transformA[12] - transformB[12], .y = transformA[13] - transformB[13], .z = transformA[14] - transformB[14] };
                     if (delta.length() < 1.2) {
                         delta = delta.normalized().mult(1.2);
 
@@ -178,11 +170,11 @@ pub fn CircleCollisionSystem(
 
 /// Make all entities with a SineMover component and a transform float around randomly
 pub fn SineMoverSystem(
-    gd: *Engine.GlobalData,
+    gd: *zeng.GlobalData,
     query_sine_mover: *ECS.QueryIterator,
 ) !void {
     while (query_sine_mover.next()) {
-        const Ts = try query_sine_mover.field(Engine.Transform);
+        const Ts = try query_sine_mover.field(zeng.Transform);
         const Ss = try query_sine_mover.field(SineMover);
         for (Ts, Ss) |*transform, sine_mover| {
             const localtime = gd.elapsed_time - sine_mover.offset;
@@ -195,44 +187,44 @@ pub fn SineMoverSystem(
 
 /// Make all entities with a camera and a transform component fly around like a spectator
 pub fn FlySystem(
-    gd: *Engine.GlobalData,
+    gd: *zeng.GlobalData,
     query_fly: *ECS.QueryIterator,
 ) !void {
     while (query_fly.next()) {
-        const Ts = try query_fly.field(Engine.Transform);
+        const Ts = try query_fly.field(zeng.Transform);
         for (Ts) |*transform| {
             var speed: f32 = @floatCast(gd.frame_delta * 100.0);
-            if (gd.active_window.getKey(Engine.glfw.Key.left_shift) == Engine.glfw.Action.press) {
+            if (gd.active_window.getKey(zeng.glfw.Key.left_shift) == zeng.glfw.Action.press) {
                 speed *= 0.2;
             } else {
                 speed *= 0.05;
             }
-            if (gd.active_window.getKey(Engine.glfw.Key.a) == Engine.glfw.Action.press) {
+            if (gd.active_window.getKey(zeng.glfw.Key.a) == zeng.glfw.Action.press) {
                 transform[12] -= transform[0] * speed;
                 transform[13] -= transform[1] * speed;
                 transform[14] -= transform[2] * speed;
             }
-            if (gd.active_window.getKey(Engine.glfw.Key.d) == Engine.glfw.Action.press) {
+            if (gd.active_window.getKey(zeng.glfw.Key.d) == zeng.glfw.Action.press) {
                 transform[12] += transform[0] * speed;
                 transform[13] += transform[1] * speed;
                 transform[14] += transform[2] * speed;
             }
-            if (gd.active_window.getKey(Engine.glfw.Key.q) == Engine.glfw.Action.press) {
+            if (gd.active_window.getKey(zeng.glfw.Key.q) == zeng.glfw.Action.press) {
                 transform[12] -= transform[4] * speed;
                 transform[13] -= transform[5] * speed;
                 transform[14] -= transform[6] * speed;
             }
-            if (gd.active_window.getKey(Engine.glfw.Key.e) == Engine.glfw.Action.press) {
+            if (gd.active_window.getKey(zeng.glfw.Key.e) == zeng.glfw.Action.press) {
                 transform[12] += transform[4] * speed;
                 transform[13] += transform[5] * speed;
                 transform[14] += transform[6] * speed;
             }
-            if (gd.active_window.getKey(Engine.glfw.Key.w) == Engine.glfw.Action.press) {
+            if (gd.active_window.getKey(zeng.glfw.Key.w) == zeng.glfw.Action.press) {
                 transform[12] -= transform[8] * speed;
                 transform[13] -= transform[9] * speed;
                 transform[14] -= transform[10] * speed;
             }
-            if (gd.active_window.getKey(Engine.glfw.Key.s) == Engine.glfw.Action.press) {
+            if (gd.active_window.getKey(zeng.glfw.Key.s) == zeng.glfw.Action.press) {
                 transform[12] += transform[8] * speed;
                 transform[13] += transform[9] * speed;
                 transform[14] += transform[10] * speed;
@@ -243,19 +235,19 @@ pub fn FlySystem(
 
 /// Make all entities with a transform and a camera component rotate using FPS mouse controls
 pub fn MouseLookSystem(
-    gd: *Engine.GlobalData,
+    gd: *zeng.GlobalData,
     query_mouse_look: *ECS.QueryIterator,
 ) !void {
     while (query_mouse_look.next()) {
-        const Ts = try query_mouse_look.field(Engine.Transform);
+        const Ts = try query_mouse_look.field(zeng.Transform);
         for (Ts) |*transform| {
             var pos: [3]f32 = undefined;
             pos[0] = transform[12];
             pos[1] = transform[13];
             pos[2] = transform[14];
-            const rot_mat_hor = Engine.axis_angle_to_matrix(.{ .x = 0, .y = 1, .z = 0 }, @floatCast(gd.cur_pos.xpos * -0.0015));
-            const rot_mat_vert = Engine.axis_angle_to_matrix(.{ .x = 1, .y = 0, .z = 0 }, @floatCast(gd.cur_pos.ypos * -0.0015));
-            transform.* = Engine.multiply_matrices(rot_mat_hor, rot_mat_vert);
+            const rot_mat_hor = zeng.axis_angle_to_matrix(.{ .x = 0, .y = 1, .z = 0 }, @floatCast(gd.cur_pos.xpos * -0.0015));
+            const rot_mat_vert = zeng.axis_angle_to_matrix(.{ .x = 1, .y = 0, .z = 0 }, @floatCast(gd.cur_pos.ypos * -0.0015));
+            transform.* = zeng.multiply_matrices(rot_mat_hor, rot_mat_vert);
             transform[12] = pos[0];
             transform[13] = pos[1];
             transform[14] = pos[2];
@@ -265,19 +257,19 @@ pub fn MouseLookSystem(
 
 /// Render all entities with a transform and a mesh
 pub fn RenderSystem(
-    gd: *Engine.GlobalData,
+    gd: *zeng.GlobalData,
     query: *ECS.QueryIterator,
 ) !void {
-    Engine.gl.clearColor(0.2, 0.3, 0.3, 1.0);
-    Engine.gl.clear(Engine.gl.COLOR_BUFFER_BIT | Engine.gl.DEPTH_BUFFER_BIT);
+    zeng.gl.clearColor(0.2, 0.3, 0.3, 1.0);
+    zeng.gl.clear(zeng.gl.COLOR_BUFFER_BIT | zeng.gl.DEPTH_BUFFER_BIT);
 
-    const inv_camera_matrix: [16]f32 = Engine.InvertMatrix(gd.active_camera_matrix.*);
+    const inv_camera_matrix: [16]f32 = zeng.invert_matrix(gd.active_camera_matrix.*);
 
     while (query.next()) {
-        const Ms = try query.field(Engine.Mesh);
-        const Ts = try query.field(Engine.Transform);
+        const Ms = try query.field(zeng.Mesh);
+        const Ts = try query.field(zeng.Transform);
         for (Ms, Ts) |mesh, transform| {
-            Engine.DrawMesh2(mesh, transform, gd.active_camera.projection_matrix, inv_camera_matrix);
+            zeng.draw_mesh(mesh, transform, gd.active_camera.projection_matrix, inv_camera_matrix);
         }
     }
 

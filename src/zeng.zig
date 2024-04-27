@@ -1,16 +1,20 @@
 const std = @import("std");
-pub usingnamespace @import("loader.zig");
-pub usingnamespace @import("render.zig");
+
+// Crufty Backends
 pub const glfw = @import("mach-glfw");
 pub const gl = @import("gl");
 pub const c = @cImport({
     @cInclude("windows.h");
     @cInclude("stb_image.h");
 });
+
+// Engine Namespacing
+pub usingnamespace @import("loader.zig");
+pub usingnamespace @import("render.zig");
 pub const networking = @import("networking.zig");
+const zeng = @This();
 
-const Engine = @This();
-
+// Engine Data Structures
 pub const Vec3 = packed struct {
     x: f32,
     y: f32,
@@ -29,60 +33,30 @@ pub const Vec3 = packed struct {
         return self.div(self.length());
     }
 };
-
 pub const Quat = packed struct {
     x: f32 = 0.0,
     y: f32 = 0.0,
     z: f32 = 0.0,
     w: f32 = 0.0,
 };
-
 pub const Material = struct {
     shader_program_GPU: u32,
     texture_GPU: u32,
 };
 
-// mesh component
+// Precoded Components
 pub const Mesh = struct {
     vao_gpu: u32,
     indices_length: i32,
     material: Material,
 };
-
-// camera component
 pub const Camera = struct {
     projection_matrix: [16]f32,
 };
-
-// .transform component
 pub const Transform = [16]f32;
 
-// name component
-pub const Name = ?[]u8;
-
-// meta data
-pub const ComponentFlags = packed struct {
-    sine_mover: bool = false,
-    ghost: bool = false,
-    mesh: bool = false,
-    camera: bool = false,
-    name: bool = false,
-
-    _padding: u27 = 0,
-};
-
-// entity
-pub const Entity = struct {
-    mesh: Mesh,
-    camera: Camera,
-    transform: Transform,
-    name: Name = undefined,
-
-    component_flags: ComponentFlags,
-};
-
-// identity 4x4 matrix
-pub fn identity() [16]f32 {
+// Linear Algebra
+pub fn identity_matrix() [16]f32 {
     return [16]f32{
         1, 0, 0, 0, //
         0, 1, 0, 0, //
@@ -90,8 +64,6 @@ pub fn identity() [16]f32 {
         0, 0, 0, 1, //
     };
 }
-
-// TODO: make better, add tests
 pub fn multiply_matrices(b: [16]f32, a: [16]f32) [16]f32 {
     var result: [16]f32 = undefined;
 
@@ -107,8 +79,7 @@ pub fn multiply_matrices(b: [16]f32, a: [16]f32) [16]f32 {
 
     return result;
 }
-
-pub fn QuatToMatrix(q: Quat) [16]f32 {
+pub fn quaternion_to_matrix(q: Quat) [16]f32 {
     var matrix: [16]f32 = undefined;
     // column 0
     matrix[0] = 1.0 - 2.0 * (q.y * q.y) - 2.0 * (q.z * q.z);
@@ -132,14 +103,7 @@ pub fn QuatToMatrix(q: Quat) [16]f32 {
     matrix[15] = 1.0;
     return matrix;
 }
-
-pub fn CreateEntity(entities: *[]Entity, e: Entity) void {
-    entities.len += 1;
-    entities.*[entities.len - 1] = e;
-}
-
-// TODO: add tests, research better options
-pub fn InvertMatrix(m: [16]f32) [16]f32 {
+pub fn invert_matrix(m: [16]f32) [16]f32 {
     var inv: [16]f32 = undefined;
 
     inv[0] = m[5] * m[10] * m[15] -
@@ -269,8 +233,6 @@ pub fn InvertMatrix(m: [16]f32) [16]f32 {
 
     return invOut;
 }
-
-// TODO: add tests
 pub fn axis_angle_to_matrix(axis: Vec3, angle: f32) [16]f32 {
     const cosine = @cos(angle);
     const s = @sin(angle);
@@ -304,8 +266,7 @@ pub fn axis_angle_to_matrix(axis: Vec3, angle: f32) [16]f32 {
 
     return result;
 }
-
-pub fn AxisAngle(axis: Vec3, angle: f32) Quat {
+pub fn axis_angle(axis: Vec3, angle: f32) Quat {
     return .{
         .x = axis.x * @sin(angle / 2.0), //
         .y = axis.y * @sin(angle / 2.0), //
@@ -313,8 +274,6 @@ pub fn AxisAngle(axis: Vec3, angle: f32) Quat {
         .w = @cos(angle / 2.0),
     };
 }
-
-// TODO: add tests
 pub fn perspective_projection_matrix(fov: f32, aspect_ratio: f32, near: f32, far: f32) [16]f32 {
     const f = 1.0 / @tan(fov / 2.0);
     const range_inv = 1.0 / (near - far);
@@ -344,112 +303,48 @@ pub fn perspective_projection_matrix(fov: f32, aspect_ratio: f32, near: f32, far
     return result;
 }
 
-pub fn Serialize(payload: anytype, dest_bytes: []u8, dest_curr_byte: *u32) void {
-    switch (@typeInfo(@TypeOf(payload))) {
-        .Int, .Float, .Bool, .Pointer => {
-            @memcpy(dest_bytes[dest_curr_byte.* .. dest_curr_byte.* + @sizeOf(@TypeOf(payload))], std.mem.toBytes(payload)[0..]);
-            dest_curr_byte.* += @sizeOf(@TypeOf(payload));
-        },
-        .Struct => {
-            inline for (std.meta.fields(@TypeOf(payload))) |f| {
-                Serialize(@field(payload, f.name), dest_bytes, dest_curr_byte);
-            }
-        },
-        else => {},
-    }
-}
-
-pub fn Deserialize(T: type, dest_bytes: []u8, src_bytes: []u8, src_curr_byte: *u32, offset: u32) void {
-    switch (@typeInfo(T)) {
-        .Int, .Float, .Bool, .Pointer => {
-            @memcpy(dest_bytes[offset .. offset + @sizeOf(T)], src_bytes[src_curr_byte.* .. src_curr_byte.* + @sizeOf(T)]);
-            src_curr_byte.* += @sizeOf(T);
-        },
-        .Struct => {
-            inline for (std.meta.fields(T)) |f| {
-                Deserialize(f.type, dest_bytes, src_bytes, src_curr_byte, offset + @offsetOf(T, f.name));
-            }
-        },
-        else => {},
-    }
-}
-
-test "Serialize" {
-    const point_to_me: u64 = 10;
-    const SineMover = struct {
-        offset: f32 = 0.0,
-    };
-    const CircleCollider = struct {
-        radius: f32 = 1.0,
-    };
-    const G = struct {
-        s: SineMover = SineMover{ .offset = 1.1 },
-        c: CircleCollider = CircleCollider{ .radius = 9.1 },
-        f: f32 = 5.0,
-    };
-    const Gr = struct {
-        ptr: *const u64 = &point_to_me,
-        g: G = G{},
-        s: SineMover = SineMover{ .offset = 1.2 },
-        h: bool = true,
-        c: CircleCollider = CircleCollider{ .radius = 9.2 },
-        f: f32 = 5.01,
-        b: bool = false,
-        d: bool = true,
-    };
-
-    var b: [2048]u8 = undefined;
-    var b_len: u32 = 0;
-    Engine.Serialize(Gr{}, b[0..], &b_len);
-
-    var g: Gr = undefined;
-    var curr_point: u32 = 0;
-    Engine.Deserialize(Gr, std.mem.asBytes(&g), b[0..b_len], &curr_point, 0);
-
-    try std.testing.expectEqual(Gr{}, g);
-}
-
 // GLFW + GL
-fn glGetProcAddress(p: Engine.glfw.GLProc, proc: [:0]const u8) ?Engine.gl.FunctionPointer {
+fn glfw_get_proc_address(p: zeng.glfw.GLProc, proc: [:0]const u8) ?zeng.gl.FunctionPointer {
     _ = p;
-    return Engine.glfw.getProcAddress(proc);
+    return zeng.glfw.getProcAddress(proc);
 }
-fn errorCallback(error_code: Engine.glfw.ErrorCode, description: [:0]const u8) void {
-    std.log.err("Engine.glfw error: {}: {s}\n", .{ error_code, description });
+fn error_callback(error_code: zeng.glfw.ErrorCode, description: [:0]const u8) void {
+    std.log.err("glfw error: {}: {s}\n", .{ error_code, description });
 }
-fn glLogError() !void {
-    var err: Engine.gl.GLenum = Engine.gl.getError();
-    // const hasErrored = err != Engine.gl.NO_ERROR;
-    while (err != Engine.gl.NO_ERROR) {
+fn opengl_log_error() !void {
+    var err: zeng.gl.GLenum = zeng.gl.getError();
+    while (err != zeng.gl.NO_ERROR) {
         const errorString = switch (err) {
-            Engine.gl.INVALID_ENUM => "INVALID_ENUM",
-            Engine.gl.INVALID_VALUE => "INVALID_VALUE",
-            Engine.gl.INVALID_OPERATION => "INVALID_OPERATION",
-            Engine.gl.OUT_OF_MEMORY => "OUT_OF_MEMORY",
-            Engine.gl.INVALID_FRAMEBUFFER_OPERATION => "INVALID_FRAMEBUFFER_OPERATION",
+            zeng.gl.INVALID_ENUM => "INVALID_ENUM",
+            zeng.gl.INVALID_VALUE => "INVALID_VALUE",
+            zeng.gl.INVALID_OPERATION => "INVALID_OPERATION",
+            zeng.gl.OUT_OF_MEMORY => "OUT_OF_MEMORY",
+            zeng.gl.INVALID_FRAMEBUFFER_OPERATION => "INVALID_FRAMEBUFFER_OPERATION",
             else => "unknown error",
         };
 
         std.log.err("Found OpenGL error: {s}", .{errorString});
 
-        err = Engine.gl.getError();
+        err = zeng.gl.getError();
     }
 }
-pub fn OnWindowResize(window: Engine.glfw.Window, width: i32, height: i32) void {
+
+// Application
+pub fn window_resize(window: zeng.glfw.Window, width: i32, height: i32) void {
     // std.debug.print("Window has been resized\n", .{});
-    Engine.gl.viewport(0, 0, width, height);
-    if (window.getUserPointer(Engine.GlobalData)) |gd| {
+    zeng.gl.viewport(0, 0, width, height);
+    if (window.getUserPointer(zeng.GlobalData)) |gd| {
         gd.window_width = @intCast(width);
         gd.window_height = @intCast(height);
-        gd.active_camera.projection_matrix = Engine.perspective_projection_matrix(1.3, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 100.0);
+        gd.active_camera.projection_matrix = zeng.perspective_projection_matrix(1.3, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 100.0);
     }
 }
-pub fn InitializeStuff(gd: *Engine.GlobalData) !void {
+pub fn engine_start(gd: *zeng.GlobalData) !void {
     {
         // set glfw error callback
-        Engine.glfw.setErrorCallback(errorCallback);
-        if (!Engine.glfw.init(.{})) {
-            std.log.err("failed to initialize GLFW: {?s}", .{Engine.glfw.getErrorString()});
+        zeng.glfw.setErrorCallback(error_callback);
+        if (!zeng.glfw.init(.{})) {
+            std.log.err("failed to initialize GLFW: {?s}", .{zeng.glfw.getErrorString()});
             std.process.exit(1);
         }
 
@@ -458,45 +353,45 @@ pub fn InitializeStuff(gd: *Engine.GlobalData) !void {
         gd.window_height = 500;
 
         // create our window
-        gd.active_window = Engine.glfw.Window.create(gd.window_width, gd.window_height, "colsens game window!", null, null, .{
+        gd.active_window = zeng.glfw.Window.create(gd.window_width, gd.window_height, "colsens game window!", null, null, .{
             .opengl_profile = .opengl_core_profile,
             .context_version_major = 4,
             .context_version_minor = 0,
         }) orelse {
-            std.log.err("failed to create GLFW window: {?s}", .{Engine.glfw.getErrorString()});
+            std.log.err("failed to create GLFW window: {?s}", .{zeng.glfw.getErrorString()});
             std.process.exit(1);
         };
         // necessary for window resizing
-        gd.active_window.setSizeCallback(OnWindowResize);
+        gd.active_window.setSizeCallback(window_resize);
         gd.active_window.setUserPointer(gd);
-        gd.active_window.setKeyCallback(KeyCallback);
+        gd.active_window.setKeyCallback(key_callback);
 
-        gd.active_window.setInputModeCursor(Engine.glfw.Window.InputModeCursor.disabled);
+        gd.active_window.setInputModeCursor(zeng.glfw.Window.InputModeCursor.disabled);
         gd.active_window.setInputModeRawMouseMotion(true);
         gd.elapsed_time = 0.0;
 
-        Engine.glfw.makeContextCurrent(gd.active_window);
-        const proc: Engine.glfw.GLProc = undefined;
-        try Engine.gl.load(proc, glGetProcAddress);
+        zeng.glfw.makeContextCurrent(gd.active_window);
+        const proc: zeng.glfw.GLProc = undefined;
+        try zeng.gl.load(proc, glfw_get_proc_address);
 
-        Engine.gl.enable(Engine.gl.DEPTH_TEST);
-        Engine.gl.enable(Engine.gl.CULL_FACE);
+        zeng.gl.enable(zeng.gl.DEPTH_TEST);
+        zeng.gl.enable(zeng.gl.CULL_FACE);
 
-        Engine.c.stbi_set_flip_vertically_on_load(1);
+        zeng.c.stbi_set_flip_vertically_on_load(1);
 
-        WarmupCounter();
-        old_time = GetTime();
+        warmup_timer_counter();
+        old_time = get_high_resolution_time();
 
         gd.gpa = std.heap.GeneralPurposeAllocator(.{}){};
         gd.allocator = gd.gpa.allocator();
     }
 }
-pub fn DeinitializeStuff(gd: *Engine.GlobalData) void {
+pub fn engine_end(gd: *zeng.GlobalData) void {
     gd.active_window.destroy();
-    Engine.glfw.terminate();
+    zeng.glfw.terminate();
     _ = gd.gpa.deinit();
 }
-fn KeyCallback(window: Engine.glfw.Window, key: Engine.glfw.Key, scancode: i32, action: Engine.glfw.Action, mods: Engine.glfw.Mods) void {
+fn key_callback(window: zeng.glfw.Window, key: zeng.glfw.Key, scancode: i32, action: zeng.glfw.Action, mods: zeng.glfw.Mods) void {
     _ = key; // autofix
     _ = window; // autofix
     _ = scancode; // autofix
@@ -504,66 +399,54 @@ fn KeyCallback(window: Engine.glfw.Window, key: Engine.glfw.Key, scancode: i32, 
     _ = mods; // autofix
     //std.debug.print("key: {}\n", .{key.getScancode()});
 }
-pub fn RunCommand(gd: *Engine.GlobalData, input_read: []const u8) void {
-    const separated: [][]u8 = Engine.SeparateText(input_read, ';');
-    defer {
-        for (separated) |string| {
-            gd.allocator.free(string);
-        }
-        gd.allocator.free(separated);
-    }
-    for (separated) |sub_command| {
-        const parsed: [][]u8 = Engine.SeparateText(sub_command, ' ');
-        defer {
-            for (parsed) |string| {
-                gd.allocator.free(string);
-            }
-            gd.allocator.free(parsed);
-        }
-        if (std.mem.eql(u8, parsed[0], "import")) {
-            if (parsed.len >= 2) {
-                const ents = Engine.ImportModelAsset(parsed[1], gd.allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
-                defer gd.allocator.free(ents);
-            } else {
-                std.debug.print("No path specified", .{});
-            }
-        } else if (std.mem.eql(u8, parsed[0], "freeze") and parsed.len == 1) { // pauses everything in the game except a spectator camera
-            std.debug.print("FREEZE!\n", .{});
-            gd.frozen = !gd.frozen;
-        } else if (std.mem.eql(u8, parsed[0], "add")) { // adds a component to an entity
-            if (parsed.len >= 3) {
-                if (std.fmt.parseInt(u32, parsed[1], 10)) |parsed_int| {
-                    const index: u32 = parsed_int;
-                    std.debug.print("modifying index: {any}\n", .{index});
-                    Engine.AddComponent(&gd.entity_slice[index], parsed[2]) catch {
-                        std.debug.print("Could not add component: '{s}'", .{parsed[2]});
-                    };
-                } else |_| {
-                    std.debug.print("Invalid numerical field in command\n", .{});
-                }
-            } else {
-                std.debug.print("Too few arguments for 'add' command\n", .{});
-            }
-        } else if (std.mem.eql(u8, parsed[0], "remove")) { // removes a component from an entity
-            if (parsed.len >= 3) {
-                if (std.fmt.parseInt(u32, parsed[1], 10)) |parsed_int| {
-                    const index: u32 = parsed_int;
-                    std.debug.print("modifying index: {any}\n", .{index});
-                    Engine.remove_component(&gd.entity_slice[index], parsed[2]) catch {
-                        std.debug.print("Could not remove component: '{s}'", .{parsed[2]});
-                    };
-                } else |_| {
-                    std.debug.print("Invalid numerical field in command\n", .{});
-                }
-            } else {
-                std.debug.print("Too few arguments for 'remove' command\n", .{});
-            }
-        } else { // unrecognized command
-            std.debug.print("Command not recognized: '{s}'\n", .{sub_command});
-        }
-    }
+
+// Timing + Clock
+var clock_hz: f64 = 0.0;
+pub fn warmup_timer_counter() void {
+    var li: c.LARGE_INTEGER = undefined;
+    _ = c.QueryPerformanceFrequency(&li);
+    clock_hz = @floatFromInt(li.QuadPart);
 }
-pub fn MakeStruct(comptime in: anytype) type {
+pub fn get_high_resolution_time() i64 {
+    var li: c.LARGE_INTEGER = undefined;
+    _ = c.QueryPerformanceCounter(&li);
+    return li.QuadPart;
+}
+pub inline fn calculate_time_delta(a: i64, b: i64) f64 {
+    return @as(f64, @floatFromInt(b - a)) / clock_hz;
+}
+
+// Engine Frame Housekeeping
+var old_time: i64 = 0;
+pub fn late_frame_calculations(gd: *zeng.GlobalData) void {
+    zeng.glfw.pollEvents();
+    const new_time = zeng.get_high_resolution_time();
+    gd.frame_delta = zeng.calculate_time_delta(old_time, new_time);
+    old_time = new_time;
+}
+
+// Crutch God Object
+pub const GlobalData = struct {
+    active_window: zeng.glfw.Window,
+    window_width: u32,
+    window_height: u32,
+
+    active_camera_matrix: *[16]f32,
+    active_camera: *zeng.Camera,
+
+    elapsed_time: f32 = 0.0,
+    cur_pos: zeng.glfw.Window.CursorPos = zeng.glfw.Window.CursorPos{ .xpos = 0, .ypos = 0 },
+    frame_delta: f64 = 0.01666666,
+    frozen: bool = false,
+
+    t_down_last_frame: bool = false,
+
+    allocator: std.mem.Allocator,
+    gpa: std.heap.GeneralPurposeAllocator(.{}),
+};
+
+// Misc + Unused Stuff
+pub fn custom_struct(comptime in: anytype) type {
     var fields: [in.len]std.builtin.Type.StructField = undefined;
     for (in, 0..) |t, i| {
         const fieldType: type = t;
@@ -585,49 +468,62 @@ pub fn MakeStruct(comptime in: anytype) type {
         },
     });
 }
-pub fn Query(comptime readwrite: anytype, comptime read: anytype) type {
-    return MakeStruct(readwrite ++ read);
+pub fn run_command(gd: *zeng.GlobalData, input_read: []const u8) void {
+    const separated: [][]u8 = zeng.separate_text(input_read, ';');
+    defer {
+        for (separated) |string| {
+            gd.allocator.free(string);
+        }
+        gd.allocator.free(separated);
+    }
+    for (separated) |sub_command| {
+        const parsed: [][]u8 = zeng.separate_text(sub_command, ' ');
+        defer {
+            for (parsed) |string| {
+                gd.allocator.free(string);
+            }
+            gd.allocator.free(parsed);
+        }
+        if (std.mem.eql(u8, parsed[0], "import")) {
+            if (parsed.len >= 2) {
+                const ents = zeng.ImportModelAsset(parsed[1], gd.allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
+                defer gd.allocator.free(ents);
+            } else {
+                std.debug.print("No path specified", .{});
+            }
+        } else if (std.mem.eql(u8, parsed[0], "freeze") and parsed.len == 1) { // pauses everything in the game except a spectator camera
+            std.debug.print("FREEZE!\n", .{});
+            gd.frozen = !gd.frozen;
+        } else if (std.mem.eql(u8, parsed[0], "add")) { // adds a component to an entity
+            if (parsed.len >= 3) {
+                if (std.fmt.parseInt(u32, parsed[1], 10)) |parsed_int| {
+                    const index: u32 = parsed_int;
+                    std.debug.print("modifying index: {any}\n", .{index});
+                    zeng.AddComponent(&gd.entity_slice[index], parsed[2]) catch {
+                        std.debug.print("Could not add component: '{s}'", .{parsed[2]});
+                    };
+                } else |_| {
+                    std.debug.print("Invalid numerical field in command\n", .{});
+                }
+            } else {
+                std.debug.print("Too few arguments for 'add' command\n", .{});
+            }
+        } else if (std.mem.eql(u8, parsed[0], "remove")) { // removes a component from an entity
+            if (parsed.len >= 3) {
+                if (std.fmt.parseInt(u32, parsed[1], 10)) |parsed_int| {
+                    const index: u32 = parsed_int;
+                    std.debug.print("modifying index: {any}\n", .{index});
+                    zeng.remove_component(&gd.entity_slice[index], parsed[2]) catch {
+                        std.debug.print("Could not remove component: '{s}'", .{parsed[2]});
+                    };
+                } else |_| {
+                    std.debug.print("Invalid numerical field in command\n", .{});
+                }
+            } else {
+                std.debug.print("Too few arguments for 'remove' command\n", .{});
+            }
+        } else { // unrecognized command
+            std.debug.print("Command not recognized: '{s}'\n", .{sub_command});
+        }
+    }
 }
-
-// timing and clock
-var PCFreq: f64 = 0.0;
-pub fn WarmupCounter() void {
-    var li: c.LARGE_INTEGER = undefined;
-    _ = c.QueryPerformanceFrequency(&li);
-    PCFreq = @floatFromInt(li.QuadPart);
-}
-pub fn GetTime() i64 {
-    var li: c.LARGE_INTEGER = undefined;
-    _ = c.QueryPerformanceCounter(&li);
-    return li.QuadPart;
-}
-pub inline fn CalculateTimeDelta(a: i64, b: i64) f64 {
-    return @as(f64, @floatFromInt(b - a)) / PCFreq;
-}
-
-var old_time: i64 = 0;
-pub fn EndOfFrameStuff(gd: *Engine.GlobalData) void {
-    Engine.glfw.pollEvents();
-    const new_time = Engine.GetTime();
-    gd.frame_delta = Engine.CalculateTimeDelta(old_time, new_time);
-    old_time = new_time;
-}
-
-pub const GlobalData = struct {
-    active_window: Engine.glfw.Window,
-    window_width: u32,
-    window_height: u32,
-
-    active_camera_matrix: *[16]f32,
-    active_camera: *Engine.Camera,
-
-    elapsed_time: f32 = 0.0,
-    cur_pos: Engine.glfw.Window.CursorPos = Engine.glfw.Window.CursorPos{ .xpos = 0, .ypos = 0 },
-    frame_delta: f64 = 0.01666666,
-    frozen: bool = false,
-
-    t_down_last_frame: bool = false,
-
-    allocator: std.mem.Allocator,
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
-};

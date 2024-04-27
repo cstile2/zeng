@@ -5,30 +5,31 @@ pub const ClientInfo = struct {
     client_addr_len: std.os.socklen_t,
 };
 const ecs = @import("ecs.zig");
-const Transform = @import("engine.zig").Transform;
+const Transform = @import("zeng.zig").Transform;
 
-pub var ClientMap: std.AutoArrayHashMap(ClientInfo, ?ecs.EntityDataLocation) = undefined;
+pub var client_map: std.AutoArrayHashMap(ClientInfo, ?ecs.EntityDataLocation) = undefined;
 
-fn Windows_SetSocketNonBlocking(sock: std.os.socket_t) !void {
+fn Windows_set_socket_non_blocking(sock: std.os.socket_t) !void {
     const one: u32 = 1;
     const one_ptr = @as([*]const u8, @ptrCast(&one))[0..4];
     _ = try std.os.windows.WSAIoctl(sock, FIONBIO, one_ptr, ""[0..0], null, null); // windows' way of setting a socket to non blocking (disgusting)
 }
 
-pub fn CreateSocketAddress(address: anytype, port: anytype, comptime nonblocking: bool) !struct { std.os.socket_t, std.net.Address } {
+// prepare a socket and address
+pub fn setup_socket_and_address(address: anytype, port: anytype, comptime nonblocking: bool) !struct { std.os.socket_t, std.net.Address } {
     const addr = try std.net.Address.parseIp(address, port);
     const sock = try std.os.socket(std.os.AF.INET, std.os.SOCK.DGRAM, std.os.IPPROTO.UDP);
     if (nonblocking)
-        try Windows_SetSocketNonBlocking(sock);
+        try Windows_set_socket_non_blocking(sock);
     return .{ sock, addr };
 }
-
-pub fn BindSocketAddress(bundle: struct { std.os.socket_t, std.net.Address }) !void {
+// (server usually) bind the specified socket and address for communication
+pub fn bind_socket_and_address(bundle: struct { std.os.socket_t, std.net.Address }) !void {
     try std.os.bind(bundle[0], &bundle[1].any, bundle[1].getOsSockLen());
 }
 
 /// looks through and filters all incoming packets, and adds all valid packets to a queue of "commands" which game/engine uses directly
-pub fn ServerSiftPackets(existing_players: []struct { ClientInfo, []u8 }, player_update_num: *u32, sock: std.os.socket_t, output: []u8) !void {
+pub fn server_sift_packets(existing_players: []struct { ClientInfo, []u8 }, player_update_num: *u32, sock: std.os.socket_t, output: []u8) !void {
     var output_len: u64 = 0;
     var buf: [1024]u8 = undefined;
 
@@ -42,7 +43,7 @@ pub fn ServerSiftPackets(existing_players: []struct { ClientInfo, []u8 }, player
             const client_info = ClientInfo{ .client_addr = client_addr, .client_addr_len = client_addr_len };
             @memcpy(output[output_len .. output_len + recv_len], buf[0..recv_len]);
 
-            const res = try ClientMap.getOrPut(client_info);
+            const res = try client_map.getOrPut(client_info);
             if (res.found_existing) {
                 existing_players[player_update_num.*] = .{ client_info, output[output_len .. output_len + recv_len] };
                 player_update_num.* += 1;
@@ -62,11 +63,12 @@ pub fn ServerSiftPackets(existing_players: []struct { ClientInfo, []u8 }, player
     }
 }
 
+// for reference
 pub fn Server() !void {
     const addr = try std.net.Address.parseIp("0.0.0.0", 55555);
     const sock = try std.os.socket(std.os.AF.INET, std.os.SOCK.DGRAM, std.os.IPPROTO.UDP);
     defer std.os.close(sock);
-    try Windows_SetSocketNonBlocking(sock);
+    try Windows_set_socket_non_blocking(sock);
 
     try std.os.bind(sock, &addr.any, addr.getOsSockLen());
     var client_addr: std.os.sockaddr = undefined;
@@ -98,12 +100,11 @@ pub fn Server() !void {
         std.time.sleep(std.time.ns_per_s);
     }
 }
-
 pub fn Client() !void {
     const addr = try std.net.Address.parseIp("127.0.0.1", 55555);
     const sock = try std.os.socket(std.os.AF.INET, std.os.SOCK.DGRAM, std.os.IPPROTO.UDP);
     defer std.os.close(sock);
-    try Windows_SetSocketNonBlocking(sock);
+    try Windows_set_socket_non_blocking(sock);
 
     const message = "Hello, Server!";
     _ = try std.os.sendto(sock, message, 0, &addr.any, addr.getOsSockLen());
