@@ -25,33 +25,33 @@ const ECS = ecs.CompileECS(TypeRegistry);
 test "Spawning" {
     const allocator = std.testing.allocator;
     var world: ECS.ECSWorld = undefined;
-    world.InitEmptyWorld(allocator);
-    defer world.Destroy() catch unreachable;
+    world.init(allocator);
+    defer world.deinit() catch unreachable;
 
     var v: *Velocity = undefined;
     var s: Sine_mover = undefined;
     var m: *const Mesh = undefined;
 
-    const A = try world.SpawnEntity(.{Velocity{ .speed = 100 }});
-    try world.Get(A, &v);
+    const A = try world.spawn(.{Velocity{ .speed = 100 }});
+    try world.get_component(A, &v);
     try std.testing.expectEqual(Velocity{ .speed = 100 }, v.*);
 
-    const B = try world.SpawnEntity(.{ Sine_mover{ .hor = 10, .vert = 13 }, Mesh{ .tris = 0, .tick = 110, .tex = 1 } });
-    try world.Get(B, .{ &s, &m });
+    const B = try world.spawn(.{ Sine_mover{ .hor = 10, .vert = 13 }, Mesh{ .tris = 0, .tick = 110, .tex = 1 } });
+    try world.get_component(B, .{ &s, &m });
     try std.testing.expectEqual(Sine_mover{ .hor = 10, .vert = 13 }, s);
     try std.testing.expectEqual(Mesh{ .tris = 0, .tick = 110, .tex = 1 }, m.*);
 
-    _ = try world.SpawnEntity(.{Sine_mover{ .hor = 5, .vert = 6 }});
-    _ = try world.SpawnEntity(.{Sine_mover{ .hor = 5, .vert = 6 }});
-    _ = try world.SpawnEntity(.{Sine_mover{ .hor = 5, .vert = 6 }});
-    _ = try world.SpawnEntity(.{Sine_mover{ .hor = 5, .vert = 6 }});
-    _ = try world.SpawnEntity(.{Sine_mover{ .hor = 5, .vert = 6 }});
-    const C = try world.SpawnEntity(.{Sine_mover{ .hor = 5, .vert = 6 }});
-    try world.Get(C, &s);
+    _ = try world.spawn(.{Sine_mover{ .hor = 5, .vert = 6 }});
+    _ = try world.spawn(.{Sine_mover{ .hor = 5, .vert = 6 }});
+    _ = try world.spawn(.{Sine_mover{ .hor = 5, .vert = 6 }});
+    _ = try world.spawn(.{Sine_mover{ .hor = 5, .vert = 6 }});
+    _ = try world.spawn(.{Sine_mover{ .hor = 5, .vert = 6 }});
+    const C = try world.spawn(.{Sine_mover{ .hor = 5, .vert = 6 }});
+    try world.get_component(C, &s);
     try std.testing.expectEqual(Sine_mover{ .hor = 5, .vert = 6 }, s);
 
-    const D = try world.SpawnEntity(.{ Sine_mover{ .hor = 250, .vert = 251 }, Mesh{ .tris = 252, .tick = 253, .tex = 254 }, Velocity{ .speed = 255 } });
-    try world.Get(D, .{ &v, &m, &s });
+    const D = try world.spawn(.{ Sine_mover{ .hor = 250, .vert = 251 }, Mesh{ .tris = 252, .tick = 253, .tex = 254 }, Velocity{ .speed = 255 } });
+    try world.get_component(D, .{ &v, &m, &s });
     try std.testing.expectEqual(Velocity{ .speed = 255 }, v.*);
     try std.testing.expectEqual(Mesh{ .tris = 252, .tick = 253, .tex = 254 }, m.*);
     try std.testing.expectEqual(Sine_mover{ .hor = 250, .vert = 251 }, s);
@@ -60,38 +60,38 @@ test "Spawning" {
 test "SingleIteration" {
     const allocator = std.testing.allocator;
     var world: ECS.ECSWorld = undefined;
-    world.InitEmptyWorld(allocator);
-    defer world.Destroy() catch unreachable;
+    world.init(allocator);
+    defer world.deinit() catch unreachable;
 
     {
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-        _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-        _ = try world.SpawnEntity(.{ Mesh{}, Velocity{} });
-        _ = try world.SpawnEntity(.{ Mesh{}, Velocity{} });
-        _ = try world.SpawnEntity(.{ Sine_mover{}, Mesh{}, Velocity{} });
-        _ = try world.SpawnEntity(.{ Sine_mover{}, Mesh{}, Velocity{} });
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+        _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+        _ = try world.spawn(.{ Mesh{}, Velocity{} });
+        _ = try world.spawn(.{ Mesh{}, Velocity{} });
+        _ = try world.spawn(.{ Sine_mover{}, Mesh{}, Velocity{} });
+        _ = try world.spawn(.{ Sine_mover{}, Mesh{}, Velocity{} });
 
-        _ = try world.SpawnEntity(.{Sine_mover{}});
-        _ = try world.SpawnEntity(.{Sine_mover{}});
-        _ = try world.SpawnEntity(.{Sine_mover{}});
-        _ = try world.SpawnEntity(.{Sine_mover{}});
+        _ = try world.spawn(.{Sine_mover{}});
+        _ = try world.spawn(.{Sine_mover{}});
+        _ = try world.spawn(.{Sine_mover{}});
+        _ = try world.spawn(.{Sine_mover{}});
 
-        _ = try world.SpawnEntity(.{Mesh{}});
-        _ = try world.SpawnEntity(.{Mesh{}});
-        _ = try world.SpawnEntity(.{Mesh{}});
-        _ = try world.SpawnEntity(.{Mesh{}});
+        _ = try world.spawn(.{Mesh{}});
+        _ = try world.spawn(.{Mesh{}});
+        _ = try world.spawn(.{Mesh{}});
+        _ = try world.spawn(.{Mesh{}});
 
-        _ = try world.SpawnEntity(.{ Sine_mover{}, Mesh{} });
+        _ = try world.spawn(.{ Sine_mover{}, Mesh{} });
     }
 
     var count: u8 = 0;
@@ -120,45 +120,45 @@ test "SingleIteration" {
 test "MultipleIteration" {
     const allocator = std.testing.allocator;
     var world: ECS.ECSWorld = undefined;
-    world.InitEmptyWorld(allocator);
-    defer world.Destroy() catch unreachable;
+    world.init(allocator);
+    defer world.deinit() catch unreachable;
 
     {
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{}, Mesh{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{}, Mesh{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{}, Mesh{} });
-        _ = try world.SpawnEntity(.{ Velocity{}, Sine_mover{}, Mesh{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{}, Mesh{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{}, Mesh{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{}, Mesh{} });
+        _ = try world.spawn(.{ Velocity{}, Sine_mover{}, Mesh{} });
 
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
-        _ = try world.SpawnEntity(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
+        _ = try world.spawn(.{Velocity{}});
 
-        _ = try world.SpawnEntity(.{Sine_mover{}});
-        _ = try world.SpawnEntity(.{Sine_mover{}});
-        _ = try world.SpawnEntity(.{Sine_mover{}});
-        _ = try world.SpawnEntity(.{Sine_mover{}});
+        _ = try world.spawn(.{Sine_mover{}});
+        _ = try world.spawn(.{Sine_mover{}});
+        _ = try world.spawn(.{Sine_mover{}});
+        _ = try world.spawn(.{Sine_mover{}});
 
-        _ = try world.SpawnEntity(.{Mesh{}});
-        _ = try world.SpawnEntity(.{Mesh{}});
-        _ = try world.SpawnEntity(.{Mesh{}});
-        _ = try world.SpawnEntity(.{Mesh{}});
+        _ = try world.spawn(.{Mesh{}});
+        _ = try world.spawn(.{Mesh{}});
+        _ = try world.spawn(.{Mesh{}});
+        _ = try world.spawn(.{Mesh{}});
 
-        _ = try world.SpawnEntity(.{ Velocity{}, Mesh{} });
+        _ = try world.spawn(.{ Velocity{}, Mesh{} });
 
-        _ = try world.SpawnEntity(.{ Sine_mover{}, Mesh{} });
+        _ = try world.spawn(.{ Sine_mover{}, Mesh{} });
     }
 
     var count: u8 = 0;
@@ -194,10 +194,10 @@ test "MultipleIteration" {
 test "EntityLookups" {
     const allocator = std.testing.allocator;
     var world: ECS.ECSWorld = undefined;
-    world.InitEmptyWorld(allocator);
-    defer world.Destroy() catch unreachable;
+    world.init(allocator);
+    defer world.deinit() catch unreachable;
 
-    const E = try world.SpawnEntity(.{ Velocity{}, Mesh{}, Sine_mover{} });
+    const E = try world.spawn(.{ Velocity{}, Mesh{}, Sine_mover{} });
 
     var iter = try ECS.QueryIterator.create(&world, .{Velocity});
     defer iter.destroy() catch unreachable;
@@ -233,34 +233,34 @@ test "Events" {
 
     const allocator = std.testing.allocator;
     var world: ECS.ECSWorld = undefined;
-    world.InitEmptyWorld(allocator);
-    defer world.Destroy() catch unreachable;
+    world.init(allocator);
+    defer world.deinit() catch unreachable;
 
     var events: [100]Event = .{Event{}} ** 100;
     var event_slice: []Event = events[0..0];
 
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
-    _ = try world.SpawnEntity(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
+    _ = try world.spawn(.{ Sine_mover{}, Velocity{} });
 
     var count: u64 = 0;
     var curr = try ECS.QueryIterator.create(&world, .{ Sine_mover, Velocity });
@@ -286,14 +286,14 @@ test "Events" {
 test "ManyEntitiesOfSameArchetype" {
     const allocator = std.testing.allocator;
     var world: ECS.ECSWorld = undefined;
-    world.InitEmptyWorld(allocator);
-    defer world.Destroy() catch unreachable;
+    world.init(allocator);
+    defer world.deinit() catch unreachable;
 
     var curr: u64 = 0;
     var E: ecs.EntityDataLocation = undefined;
     while (curr < 2048) {
         defer curr += 1;
-        E = try world.SpawnEntity(.{ Sine_mover{}, Velocity{ .speed = @intCast(@mod(curr, 256)) } });
+        E = try world.spawn(.{ Sine_mover{}, Velocity{ .speed = @intCast(@mod(curr, 256)) } });
     }
 
     var curr2: u64 = 0;
@@ -302,7 +302,7 @@ test "ManyEntitiesOfSameArchetype" {
         var sm: Sine_mover = undefined;
         var v: Velocity = undefined;
         const F = ecs.EntityDataLocation{ .archetype_hash = E.archetype_hash, .row = curr2 };
-        try world.Get(F, .{ &sm, &v });
+        try world.get_component(F, .{ &sm, &v });
         try std.testing.expectEqual(Sine_mover{}, sm);
         try std.testing.expectEqual(Velocity{ .speed = @intCast(@mod(curr2, 256)) }, v);
     }

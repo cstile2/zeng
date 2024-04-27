@@ -136,7 +136,7 @@ pub fn SpawnModels(world: *ECS.ECSWorld, filepath: anytype, allocator: std.mem.A
         transform = Engine.multiply_matrices(Engine.QuatToMatrix(transform_rotation), transform);
         transform[12..15].* = transform_position.*;
 
-        ret = world.SpawnEntity(.{
+        ret = world.spawn(.{
             Engine.Mesh{
                 .vao_gpu = VAO,
                 .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4),

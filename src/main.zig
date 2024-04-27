@@ -1,11 +1,7 @@
-// this is zig's standard library
 const std = @import("std");
-// this is the game engine code - contains usefule helper functions for rendering + loading + more
 const Engine = @import("engine.zig");
-// this is the entity component system (ECS)
 const ecs = @import("ecs.zig");
 
-// components - create structs whenever you want to add stuff to your game
 pub const SineMover = struct { // this component makes an entity float around randomly
     offset: f32 = 0.0,
 };
@@ -13,7 +9,6 @@ pub const CircleCollider = struct { // this component enables sphere-based colli
     radius: f32 = 1.0,
 };
 
-// this is a type registry - put a struct typename in this list to register it as an official "component" to be used in the engine
 pub const TypeRegistry = [_]type{
     Engine.Camera,
     Engine.Mesh,
@@ -21,11 +16,23 @@ pub const TypeRegistry = [_]type{
     SineMover,
     CircleCollider,
 };
-// this is necessary for the engine to use the components that you made and include them in the ECS system
 pub const ECS = ecs.CompileECS(TypeRegistry);
 
-// entry point
 pub fn main() !void {
+    // select network mode - client or server
+    var is_server: bool = true;
+    {
+        std.debug.print("\nstarted!\n", .{});
+        const stdin = std.io.getStdIn().reader();
+        const thing = stdin.readBoundedBytes(1) catch unreachable;
+        if (std.mem.eql(u8, thing.buffer[0..1], "s")) {
+            std.debug.print("using server mode...\n", .{});
+        } else if (std.mem.eql(u8, thing.buffer[0..1], "c")) {
+            std.debug.print("using client mode...\n", .{});
+            is_server = false;
+        }
+    }
+
     // initialize global data and engine application and window stuff
     var gd: Engine.GlobalData = undefined;
     try Engine.InitializeStuff(&gd);
@@ -33,31 +40,69 @@ pub fn main() !void {
 
     // create ECS world - this contains all entities in the game world - it's the main part of the game engine
     var world: ECS.ECSWorld = undefined;
-    world.InitEmptyWorld(gd.allocator);
-    defer world.Destroy() catch unreachable;
+    world.init(gd.allocator);
+    defer world.deinit() catch unreachable;
 
     // load shader from file and load texture from file
     const shader_program_GPU = Engine.LoadShader(gd.allocator, "assets/shaders/basic.shader", "assets/shaders/fragment.shader");
     const texture_GPU = Engine.LoadTexture("assets/images/uv_checker.png");
 
     // spawn an entity with these components: Camera, Transform, CircleCollider
-    const new_camera_entity = try world.SpawnEntity(.{
+    const new_camera_entity = try world.spawn(.{
         Engine.Camera{ .projection_matrix = undefined },
         Engine.identity(),
         CircleCollider{},
     });
     // get pointers to the camera's data to use as the main rendering camera
-    try world.Get(new_camera_entity, .{ &gd.active_camera_matrix, &gd.active_camera });
+    try world.get_component(new_camera_entity, .{ &gd.active_camera_matrix, &gd.active_camera });
     // call this to tell the game the correct window dimensions - used for camera + rendering
     Engine.OnWindowResize(gd.active_window, @intCast(gd.window_width), @intCast(gd.window_height));
 
     // import a file containing 3d models (created in Blender) and spawn them in the world
     _ = Engine.SpawnModels(&world, "assets/blender_files/main_scene.bin", gd.allocator, shader_program_GPU, texture_GPU);
 
+    // networking setup
+    Engine.networking.ClientMap = @TypeOf(Engine.networking.ClientMap).init(gd.allocator);
+    defer Engine.networking.ClientMap.deinit();
+    var net_tup: struct { std.os.socket_t, std.net.Address } = undefined;
+    if (is_server) {
+        net_tup = try Engine.networking.CreateSocketAddress("0.0.0.0", 55555, true);
+        try Engine.networking.BindSocketAddress(net_tup);
+    } else {
+        net_tup = try Engine.networking.CreateSocketAddress("192.168.0.90", 55555, true);
+        _ = try std.os.sendto(net_tup[0], "I want to connect!", 0, &net_tup[1].any, net_tup[1].getOsSockLen());
+    }
+
     // MAIN GAME LOOP - runs until user closes the window
     while (!gd.active_window.shouldClose()) {
         // this is needed to calculate frame time and other stuff - runs at the very end of each frame
         defer Engine.EndOfFrameStuff(&gd);
+
+        // server networking
+        if (is_server) {
+            var packet_data_buffer: [4096]u8 = undefined;
+            var player_update_buffer: [32]struct { Engine.networking.ClientInfo, []u8 } = undefined;
+            var player_update_num: u32 = 0;
+            try Engine.networking.ServerSiftPackets(player_update_buffer[0..], &player_update_num, net_tup[0], &packet_data_buffer);
+
+            // handle any brand new clients
+            for (Engine.networking.ClientMap.values()) |*maybe_edl| {
+                if (maybe_edl.* == null) {
+                    const imported = Engine.SpawnModels(&world, "assets/blender_files/simple.bin", gd.allocator, shader_program_GPU, texture_GPU);
+                    maybe_edl.* = imported;
+                }
+            }
+
+            // for each existing client, update local representation
+            for (player_update_buffer[0..player_update_num]) |clientinfo_and_data| {
+                const edl = Engine.networking.ClientMap.getEntry(clientinfo_and_data[0]).?.value_ptr.*.?;
+                var transform: *Engine.Transform = undefined;
+                try world.get_component(edl, &transform);
+                @memcpy(@as([*]u8, @ptrCast(&(transform.*[12]))), clientinfo_and_data[1][0..4]);
+                @memcpy(@as([*]u8, @ptrCast(&(transform.*[13]))), clientinfo_and_data[1][4..8]);
+                @memcpy(@as([*]u8, @ptrCast(&(transform.*[14]))), clientinfo_and_data[1][8..12]);
+            }
+        }
 
         // update input + time
         gd.cur_pos = gd.active_window.getCursorPos();
@@ -66,8 +111,8 @@ pub fn main() !void {
         // spawn floating guy when key "t" is pressed (not held)
         if ((gd.active_window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press) and !gd.t_down_last_frame) {
             var imported = Engine.SpawnModels(&world, "assets/blender_files/simple.bin", gd.allocator, shader_program_GPU, texture_GPU);
-            try world.SetComponent(SineMover{ .offset = 0.0 }, &imported);
-            try world.SetComponent(CircleCollider{}, &imported);
+            try world.insert_component(SineMover{ .offset = 0.0 }, &imported);
+            try world.insert_component(CircleCollider{}, &imported);
         }
         gd.t_down_last_frame = gd.active_window.getKey(Engine.glfw.Key.t) == Engine.glfw.Action.press;
 
@@ -93,6 +138,12 @@ pub fn main() !void {
         var query_t_m = try ECS.QueryIterator.create(&world, .{ Engine.Transform, Engine.Mesh });
         try RenderSystem(&gd, &query_t_m);
         try query_t_m.destroy();
+
+        // client networking
+        if (!is_server) {
+            const ptr: [*]u8 = std.mem.asBytes(gd.active_camera_matrix[12..15]);
+            _ = try std.os.sendto(net_tup[0], ptr[0..12], 0, &net_tup[1].any, net_tup[1].getOsSockLen());
+        }
     }
 }
 

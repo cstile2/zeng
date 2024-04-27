@@ -7,6 +7,7 @@ pub const c = @cImport({
     @cInclude("windows.h");
     @cInclude("stb_image.h");
 });
+pub const networking = @import("networking.zig");
 
 const Engine = @This();
 
@@ -79,23 +80,6 @@ pub const Entity = struct {
 
     component_flags: ComponentFlags,
 };
-
-// add/remove components
-fn SetComponent(entity: *Entity, component: []u8, comptime value: bool) !void {
-    if (std.mem.eql(u8, component, "sine_mover")) {
-        entity.component_flags.sine_mover = value;
-    } else if (std.mem.eql(u8, component, "ghost")) {
-        entity.component_flags.ghost = value;
-    } else {
-        return error.InvalidParam;
-    }
-}
-pub fn AddComponent(entity: *Entity, component: []u8) !void {
-    return SetComponent(entity, component, true);
-}
-pub fn RemoveComponent(entity: *Entity, component: []u8) !void {
-    return SetComponent(entity, component, false);
-}
 
 // identity 4x4 matrix
 pub fn identity() [16]f32 {
@@ -360,56 +344,69 @@ pub fn perspective_projection_matrix(fov: f32, aspect_ratio: f32, near: f32, far
     return result;
 }
 
-pub fn Deserialize(payload: anytype) void {
+pub fn Serialize(payload: anytype, dest_bytes: []u8, dest_curr_byte: *u32) void {
     switch (@typeInfo(@TypeOf(payload))) {
-        .Int => {
-            std.debug.print("{any} = {any}\n", .{ @TypeOf(payload), payload });
-        },
-        .Float => {
-            std.debug.print("{any} = {any}\n", .{ @TypeOf(payload), payload });
-        },
-        .ComptimeInt => {
-            std.debug.print("{any} = {any}\n", .{ @TypeOf(payload), payload });
-        },
-        .ComptimeFloat => {
-            std.debug.print("{any} = {any}\n", .{ @TypeOf(payload), payload });
+        .Int, .Float, .Bool, .Pointer => {
+            @memcpy(dest_bytes[dest_curr_byte.* .. dest_curr_byte.* + @sizeOf(@TypeOf(payload))], std.mem.toBytes(payload)[0..]);
+            dest_curr_byte.* += @sizeOf(@TypeOf(payload));
         },
         .Struct => {
             inline for (std.meta.fields(@TypeOf(payload))) |f| {
-                switch (@typeInfo(f.type)) {
-                    .Int => {
-                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
-                    },
-                    .Float => {
-                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
-                    },
-                    .ComptimeInt => {
-                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
-                    },
-                    .ComptimeFloat => {
-                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
-                    },
-                    .Bool => {
-                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
-                    },
-                    .Array => {
-                        std.debug.print("{s}: {} = {any}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
-                    },
-                    .Pointer => |info| {
-                        if (info.size == .Slice) {
-                            std.debug.print("{s}: {} = {*}, length: {}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)), @as(f.type, @field(payload, f.name)).len });
-                        } else {
-                            std.debug.print("{s}: {} = {*}\n", .{ f.name, f.type, @as(f.type, @field(payload, f.name)) });
-                        }
-                    },
-                    else => {
-                        Deserialize(@field(payload, f.name));
-                    },
-                }
+                Serialize(@field(payload, f.name), dest_bytes, dest_curr_byte);
             }
         },
         else => {},
     }
+}
+
+pub fn Deserialize(T: type, dest_bytes: []u8, src_bytes: []u8, src_curr_byte: *u32, offset: u32) void {
+    switch (@typeInfo(T)) {
+        .Int, .Float, .Bool, .Pointer => {
+            @memcpy(dest_bytes[offset .. offset + @sizeOf(T)], src_bytes[src_curr_byte.* .. src_curr_byte.* + @sizeOf(T)]);
+            src_curr_byte.* += @sizeOf(T);
+        },
+        .Struct => {
+            inline for (std.meta.fields(T)) |f| {
+                Deserialize(f.type, dest_bytes, src_bytes, src_curr_byte, offset + @offsetOf(T, f.name));
+            }
+        },
+        else => {},
+    }
+}
+
+test "Serialize" {
+    const point_to_me: u64 = 10;
+    const SineMover = struct {
+        offset: f32 = 0.0,
+    };
+    const CircleCollider = struct {
+        radius: f32 = 1.0,
+    };
+    const G = struct {
+        s: SineMover = SineMover{ .offset = 1.1 },
+        c: CircleCollider = CircleCollider{ .radius = 9.1 },
+        f: f32 = 5.0,
+    };
+    const Gr = struct {
+        ptr: *const u64 = &point_to_me,
+        g: G = G{},
+        s: SineMover = SineMover{ .offset = 1.2 },
+        h: bool = true,
+        c: CircleCollider = CircleCollider{ .radius = 9.2 },
+        f: f32 = 5.01,
+        b: bool = false,
+        d: bool = true,
+    };
+
+    var b: [2048]u8 = undefined;
+    var b_len: u32 = 0;
+    Engine.Serialize(Gr{}, b[0..], &b_len);
+
+    var g: Gr = undefined;
+    var curr_point: u32 = 0;
+    Engine.Deserialize(Gr, std.mem.asBytes(&g), b[0..b_len], &curr_point, 0);
+
+    try std.testing.expectEqual(Gr{}, g);
 }
 
 // GLFW + GL
@@ -552,7 +549,7 @@ pub fn RunCommand(gd: *Engine.GlobalData, input_read: []const u8) void {
                 if (std.fmt.parseInt(u32, parsed[1], 10)) |parsed_int| {
                     const index: u32 = parsed_int;
                     std.debug.print("modifying index: {any}\n", .{index});
-                    Engine.RemoveComponent(&gd.entity_slice[index], parsed[2]) catch {
+                    Engine.remove_component(&gd.entity_slice[index], parsed[2]) catch {
                         std.debug.print("Could not remove component: '{s}'", .{parsed[2]});
                     };
                 } else |_| {
@@ -617,18 +614,20 @@ pub fn EndOfFrameStuff(gd: *Engine.GlobalData) void {
 }
 
 pub const GlobalData = struct {
-    elapsed_time: f32 = 0.0,
     active_window: Engine.glfw.Window,
-    active_camera_matrix: *[16]f32,
-    active_camera: *Engine.Camera,
-    cur_pos: Engine.glfw.Window.CursorPos,
-    frame_delta: f64 = 0.01666666,
-    frozen: bool = false,
-    shader_program_GPU: u32,
-    texture_GPU: u32,
     window_width: u32,
     window_height: u32,
+
+    active_camera_matrix: *[16]f32,
+    active_camera: *Engine.Camera,
+
+    elapsed_time: f32 = 0.0,
+    cur_pos: Engine.glfw.Window.CursorPos = Engine.glfw.Window.CursorPos{ .xpos = 0, .ypos = 0 },
+    frame_delta: f64 = 0.01666666,
+    frozen: bool = false,
+
     t_down_last_frame: bool = false,
+
     allocator: std.mem.Allocator,
     gpa: std.heap.GeneralPurposeAllocator(.{}),
 };
