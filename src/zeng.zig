@@ -1,4 +1,5 @@
 const std = @import("std");
+const zeng = @This();
 
 // Crufty Backends
 pub const glfw = @import("mach-glfw");
@@ -10,9 +11,11 @@ pub const c = @cImport({
 
 // Engine Namespacing
 pub usingnamespace @import("loader.zig");
+const loader = @import("loader.zig");
 pub usingnamespace @import("render.zig");
 pub const networking = @import("networking.zig");
-const zeng = @This();
+
+const ECS = @import("main.zig").ECS;
 
 // Engine Data Structures
 pub const Vec3 = packed struct {
@@ -425,25 +428,156 @@ pub fn late_frame_calculations(gd: *zeng.GlobalData) void {
     old_time = new_time;
 }
 
-// Crutch God Object
-pub const GlobalData = struct {
-    active_window: zeng.glfw.Window,
-    window_width: u32,
-    window_height: u32,
+const ConnectionID = networking.ConnectionID;
+const RemoteMessage = networking.RemoteMessage;
+const SocketAndAddress = networking.SocketAndAddress;
 
-    active_camera_matrix: *[16]f32,
-    active_camera: *zeng.Camera,
+// Commands
+const PlayerEvent = @import("main.zig").PlayerEvent;
 
-    elapsed_time: f32 = 0.0,
-    cur_pos: zeng.glfw.Window.CursorPos = zeng.glfw.Window.CursorPos{ .xpos = 0, .ypos = 0 },
-    frame_delta: f64 = 0.01666666,
-    frozen: bool = false,
-
-    t_down_last_frame: bool = false,
-
-    allocator: std.mem.Allocator,
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
+pub fn remote_event_implementation(event: PlayerEvent) void {
+    std.debug.print("I recieved an event: {any}\n", .{event});
+}
+pub const procs = .{
+    remote_event_implementation,
+    @import("main.zig").MyFunc,
 };
+pub const proc_arg_tuples = [_]type{
+    struct { PlayerEvent },
+    struct { f32 },
+};
+pub const proc_capture_tuples = [_]type{
+    struct {},
+    struct { *ECS.World },
+};
+
+pub fn GET_PROC_CODE(comptime func: anytype) u32 {
+    var count: u32 = 0;
+    for (procs) |proc| {
+        if (@as(*const anyopaque, @ptrCast(&proc)) == @as(*const anyopaque, @ptrCast(&func))) {
+            return count;
+        }
+        count += 1;
+    }
+    @compileError("invalid procedure");
+}
+
+pub const Commands = struct {
+    allocator: std.mem.Allocator,
+
+    remote_messages: [128]RemoteMessage,
+    remote_messages_len: u8,
+
+    // entities
+    pub fn spawn(self: *Commands) void {
+        _ = self; // autofix
+
+    }
+    pub fn insert() void {}
+    pub fn remove() void {}
+
+    // networking
+    /// queues a remote procedure call to be sent to destination whenever this application sends next
+    pub fn remote_call(self: *Commands, conn_id: SocketAndAddress, comptime procedure: anytype, args: anytype) void {
+        const args2 = @as(proc_arg_tuples[GET_PROC_CODE(procedure)], args);
+        // const arg_tup: std.meta.ArgsTuple(procedure) = undefined;
+        // const caps = @import("main.zig").extract(arg_tup, args2.len, arg_tup.len);
+        // _ = caps; // autofix
+
+        const procedure_code: u32 = comptime GET_PROC_CODE(procedure);
+
+        var payload_array = self.allocator.alloc(u8, @sizeOf(u32) + @sizeOf(@TypeOf(args2))) catch unreachable;
+        var payload_curr: u32 = 0;
+        loader.serialize_to_bytes(procedure_code, payload_array, &payload_curr);
+        loader.serialize_to_bytes(args2, payload_array, &payload_curr);
+        payload_array = self.allocator.realloc(payload_array, payload_curr) catch unreachable;
+
+        self.remote_messages[self.remote_messages_len] = RemoteMessage{ .payload = payload_array[0..payload_curr], .target = conn_id };
+        self.remote_messages_len += 1;
+    }
+    /// queues a remote procedure call that will trigger an event on some other machine
+    pub fn remote_event(self: *Commands, conn_id: SocketAndAddress, event: anytype) void {
+        self.remote_call(conn_id, remote_event_implementation, .{event});
+    }
+};
+
+// Events
+pub fn Events(T: type) type {
+    return struct {
+        circular_buffer: [128]T = undefined,
+        start: u32 = 0,
+        end: u32 = 0,
+
+        pub fn insert(self: *Events(T), e: T) void {
+            self.circular_buffer[self.end] = e;
+            self.end = (self.end + 1) % @as(u32, self.circular_buffer.len);
+        }
+        pub fn pop(self: *Events(T)) void {
+            self.start = (self.start + 1) % @as(u32, self.circular_buffer.len);
+        }
+
+        pub fn get_pieces(self: *Events(T)) struct { []T, []T } {
+            if (self.start < self.end) {
+                return .{ self.circular_buffer[self.start..self.end], self.circular_buffer[0..0] };
+            } else {
+                std.debug.print("yeet\n", .{});
+                return .{ self.circular_buffer[self.start..self.circular_buffer.len], self.circular_buffer[0..self.end] };
+            }
+        }
+
+        pub fn make_writer(self: *Events(T)) EventWriter(T) {
+            return EventWriter(T){ .events = self };
+        }
+        pub fn make_reader(self: *Events(T)) EventReader(T) {
+            return EventReader(T){ .events = self };
+        }
+    };
+}
+pub fn EventWriter(T: type) type {
+    return struct {
+        events: *Events(T),
+
+        pub fn send(self: *EventWriter(T), e: T) void {
+            self.events.insert(e);
+        }
+    };
+}
+pub fn EventReader(T: type) type {
+    return struct {
+        events: *Events(T),
+
+        pub fn read(self: *EventReader(T)) []T {
+            self.events.GetSlice();
+        }
+    };
+}
+
+test "Events" {
+    var C = zeng.Events(u16){};
+
+    C.insert(0);
+    var curr: u16 = 1;
+    while (curr < 10) {
+        defer curr += 1;
+        C.insert(curr);
+        const tup = C.get_pieces();
+        std.debug.print("=============\n", .{});
+        for (tup[0]) |int| {
+            std.debug.print("{}\n", .{int});
+        }
+        for (tup[1]) |int| {
+            std.debug.print("{}\n", .{int});
+        }
+        std.debug.print("{any} | {any}", .{ tup[0], tup[1] });
+        std.debug.print("=============\n", .{});
+        C.pop();
+    }
+}
+
+// Resources
+pub fn Resource(T: type) type {
+    return T;
+}
 
 // Misc + Unused Stuff
 pub fn custom_struct(comptime in: anytype) type {
@@ -527,3 +661,23 @@ pub fn run_command(gd: *zeng.GlobalData, input_read: []const u8) void {
         }
     }
 }
+
+// Crutch God Object
+pub const GlobalData = struct {
+    active_window: zeng.glfw.Window,
+    window_width: u32,
+    window_height: u32,
+
+    active_camera_matrix: *[16]f32,
+    active_camera: *zeng.Camera,
+
+    elapsed_time: f32 = 0.0,
+    cur_pos: zeng.glfw.Window.CursorPos = zeng.glfw.Window.CursorPos{ .xpos = 0, .ypos = 0 },
+    frame_delta: f64 = 0.01666666,
+    frozen: bool = false,
+
+    t_down_last_frame: bool = false,
+
+    allocator: std.mem.Allocator,
+    gpa: std.heap.GeneralPurposeAllocator(.{}),
+};

@@ -2,16 +2,20 @@ const std = @import("std");
 const zeng = @import("zeng.zig");
 const ecs = @import("ecs.zig");
 
-pub const TypeRegistry = [_]type{
+// interop between comptime types and runtime component information
+pub const ComponentTypes = [_]type{
     zeng.Camera,
     zeng.Mesh,
     zeng.Transform,
     SineMover,
     CircleCollider,
 };
-pub const ECS = ecs.CompileECS(TypeRegistry);
+pub const ECS = ecs.CompileECS(ComponentTypes);
 
-// user-level components
+// networking meta stuff - need to be able to request resources from the network recieving procedure at runtime
+pub const ResourceTypes = [_]type{};
+pub var EngineResources = std.AutoHashMap(u32, *anyopaque);
+
 pub const SineMover = struct {
     offset: f32 = 0.0,
 };
@@ -19,8 +23,59 @@ pub const CircleCollider = struct {
     radius: f32 = 1.0,
 };
 
+pub const PlayerEvent = struct {
+    amt: f32,
+    num: u16,
+};
+
+fn SubTuple(comptime T: type, comptime low: usize, comptime high: usize) type {
+    const info = @typeInfo(T);
+    const old_fields = std.meta.fields(T)[low..high];
+    var new_fields: [old_fields.len]std.builtin.Type.StructField = undefined;
+    for (old_fields, 0..) |old, i| {
+        new_fields[i] = .{
+            .name = std.fmt.comptimePrint("{d}", .{i}),
+            .type = old.type,
+            .default_value = old.default_value,
+            .alignment = old.alignment,
+            .is_comptime = old.is_comptime,
+        };
+    }
+    return @Type(.{
+        .Struct = .{
+            .layout = info.Struct.layout,
+            .fields = &new_fields,
+            .decls = &.{},
+            .is_tuple = true,
+        },
+    });
+}
+
+fn Split(comptime T: type, comptime pivot: usize) type {
+    const fields = std.meta.fields(T);
+    return std.meta.Tuple(&[_]type{
+        SubTuple(T, 0, pivot),
+        SubTuple(T, pivot, fields.len),
+    });
+}
+
+fn split(tuple: anytype, comptime pivot: usize) Split(@TypeOf(tuple), pivot) {
+    const fields = std.meta.fields(@TypeOf(tuple));
+    return .{
+        extract(tuple, 0, pivot),
+        extract(tuple, pivot, fields.len),
+    };
+}
+
+pub fn extract(tuple: anytype, comptime low: usize, comptime high: usize) SubTuple(@TypeOf(tuple), low, high) {
+    var out: SubTuple(@TypeOf(tuple), low, high) = undefined;
+    inline for (low..high, 0..) |i, o| {
+        out[o] = tuple[i];
+    }
+    return out;
+}
+
 pub fn main() !void {
-    // select network mode - client or server
     var is_server: bool = true;
     {
         std.debug.print("\nstarted!\n", .{});
@@ -38,9 +93,11 @@ pub fn main() !void {
     try zeng.engine_start(&gd);
     defer zeng.engine_end(&gd);
 
-    var world: ECS.ECSWorld = undefined;
+    var world: ECS.World = undefined;
     world.init(gd.allocator);
     defer world.deinit() catch unreachable;
+
+    var commands: zeng.Commands = .{ .remote_messages = undefined, .remote_messages_len = 0, .allocator = gd.allocator };
 
     const shader_program_GPU = zeng.load_shader(gd.allocator, "assets/shaders/basic.shader", "assets/shaders/fragment.shader");
     const texture_GPU = zeng.load_texture("assets/images/uv_checker.png");
@@ -55,16 +112,17 @@ pub fn main() !void {
 
     _ = zeng.spawn_models(&world, "assets/blender_files/main_scene.bin", gd.allocator, shader_program_GPU, texture_GPU);
 
-    zeng.networking.client_map = @TypeOf(zeng.networking.client_map).init(gd.allocator);
-    defer zeng.networking.client_map.deinit();
-    var net_tup: struct { std.os.socket_t, std.net.Address } = undefined;
+    var socket_and_address: zeng.networking.SocketAndAddress = undefined;
     if (is_server) {
-        net_tup = try zeng.networking.setup_socket_and_address("0.0.0.0", 55555, true);
-        try zeng.networking.bind_socket_and_address(net_tup);
+        socket_and_address = try zeng.networking.make_udp_sock_and_address("192.168.0.90", 55555, true);
+        try zeng.networking.bind_socket_and_address(socket_and_address);
+
+        MyFunc(14.30, &world);
     } else {
-        net_tup = try zeng.networking.setup_socket_and_address("192.168.0.90", 55555, true);
-        _ = try std.os.sendto(net_tup[0], "I want to connect!", 0, &net_tup[1].any, net_tup[1].getOsSockLen());
+        socket_and_address = try zeng.networking.make_udp_sock_and_address("192.168.0.90", 55555, true);
+        _ = try std.os.sendto(socket_and_address.socket, "I want to connect!", 0, &socket_and_address.address.any, socket_and_address.address.getOsSockLen());
     }
+    defer std.os.close(socket_and_address.socket);
 
     // MAIN GAME LOOP - runs until user closes the window
     while (!gd.active_window.shouldClose()) {
@@ -72,28 +130,7 @@ pub fn main() !void {
 
         // server networking
         if (is_server) {
-            var packet_data_buffer: [4096]u8 = undefined;
-            var player_update_buffer: [32]struct { zeng.networking.ClientInfo, []u8 } = undefined;
-            var player_update_num: u32 = 0;
-            try zeng.networking.server_sift_packets(player_update_buffer[0..], &player_update_num, net_tup[0], &packet_data_buffer);
-
-            // handle any brand new clients
-            for (zeng.networking.client_map.values()) |*maybe_edl| {
-                if (maybe_edl.* == null) {
-                    const imported = zeng.spawn_models(&world, "assets/blender_files/simple.bin", gd.allocator, shader_program_GPU, texture_GPU);
-                    maybe_edl.* = imported;
-                }
-            }
-
-            // for each existing client, update local representation
-            for (player_update_buffer[0..player_update_num]) |clientinfo_and_data| {
-                const edl = zeng.networking.client_map.getEntry(clientinfo_and_data[0]).?.value_ptr.*.?;
-                var transform: *zeng.Transform = undefined;
-                try world.get_component(edl, &transform);
-                @memcpy(@as([*]u8, @ptrCast(&(transform.*[12]))), clientinfo_and_data[1][0..4]);
-                @memcpy(@as([*]u8, @ptrCast(&(transform.*[13]))), clientinfo_and_data[1][4..8]);
-                @memcpy(@as([*]u8, @ptrCast(&(transform.*[14]))), clientinfo_and_data[1][8..12]);
-            }
+            try zeng.networking.network_recieve_all(socket_and_address.socket, &world);
         }
 
         // update input + time
@@ -105,6 +142,11 @@ pub fn main() !void {
             var imported = zeng.spawn_models(&world, "assets/blender_files/simple.bin", gd.allocator, shader_program_GPU, texture_GPU);
             try world.insert_component(SineMover{ .offset = 0.0 }, &imported);
             try world.insert_component(CircleCollider{}, &imported);
+
+            if (!is_server) {
+                commands.remote_call(socket_and_address, MyFunc, .{14.30});
+                commands.remote_event(socket_and_address, PlayerEvent{ .amt = 101.0101, .num = 2323 });
+            }
         }
         gd.t_down_last_frame = gd.active_window.getKey(zeng.glfw.Key.t) == zeng.glfw.Action.press;
 
@@ -133,10 +175,44 @@ pub fn main() !void {
 
         // client networking
         if (!is_server) {
-            const ptr: [*]u8 = std.mem.asBytes(gd.active_camera_matrix[12..15]);
-            _ = try std.os.sendto(net_tup[0], ptr[0..12], 0, &net_tup[1].any, net_tup[1].getOsSockLen());
+            try zeng.networking.network_send_all(&commands);
         }
     }
+}
+
+pub fn MyFunc(f: f32, world: *ECS.World) void {
+    var t = zeng.identity_matrix();
+    t[13] = f;
+    _ = world.spawn(.{
+        t,
+    }) catch unreachable;
+    std.debug.print("i spawned a guy\n", .{});
+}
+
+pub const Resources = struct {
+    resources: [128]*anyopaque,
+    resources_len: u8,
+    allocator: std.mem.Allocator,
+
+    pub fn create_unique_id() u32 {
+        return 0;
+    }
+    pub fn store_resource(self: *Resources, resource: anytype, id: u32) !void {
+        _ = id; // autofix
+        self.resources[self.resources_len] = @ptrCast(try self.allocator.create(@TypeOf(resource)));
+        self.resources[self.resources_len];
+        self.resources_len += 1;
+    }
+    pub fn get(a: anytype, b: anytype) a {
+        _ = b; // autofix
+    }
+};
+
+pub fn SpawnQuadTexture(synced_tex_num: u32, world: *ECS.World, resources: *Resources) void {
+    const retrieved_tex = resources.get(u32, synced_tex_num);
+    _ = try world.spawn{
+        zeng.Mesh{ .material = zeng.Material{ .texture_GPU = retrieved_tex } },
+    };
 }
 
 /// Make all entities with a CircleCollider collide with each other

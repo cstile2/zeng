@@ -24,7 +24,7 @@ const ECS = ecs.CompileECS(TypeRegistry);
 
 test "Spawning" {
     const allocator = std.testing.allocator;
-    var world: ECS.ECSWorld = undefined;
+    var world: ECS.World = undefined;
     world.init(allocator);
     defer world.deinit() catch unreachable;
 
@@ -59,7 +59,7 @@ test "Spawning" {
 
 test "SingleIteration" {
     const allocator = std.testing.allocator;
-    var world: ECS.ECSWorld = undefined;
+    var world: ECS.World = undefined;
     world.init(allocator);
     defer world.deinit() catch unreachable;
 
@@ -119,7 +119,7 @@ test "SingleIteration" {
 
 test "MultipleIteration" {
     const allocator = std.testing.allocator;
-    var world: ECS.ECSWorld = undefined;
+    var world: ECS.World = undefined;
     world.init(allocator);
     defer world.deinit() catch unreachable;
 
@@ -193,7 +193,7 @@ test "MultipleIteration" {
 
 test "EntityLookups" {
     const allocator = std.testing.allocator;
-    var world: ECS.ECSWorld = undefined;
+    var world: ECS.World = undefined;
     world.init(allocator);
     defer world.deinit() catch unreachable;
 
@@ -232,7 +232,7 @@ test "Events" {
     };
 
     const allocator = std.testing.allocator;
-    var world: ECS.ECSWorld = undefined;
+    var world: ECS.World = undefined;
     world.init(allocator);
     defer world.deinit() catch unreachable;
 
@@ -285,7 +285,7 @@ test "Events" {
 
 test "ManyEntitiesOfSameArchetype" {
     const allocator = std.testing.allocator;
-    var world: ECS.ECSWorld = undefined;
+    var world: ECS.World = undefined;
     world.init(allocator);
     defer world.deinit() catch unreachable;
 

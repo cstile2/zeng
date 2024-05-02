@@ -79,10 +79,10 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
         pub const QueryIterator = struct {
             _current_table: *ArchetypeTable,
             _relevant_tables: std.AutoArrayHashMap(*ArchetypeTable, void),
-            _world: *ECSWorld,
+            _world: *World,
             _tables_index: u64,
             /// gathers info from ECS world (slow) and creates an iterator to be used for iteration (fast)
-            pub fn create(world: *ECSWorld, comptime tuple_of_types: anytype) !QueryIterator {
+            pub fn create(world: *World, comptime tuple_of_types: anytype) !QueryIterator {
                 const hash = comptime GET_TYPE_COMBO_HASH(tuple_of_types);
                 var ret: QueryIterator = undefined;
                 ret._relevant_tables = std.AutoArrayHashMap(*ArchetypeTable, void).init(world._allocator);
@@ -131,23 +131,23 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
         };
 
         /// Contains all entites for an ECS system and is needed to use the ECS
-        pub const ECSWorld = struct {
+        pub const World = struct {
             _tables: std.AutoArrayHashMap(ArchetypeID, ArchetypeTable),
             _allocator: std.mem.Allocator,
             /// initializes the ECS world - required for use
-            pub fn init(self: *ECSWorld, allocator: std.mem.Allocator) void {
+            pub fn init(self: *World, allocator: std.mem.Allocator) void {
                 self._allocator = allocator;
                 self._tables = std.AutoArrayHashMap(ArchetypeID, ArchetypeTable).init(allocator);
             }
             /// deallocates all memory created within this world
-            pub fn deinit(self: *ECSWorld) !void {
+            pub fn deinit(self: *World) !void {
                 for (self._tables.values()) |*table| {
                     try table.deinit();
                 }
                 self._tables.deinit();
             }
             /// internal helper function - retrieve an archetype table and create one if none exists
-            pub fn _get_create_table_by_id(self: *ECSWorld, archetype_id: ArchetypeID, allocator: std.mem.Allocator) !*ArchetypeTable {
+            pub fn _get_create_table_by_id(self: *World, archetype_id: ArchetypeID, allocator: std.mem.Allocator) !*ArchetypeTable {
                 const table_get_put = try self._tables.getOrPut(archetype_id);
                 if (table_get_put.found_existing) return table_get_put.value_ptr;
 
@@ -165,14 +165,14 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                 return table;
             }
             /// spawn an entity with component values specified in a tuple
-            pub fn spawn(self: *ECSWorld, tuple: anytype) !EntityDataLocation {
+            pub fn spawn(self: *World, tuple: anytype) !EntityDataLocation {
                 const tuple_hash = comptime GET_COMPONENT_COMBO_HASH(@TypeOf(tuple));
                 var table = try self._get_create_table_by_id(tuple_hash, self._allocator);
                 try table.insert_entity_tuple(tuple);
                 return EntityDataLocation{ .archetype_hash = table.archetype_hash, .row = table.count - 1 };
             }
             /// set the value of or add a new component of specified type and value
-            pub fn insert_component(self: *ECSWorld, V: anytype, edl: *EntityDataLocation) !void {
+            pub fn insert_component(self: *World, V: anytype, edl: *EntityDataLocation) !void {
                 // calculate the new hash
                 const old_hash = edl.archetype_hash;
                 const new_hash = (comptime GET_COMPONENT_HASH(@TypeOf(V))) | old_hash;
@@ -199,7 +199,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                 edl.archetype_hash = new_hash;
             }
             /// retrieve a specific component or set of components as pointers or copies
-            pub fn get_component(self: *ECSWorld, edl: EntityDataLocation, input: anytype) !void {
+            pub fn get_component(self: *World, edl: EntityDataLocation, input: anytype) !void {
                 switch (@typeInfo(@TypeOf(input))) {
                     .Struct => |stru| {
                         if (stru.is_tuple) {
@@ -227,7 +227,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                 }
             }
             /// removes a component if that component type is on the specified entity
-            pub fn remove_component(self: *ECSWorld, T: type, edl: *EntityDataLocation) !void {
+            pub fn remove_component(self: *World, T: type, edl: *EntityDataLocation) !void {
                 // calculate the new hash
                 const old_hash = edl.archetype_hash;
                 const new_hash = ~(comptime GET_COMPONENT_HASH(T)) & old_hash;
@@ -248,7 +248,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                 edl.archetype_hash = new_hash;
             }
             /// print world information
-            pub fn _print(self: ECSWorld) void {
+            pub fn _print(self: World) void {
                 std.debug.print("=================================", .{});
                 for (self._tables.values()) |*archetype_table| {
                     std.debug.print("\n--", .{});

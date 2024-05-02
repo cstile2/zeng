@@ -45,7 +45,7 @@ pub fn separate_text(text: []const u8, comptime delimiter: u8, allocator: std.me
     return ret[0..ret_count];
 }
 
-pub fn spawn_models(world: *ECS.ECSWorld, filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture_GPU: u32) ecs.EntityDataLocation {
+pub fn spawn_models(world: *ECS.World, filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture_GPU: u32) ecs.EntityDataLocation {
     var ret: ecs.EntityDataLocation = undefined;
 
     // open file from filepath > close after done
@@ -230,11 +230,13 @@ pub fn serialize_to_bytes(payload: anytype, dest_bytes: []u8, dest_curr_byte: *u
                 serialize_to_bytes(@field(payload, f.name), dest_bytes, dest_curr_byte);
             }
         },
-        else => {},
+        else => {
+            @compileError("this type cannot be serialized");
+        },
     }
 }
 
-pub fn deserialize_from_bytes(T: type, dest_bytes: []u8, src_bytes: []u8, src_curr_byte: *u32, offset: u32) void {
+pub fn deserialize_from_bytes(T: type, dest_bytes: [*]u8, src_bytes: []u8, src_curr_byte: *u32, offset: u32) void {
     switch (@typeInfo(T)) {
         .Int, .Float, .Bool, .Pointer => {
             @memcpy(dest_bytes[offset .. offset + @sizeOf(T)], src_bytes[src_curr_byte.* .. src_curr_byte.* + @sizeOf(T)]);
@@ -245,7 +247,9 @@ pub fn deserialize_from_bytes(T: type, dest_bytes: []u8, src_bytes: []u8, src_cu
                 deserialize_from_bytes(f.type, dest_bytes, src_bytes, src_curr_byte, offset + @offsetOf(T, f.name));
             }
         },
-        else => {},
+        else => {
+            @compileError("this type cannot be deserialized");
+        },
     }
 }
 
