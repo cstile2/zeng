@@ -32,6 +32,9 @@ pub const Vec3 = packed struct {
     pub fn length(self: Vec3) f32 {
         return @sqrt(self.x * self.x + self.y * self.y + self.z * self.z);
     }
+    pub fn length_sq(self: Vec3) f32 {
+        return self.x * self.x + self.y * self.y + self.z * self.z;
+    }
     pub fn normalized(self: Vec3) Vec3 {
         return self.div(self.length());
     }
@@ -57,6 +60,13 @@ pub const Camera = struct {
     projection_matrix: [16]f32,
 };
 pub const Transform = [16]f32;
+
+pub const SkinnedMesh = struct {
+    vao_gpu: u32,
+    indices_length: i32,
+    material: Material,
+    num_bones: usize,
+};
 
 // Linear Algebra
 pub fn identity_matrix() [16]f32 {
@@ -109,112 +119,128 @@ pub fn quaternion_to_matrix(q: Quat) [16]f32 {
 pub fn invert_matrix(m: [16]f32) [16]f32 {
     var inv: [16]f32 = undefined;
 
-    inv[0] = m[5] * m[10] * m[15] -
+    inv[0] =
+        m[5] * m[10] * m[15] -
         m[5] * m[11] * m[14] -
         m[9] * m[6] * m[15] +
         m[9] * m[7] * m[14] +
         m[13] * m[6] * m[11] -
         m[13] * m[7] * m[10];
 
-    inv[4] = -m[4] * m[10] * m[15] +
+    inv[4] =
+        -m[4] * m[10] * m[15] +
         m[4] * m[11] * m[14] +
         m[8] * m[6] * m[15] -
         m[8] * m[7] * m[14] -
         m[12] * m[6] * m[11] +
         m[12] * m[7] * m[10];
 
-    inv[8] = m[4] * m[9] * m[15] -
+    inv[8] =
+        m[4] * m[9] * m[15] -
         m[4] * m[11] * m[13] -
         m[8] * m[5] * m[15] +
         m[8] * m[7] * m[13] +
         m[12] * m[5] * m[11] -
         m[12] * m[7] * m[9];
 
-    inv[12] = -m[4] * m[9] * m[14] +
+    inv[12] =
+        -m[4] * m[9] * m[14] +
         m[4] * m[10] * m[13] +
         m[8] * m[5] * m[14] -
         m[8] * m[6] * m[13] -
         m[12] * m[5] * m[10] +
         m[12] * m[6] * m[9];
 
-    inv[1] = -m[1] * m[10] * m[15] +
+    inv[1] =
+        -m[1] * m[10] * m[15] +
         m[1] * m[11] * m[14] +
         m[9] * m[2] * m[15] -
         m[9] * m[3] * m[14] -
         m[13] * m[2] * m[11] +
         m[13] * m[3] * m[10];
 
-    inv[5] = m[0] * m[10] * m[15] -
+    inv[5] =
+        m[0] * m[10] * m[15] -
         m[0] * m[11] * m[14] -
         m[8] * m[2] * m[15] +
         m[8] * m[3] * m[14] +
         m[12] * m[2] * m[11] -
         m[12] * m[3] * m[10];
 
-    inv[9] = -m[0] * m[9] * m[15] +
+    inv[9] =
+        -m[0] * m[9] * m[15] +
         m[0] * m[11] * m[13] +
         m[8] * m[1] * m[15] -
         m[8] * m[3] * m[13] -
         m[12] * m[1] * m[11] +
         m[12] * m[3] * m[9];
 
-    inv[13] = m[0] * m[9] * m[14] -
+    inv[13] =
+        m[0] * m[9] * m[14] -
         m[0] * m[10] * m[13] -
         m[8] * m[1] * m[14] +
         m[8] * m[2] * m[13] +
         m[12] * m[1] * m[10] -
         m[12] * m[2] * m[9];
 
-    inv[2] = m[1] * m[6] * m[15] -
+    inv[2] =
+        m[1] * m[6] * m[15] -
         m[1] * m[7] * m[14] -
         m[5] * m[2] * m[15] +
         m[5] * m[3] * m[14] +
         m[13] * m[2] * m[7] -
         m[13] * m[3] * m[6];
 
-    inv[6] = -m[0] * m[6] * m[15] +
+    inv[6] =
+        -m[0] * m[6] * m[15] +
         m[0] * m[7] * m[14] +
         m[4] * m[2] * m[15] -
         m[4] * m[3] * m[14] -
         m[12] * m[2] * m[7] +
         m[12] * m[3] * m[6];
 
-    inv[10] = m[0] * m[5] * m[15] -
+    inv[10] =
+        m[0] * m[5] * m[15] -
         m[0] * m[7] * m[13] -
         m[4] * m[1] * m[15] +
         m[4] * m[3] * m[13] +
         m[12] * m[1] * m[7] -
         m[12] * m[3] * m[5];
 
-    inv[14] = -m[0] * m[5] * m[14] +
+    inv[14] =
+        -m[0] * m[5] * m[14] +
         m[0] * m[6] * m[13] +
         m[4] * m[1] * m[14] -
         m[4] * m[2] * m[13] -
         m[12] * m[1] * m[6] +
         m[12] * m[2] * m[5];
 
-    inv[3] = -m[1] * m[6] * m[11] +
+    inv[3] =
+        -m[1] * m[6] * m[11] +
         m[1] * m[7] * m[10] +
         m[5] * m[2] * m[11] -
         m[5] * m[3] * m[10] -
         m[9] * m[2] * m[7] +
         m[9] * m[3] * m[6];
 
-    inv[7] = m[0] * m[6] * m[11] -
+    inv[7] =
+        m[0] * m[6] * m[11] -
         m[0] * m[7] * m[10] -
         m[4] * m[2] * m[11] +
         m[4] * m[3] * m[10] +
         m[8] * m[2] * m[7] -
         m[8] * m[3] * m[6];
 
-    inv[11] = -m[0] * m[5] * m[11] +
+    inv[11] =
+        -m[0] * m[5] * m[11] +
         m[0] * m[7] * m[9] +
         m[4] * m[1] * m[11] -
         m[4] * m[3] * m[9] -
         m[8] * m[1] * m[7] +
         m[8] * m[3] * m[5];
 
-    inv[15] = m[0] * m[5] * m[10] -
+    inv[15] =
+        m[0] * m[5] * m[10] -
         m[0] * m[6] * m[9] -
         m[4] * m[1] * m[10] +
         m[4] * m[2] * m[9] +
@@ -314,7 +340,7 @@ fn glfw_get_proc_address(p: zeng.glfw.GLProc, proc: [:0]const u8) ?zeng.gl.Funct
 fn error_callback(error_code: zeng.glfw.ErrorCode, description: [:0]const u8) void {
     std.log.err("glfw error: {}: {s}\n", .{ error_code, description });
 }
-fn opengl_log_error() !void {
+pub fn opengl_log_error() !void {
     var err: zeng.gl.GLenum = zeng.gl.getError();
     while (err != zeng.gl.NO_ERROR) {
         const errorString = switch (err) {
@@ -336,13 +362,13 @@ fn opengl_log_error() !void {
 pub fn window_resize(window: zeng.glfw.Window, width: i32, height: i32) void {
     // std.debug.print("Window has been resized\n", .{});
     zeng.gl.viewport(0, 0, width, height);
-    if (window.getUserPointer(zeng.GlobalData)) |gd| {
+    if (window.getUserPointer(zeng.EngineState)) |gd| {
         gd.window_width = @intCast(width);
         gd.window_height = @intCast(height);
         gd.active_camera.projection_matrix = zeng.perspective_projection_matrix(1.3, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 100.0);
     }
 }
-pub fn engine_start(gd: *zeng.GlobalData) !void {
+pub fn engine_start(gd: *zeng.EngineState) !void {
     {
         // set glfw error callback
         zeng.glfw.setErrorCallback(error_callback);
@@ -371,7 +397,6 @@ pub fn engine_start(gd: *zeng.GlobalData) !void {
 
         gd.active_window.setInputModeCursor(zeng.glfw.Window.InputModeCursor.disabled);
         gd.active_window.setInputModeRawMouseMotion(true);
-        gd.elapsed_time = 0.0;
 
         zeng.glfw.makeContextCurrent(gd.active_window);
         const proc: zeng.glfw.GLProc = undefined;
@@ -389,7 +414,7 @@ pub fn engine_start(gd: *zeng.GlobalData) !void {
         gd.allocator = gd.gpa.allocator();
     }
 }
-pub fn engine_end(gd: *zeng.GlobalData) void {
+pub fn engine_end(gd: *zeng.EngineState) void {
     gd.active_window.destroy();
     zeng.glfw.terminate();
     _ = gd.gpa.deinit();
@@ -421,10 +446,9 @@ pub inline fn calculate_time_delta(a: i64, b: i64) f64 {
 
 // Engine Frame Housekeeping
 var old_time: i64 = 0;
-pub fn late_frame_calculations(gd: *zeng.GlobalData) void {
-    zeng.glfw.pollEvents();
+pub fn late_frame_calculations(time: *@import("main.zig").Time) void {
     const new_time = zeng.get_high_resolution_time();
-    gd.frame_delta = zeng.calculate_time_delta(old_time, new_time);
+    time.delta_time = zeng.calculate_time_delta(old_time, new_time);
     old_time = new_time;
 }
 
@@ -440,13 +464,13 @@ pub fn remote_event_implementation(event: PlayerEvent) void {
 }
 pub const procs = .{
     remote_event_implementation,
-    @import("main.zig").MyFunc,
+    @import("rpc.zig").TestNetMessage,
 };
-pub const proc_arg_tuples = [_]type{
+pub const args_to_serialize = [_]type{ // TODO: refactor
     struct { PlayerEvent },
     struct { f32 },
 };
-pub const proc_capture_tuples = [_]type{
+pub const args_to_retrieve = [_]type{ // TODO: refactor
     struct {},
     struct { *ECS.World },
 };
@@ -471,7 +495,6 @@ pub const Commands = struct {
     // entities
     pub fn spawn(self: *Commands) void {
         _ = self; // autofix
-
     }
     pub fn insert() void {}
     pub fn remove() void {}
@@ -479,10 +502,11 @@ pub const Commands = struct {
     // networking
     /// queues a remote procedure call to be sent to destination whenever this application sends next
     pub fn remote_call(self: *Commands, conn_id: SocketAndAddress, comptime procedure: anytype, args: anytype) void {
-        const args2 = @as(proc_arg_tuples[GET_PROC_CODE(procedure)], args);
+        const args2 = @as(args_to_serialize[GET_PROC_CODE(procedure)], args);
         // const arg_tup: std.meta.ArgsTuple(procedure) = undefined;
         // const caps = @import("main.zig").extract(arg_tup, args2.len, arg_tup.len);
         // _ = caps; // autofix
+        // std.builtin.Type
 
         const procedure_code: u32 = comptime GET_PROC_CODE(procedure);
 
@@ -552,32 +576,27 @@ pub fn EventReader(T: type) type {
     };
 }
 
-test "Events" {
-    var C = zeng.Events(u16){};
+// test "Events" {
+//     var C = zeng.Events(u16){};
 
-    C.insert(0);
-    var curr: u16 = 1;
-    while (curr < 10) {
-        defer curr += 1;
-        C.insert(curr);
-        const tup = C.get_pieces();
-        std.debug.print("=============\n", .{});
-        for (tup[0]) |int| {
-            std.debug.print("{}\n", .{int});
-        }
-        for (tup[1]) |int| {
-            std.debug.print("{}\n", .{int});
-        }
-        std.debug.print("{any} | {any}", .{ tup[0], tup[1] });
-        std.debug.print("=============\n", .{});
-        C.pop();
-    }
-}
-
-// Resources
-pub fn Resource(T: type) type {
-    return T;
-}
+//     C.insert(0);
+//     var curr: u16 = 1;
+//     while (curr < 10) {
+//         defer curr += 1;
+//         C.insert(curr);
+//         const tup = C.get_pieces();
+//         std.debug.print("=============\n", .{});
+//         for (tup[0]) |int| {
+//             std.debug.print("{}\n", .{int});
+//         }
+//         for (tup[1]) |int| {
+//             std.debug.print("{}\n", .{int});
+//         }
+//         std.debug.print("{any} | {any}", .{ tup[0], tup[1] });
+//         std.debug.print("=============\n", .{});
+//         C.pop();
+//     }
+// }
 
 // Misc + Unused Stuff
 pub fn custom_struct(comptime in: anytype) type {
@@ -602,7 +621,7 @@ pub fn custom_struct(comptime in: anytype) type {
         },
     });
 }
-pub fn run_command(gd: *zeng.GlobalData, input_read: []const u8) void {
+pub fn run_command(gd: *zeng.EngineState, input_read: []const u8) void {
     const separated: [][]u8 = zeng.separate_text(input_read, ';');
     defer {
         for (separated) |string| {
@@ -661,9 +680,59 @@ pub fn run_command(gd: *zeng.GlobalData, input_read: []const u8) void {
         }
     }
 }
+pub fn Iterator(comptime types: anytype) type {
+    comptime var new_fields2: [types.len]std.builtin.Type.StructField = undefined;
+    comptime for (types, 0..) |_type, i| {
+        new_fields2[i] = .{
+            .type = *_type,
+            .name = std.fmt.comptimePrint("{d}", .{i}),
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = @alignOf(_type),
+        };
+    };
+    const payload_type = @Type(.{
+        .Struct = .{
+            .layout = .Auto,
+            .fields = &new_fields2,
+            .decls = &.{},
+            .is_tuple = true,
+        },
+    });
+
+    return struct {
+        q: *ECS.Query(types),
+        index: usize,
+        current_table: usize,
+        pub const my_types: @TypeOf(types) = types;
+        pub fn create(_q: *ECS.Query(types)) !@This() {
+            return .{ .q = _q, .index = 0, .current_table = 0 };
+        }
+        pub fn next(self: *@This()) ?payload_type {
+            if (self.q._relevant_tables.values().len == 0) return null;
+
+            if (self.index >= self.q._relevant_tables.values()[self.current_table].count) {
+                if (self.current_table + 1 < self.q._relevant_tables.values().len) {
+                    self.current_table += 1;
+                    self.index = 0;
+                } else return null;
+            }
+
+            var thing: payload_type = undefined;
+            self.q.pointer_fetch(.{ .archetype_hash = self.q._relevant_tables.values()[self.current_table].archetype_hash, .row = self.index }, &thing) catch unreachable;
+
+            self.index += 1;
+            return thing;
+        }
+        pub fn reset(self: *@This()) void {
+            self.index = 0;
+            self.current_table = 0;
+        }
+    };
+}
 
 // Crutch God Object
-pub const GlobalData = struct {
+pub const EngineState = struct {
     active_window: zeng.glfw.Window,
     window_width: u32,
     window_height: u32,
@@ -671,13 +740,54 @@ pub const GlobalData = struct {
     active_camera_matrix: *[16]f32,
     active_camera: *zeng.Camera,
 
-    elapsed_time: f32 = 0.0,
-    cur_pos: zeng.glfw.Window.CursorPos = zeng.glfw.Window.CursorPos{ .xpos = 0, .ypos = 0 },
-    frame_delta: f64 = 0.01666666,
-    frozen: bool = false,
-
-    t_down_last_frame: bool = false,
-
     allocator: std.mem.Allocator,
     gpa: std.heap.GeneralPurposeAllocator(.{}),
 };
+
+// Maybe Useful Someday
+fn SubTuple(comptime T: type, comptime low: usize, comptime high: usize) type {
+    const info = @typeInfo(T);
+    const old_fields = std.meta.fields(T)[low..high];
+    var new_fields: [old_fields.len]std.builtin.Type.StructField = undefined;
+    for (old_fields, 0..) |old, i| {
+        new_fields[i] = .{
+            .name = std.fmt.comptimePrint("{d}", .{i}),
+            .type = old.type,
+            .default_value = old.default_value,
+            .alignment = old.alignment,
+            .is_comptime = old.is_comptime,
+        };
+    }
+    return @Type(.{
+        .Struct = .{
+            .layout = info.Struct.layout,
+            .fields = &new_fields,
+            .decls = &.{},
+            .is_tuple = true,
+        },
+    });
+}
+
+fn Split(comptime T: type, comptime pivot: usize) type {
+    const fields = std.meta.fields(T);
+    return std.meta.Tuple(&[_]type{
+        SubTuple(T, 0, pivot),
+        SubTuple(T, pivot, fields.len),
+    });
+}
+
+fn split(tuple: anytype, comptime pivot: usize) Split(@TypeOf(tuple), pivot) {
+    const fields = std.meta.fields(@TypeOf(tuple));
+    return .{
+        extract(tuple, 0, pivot),
+        extract(tuple, pivot, fields.len),
+    };
+}
+
+pub fn extract(tuple: anytype, comptime low: usize, comptime high: usize) SubTuple(@TypeOf(tuple), low, high) {
+    var out: SubTuple(@TypeOf(tuple), low, high) = undefined;
+    inline for (low..high, 0..) |i, o| {
+        out[o] = tuple[i];
+    }
+    return out;
+}

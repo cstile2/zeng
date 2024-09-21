@@ -61,12 +61,14 @@ pub fn network_recieve_all(socket: std.os.socket_t, world: *ECS.World) !void {
             var procedure_code: u32 = undefined;
             @memcpy(@as([*]u8, @ptrCast(&procedure_code)), recv_read_buf[0..4]);
 
+            //@Meta
+
             inline for (zeng.procs) |proc| {
                 if (procedure_code == comptime zeng.GET_PROC_CODE(proc)) {
-                    var args: zeng.proc_arg_tuples[zeng.GET_PROC_CODE(proc)] = undefined;
+                    var args: zeng.args_to_serialize[zeng.GET_PROC_CODE(proc)] = undefined;
                     var curr: u32 = 4;
-                    zeng.deserialize_from_bytes(zeng.proc_arg_tuples[zeng.GET_PROC_CODE(proc)], @as([*]u8, @ptrCast(&args)), recv_read_buf[0..], &curr, 0);
-                    var captures: zeng.proc_capture_tuples[zeng.GET_PROC_CODE(proc)] = undefined;
+                    zeng.deserialize_from_bytes(zeng.args_to_serialize[zeng.GET_PROC_CODE(proc)], @as([*]u8, @ptrCast(&args)), recv_read_buf[0..], &curr, 0);
+                    var captures: zeng.args_to_retrieve[zeng.GET_PROC_CODE(proc)] = undefined;
 
                     if (@sizeOf(@TypeOf(captures)) > 0) {
                         inline for (&captures) |*cap| {

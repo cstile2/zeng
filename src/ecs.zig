@@ -28,13 +28,18 @@ pub fn Resource(comptime T: type) type {
 pub fn CompileECS(comptime __TypeRegistry: anytype) type {
     return struct {
         // integrate custom type-checking
-        const __runtime_type_information = __GENERATE_TYPE_INFOS(__TypeRegistry);
+        pub const __runtime_type_information = __GENERATE_TYPE_INFOS(__TypeRegistry);
         fn __GENERATE_TYPE_INFOS(comptime TypeReg: anytype) [TypeReg.len]TypeInfo {
+            var g: usize = 0;
             var ret: [TypeReg.len]TypeInfo = undefined;
             var curr = 0;
             for (TypeReg) |type_| {
                 ret[curr] = TypeInfo{ .hash = GET_COMPONENT_HASH(type_), .type_size = @sizeOf(type_), .type_alignment = std.math.log2(@alignOf(type_)), .component_id = curr };
                 curr += 1;
+                ret[curr - 1].type_size = @sizeOf(type_);
+                if (@sizeOf(type_) == 16) {
+                    g = 1;
+                }
             }
             return ret;
         }
@@ -77,7 +82,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
 
         /// an object to easily let you iterate through all entities that have a specific set of components
         pub const QueryIterator = struct {
-            _current_table: *ArchetypeTable,
+            _current_table: ?*ArchetypeTable,
             _relevant_tables: std.AutoArrayHashMap(*ArchetypeTable, void),
             _world: *World,
             _tables_index: u64,
@@ -95,6 +100,8 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                 }
                 if (ret._relevant_tables.count() > 0) {
                     ret._current_table = ret._relevant_tables.keys()[0];
+                } else {
+                    ret._current_table = null;
                 }
                 return ret;
             }
@@ -104,6 +111,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
             }
             /// finds the next group of entities with the correct components
             pub fn next(this: *QueryIterator) bool {
+                if (this._relevant_tables.count() < 1) return false;
                 if (this._tables_index >= this._relevant_tables.keys().len) {
                     return false;
                 }
@@ -120,8 +128,8 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
             pub fn field(this: *QueryIterator, T: type) ![]T {
                 var slice: []T = undefined;
                 const field_index = comptime GET_COMPONENT_ID(T);
-                slice.ptr = @alignCast(@ptrCast((this._current_table.storages.getEntry(field_index) orelse return ECSError.RequestFailed).value_ptr.array.ptr));
-                slice.len = this._current_table.count;
+                slice.ptr = @alignCast(@ptrCast((this._current_table.?.storages.getEntry(field_index) orelse return ECSError.RequestFailed).value_ptr.array.ptr));
+                slice.len = this._current_table.?.count;
                 return slice;
             }
             /// retrieves specified components of a single entity, as either pointers or value copies
@@ -130,14 +138,46 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
             }
         };
 
+        pub fn Query(comptime types: anytype) type {
+            return struct {
+                _relevant_tables: std.AutoArrayHashMap(ArchetypeID, *ArchetypeTable),
+                pub const my_types: @TypeOf(types) = types;
+
+                pub fn create(world: *World, allocator: std.mem.Allocator) !@This() {
+                    const minimum_set_hash = comptime GET_TYPE_COMBO_HASH(types);
+                    var ret: @This() = undefined;
+                    ret._relevant_tables = std.AutoArrayHashMap(ArchetypeID, *ArchetypeTable).init(allocator);
+                    for (world._tables.values()) |*table| {
+                        if (table.archetype_hash & minimum_set_hash == minimum_set_hash) {
+                            ret._relevant_tables.put(table.archetype_hash, table) catch unreachable;
+                        }
+                    }
+                    return ret;
+                }
+                pub fn destroy(self: *@This()) !void {
+                    self._relevant_tables.deinit();
+                }
+                pub fn pointer_fetch(self: @This(), edl: EntityDataLocation, input: anytype) !void {
+                    inline for (input) |*member| {
+                        member.* = try self.get_component(edl, @TypeOf(member.*.*));
+                    }
+                }
+                pub fn get_component(self: @This(), edl: EntityDataLocation, T: type) !*T {
+                    return try self._relevant_tables.getEntry(edl.archetype_hash).?.value_ptr.*.entry_ptr(T, edl.row);
+                }
+            };
+        }
+
         /// Contains all entites for an ECS system and is needed to use the ECS
         pub const World = struct {
             _tables: std.AutoArrayHashMap(ArchetypeID, ArchetypeTable),
             _allocator: std.mem.Allocator,
             /// initializes the ECS world - required for use
-            pub fn init(self: *World, allocator: std.mem.Allocator) void {
-                self._allocator = allocator;
-                self._tables = std.AutoArrayHashMap(ArchetypeID, ArchetypeTable).init(allocator);
+            pub fn init(allocator: std.mem.Allocator) World {
+                return .{
+                    ._allocator = allocator,
+                    ._tables = std.AutoArrayHashMap(ArchetypeID, ArchetypeTable).init(allocator),
+                };
             }
             /// deallocates all memory created within this world
             pub fn deinit(self: *World) !void {
@@ -157,7 +197,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                 var index: u64 = 0;
                 while (curr_bit_field != 0 and index < __runtime_type_information.len) {
                     if (curr_bit_field & archetype_id != 0) {
-                        try table.add_component_type_id(allocator, (&__runtime_type_information[index]).*);
+                        try table.add_component_type_id(allocator, __runtime_type_information[index]);
                     }
                     curr_bit_field = curr_bit_field << 1;
                     index += 1;
@@ -298,7 +338,6 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
             pub fn add_component_type_id(self: *ArchetypeTable, allocator: std.mem.Allocator, T_run: TypeInfo) !void {
                 const get_put = try self.storages.getOrPut(T_run.component_id);
                 if (get_put.found_existing) return ECSError.RedundantOperation;
-
                 try get_put.value_ptr.init(T_run, self.capacity, allocator);
                 self.archetype_hash = self.archetype_hash | T_run.hash;
             }

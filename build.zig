@@ -1,10 +1,10 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
-    // END META PROGRAMMING
-    // standard stuff
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // main executable
     const exe = b.addExecutable(.{
         .name = "colsengine",
         .root_source_file = .{ .path = "src/main.zig" },
@@ -31,11 +31,11 @@ pub fn build(b: *std.Build) !void {
         .path = "c_libs/",
     });
 
-    // do the stuff
+    // install artifact
     b.installArtifact(exe);
 
     // allow "zig build run" to be a thing
     const exe_run = b.addRunArtifact(exe);
-    const exe_step = b.step("run", "Run the program");
-    exe_step.dependOn(&exe_run.step);
+    const exe_run_command = b.step("run", "Run the program");
+    exe_run_command.dependOn(&exe_run.step);
 }
