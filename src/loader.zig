@@ -43,8 +43,8 @@ pub fn separate_text(text: []const u8, comptime delimiter: u8, allocator: std.me
     return ret[0..ret_count];
 }
 
-pub fn instantiate_scene(world: *ECS.World, filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture_GPU: u32) ecs.EntityDataLocation {
-    var ret: ecs.EntityDataLocation = undefined;
+pub fn instantiate_scene(world: *ECS.World, filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture_GPU: u32) ECS.entity_id {
+    var ret: ECS.entity_id = undefined;
 
     // open file from filepath > close after done
     const file = std.fs.cwd().openFile(filepath, .{}) catch unreachable;
@@ -286,6 +286,10 @@ test "Serialize" {
     try std.testing.expectEqual(Gr{}, g);
 }
 
+// GLTF Parsing Code Below:
+
+const ARRAY_OF_ZEROS = [4]i32{ 0, 0, 0, 0 };
+
 const StringLiteral = struct {
     string: []const u8,
 };
@@ -295,7 +299,6 @@ const IntConstant = struct {
 const FloatConstant = struct {
     value: f64,
 };
-
 const TokenTag = enum {
     l_paren,
     r_paren,
@@ -334,6 +337,81 @@ const Token = union(TokenTag) {
     _true,
 };
 
+const ParseError = error{
+    parse_error,
+};
+const Primitive = struct {
+    attributes: std.ArrayList(Attribute),
+};
+const BufferView = struct {
+    length: u32,
+    offset: u32,
+};
+const Sampler = struct {
+    // a sampler simply references the input timestamps and the corresponding output values (like quaternion or vec3)
+    input: u32,
+    output: u32,
+};
+const Channel = struct {
+    // a channel simply declares a link between a node and its animation data for a single property (like rotation or translation)
+    sampler: u32,
+    target_node: u32,
+};
+const Animation = struct {
+    // raw animation tracks:
+    samplers: std.ArrayList(Sampler),
+
+    // information linking animation tracks to specific nodes (integers in gltf index space)
+    channels: std.ArrayList(Channel),
+};
+const AttributeType = enum {
+    POSITION,
+    NORMAL,
+    TEXCOORD_0,
+    COLOR_0,
+    JOINTS_0,
+    WEIGHTS_0,
+    indices,
+};
+const Attribute = struct {
+    // an attribute is a piece of data that is stored in every vertex of a mesh
+    _type: AttributeType,
+    index: u32,
+};
+
+pub var nodes: [1024]u32 = undefined;
+pub var nodes_len: u32 = 0;
+pub var meshes: [1024]Primitive = undefined;
+pub var meshes_len: u32 = 0;
+pub var accessors: [1024]u32 = undefined;
+pub var accessors_len: u32 = 0;
+pub var buffer_views: [1024]BufferView = undefined;
+pub var buffer_views_len: u32 = 0;
+
+pub var animations: [1024]Animation = undefined;
+pub var animations_len: usize = 0;
+
+var global_json_hierarchy: std.ArrayList([]const u8) = undefined;
+fn hierarchy_string(buff: [*]u8) []u8 {
+    var curr: usize = 0;
+    for (global_json_hierarchy.items) |item| {
+        buff[curr] = '.';
+        curr += 1;
+        @memcpy(buff[curr .. curr + item.len], item);
+        curr += item.len;
+    }
+    return buff[0..curr];
+}
+fn backup(slice: []u8, count: usize) []u8 {
+    return slice[slice.len - count ..];
+}
+fn context_is(str: anytype) bool {
+    var returnable_path_buffer: [1028]u8 = undefined;
+    const p = hierarchy_string(&returnable_path_buffer);
+    if (str.len > p.len) return false;
+    return std.mem.eql(u8, backup(p, str.len), str);
+}
+
 pub fn contains(char: u8, string: []const u8) bool {
     for (string) |s_char| {
         if (s_char == char) {
@@ -342,7 +420,6 @@ pub fn contains(char: u8, string: []const u8) bool {
     }
     return false;
 }
-
 pub fn lexer(bytes: []const u8, tokens: *std.ArrayList(Token)) !void {
     var char_number: u32 = 0;
     var curr: u64 = 0;
@@ -430,111 +507,7 @@ pub fn lexer(bytes: []const u8, tokens: *std.ArrayList(Token)) !void {
         }
     }
 }
-
-const ParseError = error{
-    parse_error,
-};
-
-var tab_amount: u8 = 0;
-fn print_tabbed(comptime str: anytype, tup: anytype, enter: bool) void {
-    if (enter) {
-        tab_amount += 1;
-    }
-    defer {
-        if (!enter) {
-            tab_amount -= 1;
-        }
-    }
-    var count: u8 = tab_amount;
-    while (count != 0) {
-        defer count -= 1;
-        std.debug.print(". ", .{});
-    }
-    std.debug.print(str, tup);
-}
-
-const Primitive = struct {
-    attributes: std.ArrayList(Attribute),
-};
-const BufferView = struct {
-    length: u32,
-    offset: u32,
-};
-
-pub var nodes: [1024]u32 = undefined;
-pub var nodes_len: u32 = 0;
-pub var meshes: [1024]Primitive = undefined;
-pub var meshes_len: u32 = 0;
-pub var accessors: [1024]u32 = undefined;
-pub var accessors_len: u32 = 0;
-pub var buffer_views: [1024]BufferView = undefined;
-pub var buffer_views_len: u32 = 0;
-
-const Sampler = struct {
-    input: u32,
-    output: u32,
-};
-
-const Channel = struct {
-    sampler: u32,
-    target_node: u32,
-};
-
-const Animation = struct {
-    samplers: std.ArrayList(Sampler),
-    channels: std.ArrayList(Channel),
-};
-
-pub var animations: [1024]Animation = undefined;
-pub var animations_len: usize = 0;
-
-var hierarchy: std.ArrayList([]const u8) = undefined;
-fn print_hierarchy() void {
-    std.debug.print("<", .{});
-    for (hierarchy.items) |item| {
-        std.debug.print("{s}/", .{item});
-    }
-    std.debug.print(">\n", .{});
-}
-
-var path_buffer: [1028]u8 = undefined;
-fn get_gltf_path() []u8 {
-    var curr: usize = 0;
-    for (hierarchy.items) |item| {
-        path_buffer[curr] = '.';
-        curr += 1;
-        @memcpy(path_buffer[curr .. curr + item.len], item);
-        curr += item.len;
-    }
-    return path_buffer[0..curr];
-}
-fn backup(slice: []u8, count: usize) []u8 {
-    return slice[slice.len - count ..];
-}
-fn test_hierachy(str: anytype) bool {
-    const p = get_gltf_path();
-    if (str.len > p.len) return false;
-    return std.mem.eql(u8, backup(p, str.len), str);
-}
-
-const AttributeType = enum {
-    POSITION,
-    NORMAL,
-    TEXCOORD_0,
-    COLOR_0,
-    JOINTS_0,
-    WEIGHTS_0,
-    indices,
-};
-
-const Attribute = struct {
-    _type: AttributeType,
-    index: u32,
-};
-
-var global_allocator: std.mem.Allocator = undefined;
 pub fn parse_gltf(bytes: []u8, allocator: std.mem.Allocator) !void {
-    global_allocator = allocator;
     nodes_len = 0;
     meshes_len = 0;
     accessors_len = 0;
@@ -542,8 +515,8 @@ pub fn parse_gltf(bytes: []u8, allocator: std.mem.Allocator) !void {
 
     animations_len = 0;
 
-    hierarchy = std.ArrayList([]const u8).init(allocator);
-    defer hierarchy.deinit();
+    global_json_hierarchy = std.ArrayList([]const u8).init(allocator);
+    defer global_json_hierarchy.deinit();
 
     var tokens = std.ArrayList(Token).init(allocator);
     defer tokens.deinit();
@@ -552,7 +525,7 @@ pub fn parse_gltf(bytes: []u8, allocator: std.mem.Allocator) !void {
     if (tokens.items[0] != .l_brace) unreachable;
 
     var curr: u64 = 1;
-    const a = gltf_leaf_list(tokens.items, &curr);
+    const a = gltf_leaf_list(allocator, tokens.items, &curr);
     if (a == null) unreachable;
 
     if (tokens.items[curr] != .r_brace) unreachable;
@@ -571,10 +544,10 @@ fn match(tokens: []Token, tag: TokenTag, curr: *u64) bool {
     }
     return false;
 }
-pub fn gltf_leaf_list(tokens: []Token, curr: *u64) ?u64 {
+pub fn gltf_leaf_list(allocator: std.mem.Allocator, tokens: []Token, curr: *u64) ?u64 {
     var temp = curr.*;
     while (true) {
-        if (gltf_leaf(tokens, curr) == null) {
+        if (gltf_leaf(allocator, tokens, curr) == null) {
             break;
         }
         temp = curr.*;
@@ -585,7 +558,7 @@ pub fn gltf_leaf_list(tokens: []Token, curr: *u64) ?u64 {
     curr.* = temp;
     return curr.*;
 }
-pub fn gltf_leaf(tokens: []Token, curr: *u64) ?u64 {
+pub fn gltf_leaf(allocator: std.mem.Allocator, tokens: []Token, curr: *u64) ?u64 {
     const temp = curr.*;
     if (match(tokens, .string_literal, curr)) {
         const str = tokens[curr.* - 1].string_literal.string;
@@ -593,15 +566,15 @@ pub fn gltf_leaf(tokens: []Token, curr: *u64) ?u64 {
         if (tokens[curr.*] == .colon) {
             curr.* += 1;
 
-            hierarchy.append(str) catch unreachable;
-            defer _ = hierarchy.pop();
-            if (test_hierachy("attributes")) {
-                meshes[meshes_len] = .{ .attributes = std.ArrayList(Attribute).init(global_allocator) };
+            global_json_hierarchy.append(str) catch unreachable;
+            defer _ = global_json_hierarchy.pop();
+            if (context_is("attributes")) {
+                meshes[meshes_len] = .{ .attributes = std.ArrayList(Attribute).init(allocator) };
                 current_primitive = &meshes[meshes_len];
                 meshes_len += 1;
             }
 
-            const result = gltf_leaf(tokens, curr);
+            const result = gltf_leaf(allocator, tokens, curr);
             return result;
         } else {
             return curr.*;
@@ -610,31 +583,31 @@ pub fn gltf_leaf(tokens: []Token, curr: *u64) ?u64 {
     curr.* = temp;
 
     if (match(tokens, .int_constant, curr)) {
-        if (test_hierachy("meshes.[.primitives.[.attributes.POSITION")) {
+        if (context_is("meshes.[.primitives.[.attributes.POSITION")) {
             current_primitive.attributes.append(.{ ._type = .POSITION, .index = @intCast(tokens[curr.* - 1].int_constant.value) }) catch unreachable;
-        } else if (test_hierachy("meshes.[.primitives.[.attributes.NORMAL")) {
+        } else if (context_is("meshes.[.primitives.[.attributes.NORMAL")) {
             current_primitive.attributes.append(.{ ._type = .NORMAL, .index = @intCast(tokens[curr.* - 1].int_constant.value) }) catch unreachable;
-        } else if (test_hierachy("meshes.[.primitives.[.attributes.TEXCOORD_0")) {
+        } else if (context_is("meshes.[.primitives.[.attributes.TEXCOORD_0")) {
             current_primitive.attributes.append(.{ ._type = .TEXCOORD_0, .index = @intCast(tokens[curr.* - 1].int_constant.value) }) catch unreachable;
-        } else if (test_hierachy("meshes.[.primitives.[.indices")) {
+        } else if (context_is("meshes.[.primitives.[.indices")) {
             current_primitive.attributes.append(.{ ._type = .indices, .index = @intCast(tokens[curr.* - 1].int_constant.value) }) catch unreachable;
-        } else if (test_hierachy("nodes.[.mesh")) {
+        } else if (context_is("nodes.[.mesh")) {
             nodes[nodes_len] = @intCast(tokens[curr.* - 1].int_constant.value);
             nodes_len += 1;
-        } else if (test_hierachy("accessors.[.bufferView")) {
+        } else if (context_is("accessors.[.bufferView")) {
             accessors[accessors_len] = @intCast(tokens[curr.* - 1].int_constant.value);
             accessors_len += 1;
-        } else if (test_hierachy("bufferViews.[.byteLength")) {
+        } else if (context_is("bufferViews.[.byteLength")) {
             current_buffer_view.length = @intCast(tokens[curr.* - 1].int_constant.value);
-        } else if (test_hierachy("bufferViews.[.byteOffset")) {
+        } else if (context_is("bufferViews.[.byteOffset")) {
             current_buffer_view.offset = @intCast(tokens[curr.* - 1].int_constant.value);
-        } else if (test_hierachy("sampler")) {
+        } else if (context_is("sampler")) {
             current_channel.sampler = @intCast(tokens[curr.* - 1].int_constant.value);
-        } else if (test_hierachy("target.node")) {
+        } else if (context_is("target.node")) {
             current_channel.target_node = @intCast(tokens[curr.* - 1].int_constant.value);
-        } else if (test_hierachy("samplers.[.input")) {
+        } else if (context_is("samplers.[.input")) { // index of an accessor containing keyframe timestamps
             current_sampler.input = @intCast(tokens[curr.* - 1].int_constant.value);
-        } else if (test_hierachy("samplers.[.output")) {
+        } else if (context_is("samplers.[.output")) { // index of an accessor, containing keyframe output values
             current_sampler.output = @intCast(tokens[curr.* - 1].int_constant.value);
         }
 
@@ -648,24 +621,22 @@ pub fn gltf_leaf(tokens: []Token, curr: *u64) ?u64 {
     curr.* = temp;
 
     if (match(tokens, .l_brace, curr)) {
-        if (test_hierachy("bufferViews.[")) {
+        if (context_is("bufferViews.[")) {
             current_buffer_view = &buffer_views[buffer_views_len];
             buffer_views_len += 1;
-        } else if (test_hierachy("animations.[")) {
-            // std.debug.print("animation prep\n", .{});
-            animations[animations_len].channels = std.ArrayList(Channel).init(global_allocator);
-            animations[animations_len].samplers = std.ArrayList(Sampler).init(global_allocator);
+        } else if (context_is("animations.[")) {
+            animations[animations_len].channels = std.ArrayList(Channel).init(allocator);
+            animations[animations_len].samplers = std.ArrayList(Sampler).init(allocator);
             current_animation = &animations[animations_len];
             animations_len += 1;
-        } else if (test_hierachy("animations.[.channels.[")) {
-            // std.debug.print("channel prep\n", .{});
+        } else if (context_is("animations.[.channels.[")) {
             current_animation.channels.append(undefined) catch unreachable;
             current_channel = &current_animation.channels.items[current_animation.channels.items.len - 1];
-        } else if (test_hierachy("animations.[.samplers.[")) {
+        } else if (context_is("animations.[.samplers.[")) {
             current_animation.samplers.append(undefined) catch unreachable;
             current_sampler = &current_animation.samplers.items[current_animation.samplers.items.len - 1];
         }
-        if (gltf_leaf_list(tokens, curr) == null) return null;
+        if (gltf_leaf_list(allocator, tokens, curr) == null) return null;
         if (!match(tokens, .r_brace, curr)) return null;
 
         return curr.*;
@@ -673,9 +644,9 @@ pub fn gltf_leaf(tokens: []Token, curr: *u64) ?u64 {
     curr.* = temp;
 
     if (match(tokens, .l_square, curr)) {
-        hierarchy.append("[") catch unreachable;
-        defer _ = hierarchy.pop();
-        if (gltf_leaf_list(tokens, curr) == null) return null;
+        global_json_hierarchy.append("[") catch unreachable;
+        defer _ = global_json_hierarchy.pop();
+        if (gltf_leaf_list(allocator, tokens, curr) == null) return null;
         if (!match(tokens, .r_square, curr)) return null;
         return curr.*;
     }
@@ -683,12 +654,8 @@ pub fn gltf_leaf(tokens: []Token, curr: *u64) ?u64 {
     return null;
 }
 
-const THING = [4]i32{ 0, 0, 0, 0 };
-
-// only supports a skinned mesh currently - normal meshes are still using old format
-pub fn use_parsed_gltf(path: anytype, index: usize, shader_program_GPU: u32, texture_GPU: u32, allocator: std.mem.Allocator) !zeng.SkinnedMesh {
+pub fn gltf_extract_skinned_mesh(path: anytype, index: usize, shader_program_GPU: u32, texture_GPU: u32, allocator: std.mem.Allocator) !zeng.SkinnedMesh {
     const buffer = get_file_bytes(path, allocator);
-    defer allocator.free(buffer);
 
     const accessor = meshes[nodes[index]];
     var position_data_len: usize = 0;
@@ -719,7 +686,6 @@ pub fn use_parsed_gltf(path: anytype, index: usize, shader_program_GPU: u32, tex
 
     const mesh_data_size: usize = @divTrunc(position_data_len, 12) * 64; // was 32
     var mesh_data = allocator.alloc(u8, mesh_data_size) catch unreachable;
-    defer allocator.free(mesh_data);
 
     var _curr: usize = 0;
     var _i: usize = 0;
@@ -759,7 +725,7 @@ pub fn use_parsed_gltf(path: anytype, index: usize, shader_program_GPU: u32, tex
         _k += 8;
         _curr += 8;
 
-        @memcpy(mesh_data[_curr .. _curr + 16], @as([*]const u8, @ptrCast(&THING))); //@skinned
+        @memcpy(mesh_data[_curr .. _curr + 16], @as([*]const u8, @ptrCast(&ARRAY_OF_ZEROS))); //@skinned
         _curr += 16;
         @memcpy(mesh_data[_curr .. _curr + 16], @as([*]const u8, @ptrCast(&[4]f32{ 1.0, 0.0, 0.0, 0.0 }))); //@skinned
         _curr += 16;
@@ -767,7 +733,6 @@ pub fn use_parsed_gltf(path: anytype, index: usize, shader_program_GPU: u32, tex
     if (_i != position_data_len) unreachable;
 
     var index_data = allocator.alloc(u32, @divTrunc(indices_len, 2)) catch unreachable;
-    defer allocator.free(index_data);
 
     var curr_: usize = 0;
     while (curr_ * 2 < indices_len) {
@@ -801,7 +766,7 @@ pub fn use_parsed_gltf(path: anytype, index: usize, shader_program_GPU: u32, tex
     zeng.gl.bufferData(zeng.gl.ELEMENT_ARRAY_BUFFER, @intCast(index_data.len * 4), index_data.ptr, zeng.gl.STATIC_DRAW);
 
     // data layout
-    const float_count = 8 + 4 + 4;
+    const float_count = 3 + 3 + 2 + 4 + 4;
     zeng.gl.vertexAttribPointer(0, 3, zeng.gl.FLOAT, zeng.gl.FALSE, float_count * @sizeOf(f32), @ptrFromInt(0)); // position
     zeng.gl.vertexAttribPointer(1, 3, zeng.gl.FLOAT, zeng.gl.FALSE, float_count * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32))); // normal
     zeng.gl.vertexAttribPointer(2, 2, zeng.gl.FLOAT, zeng.gl.FALSE, float_count * @sizeOf(f32), @ptrFromInt(6 * @sizeOf(f32))); // uv
@@ -823,4 +788,58 @@ pub fn use_parsed_gltf(path: anytype, index: usize, shader_program_GPU: u32, tex
         .vao_gpu = VAO,
         .num_bones = 65,
     };
+}
+
+pub fn thing() struct { u32, c_int } {
+    const vertices = [20]f32{
+        1.0, 1.0, 0.0, 1.0, 1.0, // top right
+        1.0, -1.0, 0.0, 1.0, 0.0, // bottom right
+        -1.0, -1.0, 0.0, 0.0, 0.0, // bottom left
+        -1.0, 1.0, 0.0, 0.0, 1.0, // top left
+    };
+    const indices = [6]c_uint{
+        // note that we start from 0!
+        3, 1, 0, // first triangle
+        3, 2, 1, // second triangle
+    };
+
+    var VBO: c_uint = undefined;
+    var VAO: c_uint = undefined;
+    var EBO: c_uint = undefined;
+
+    zeng.gl.genVertexArrays(1, &VAO);
+    // defer zeng.gl.deleteVertexArrays(1, &VAO);
+
+    zeng.gl.genBuffers(1, &VBO);
+    // defer zeng.gl.deleteBuffers(1, &VBO);
+
+    zeng.gl.genBuffers(1, &EBO);
+    // defer zeng.gl.deleteBuffers(1, &EBO);
+
+    // bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
+    zeng.gl.bindVertexArray(VAO);
+    zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, VBO);
+    // Fill our buffer with the vertex data
+    zeng.gl.bufferData(zeng.gl.ARRAY_BUFFER, @sizeOf(f32) * vertices.len, &vertices, zeng.gl.STATIC_DRAW);
+    // copy our index array in an element buffer for OpenGL to use
+    zeng.gl.bindBuffer(zeng.gl.ELEMENT_ARRAY_BUFFER, EBO);
+    zeng.gl.bufferData(zeng.gl.ELEMENT_ARRAY_BUFFER, 6 * @sizeOf(c_uint), &indices, zeng.gl.STATIC_DRAW);
+
+    // Specify and link our vertext attribute description
+    zeng.gl.vertexAttribPointer(0, 3, zeng.gl.FLOAT, zeng.gl.FALSE, 5 * @sizeOf(f32), null);
+    zeng.gl.vertexAttribPointer(1, 2, zeng.gl.FLOAT, zeng.gl.FALSE, 5 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32)));
+
+    zeng.gl.enableVertexAttribArray(0);
+    zeng.gl.enableVertexAttribArray(1);
+
+    // note that this is allowed, the call to glVertexAttribPointer registered VBO as the vertex attribute's bound vertex buffer object so afterwards we can safely unbind
+    zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, 0);
+
+    // You can unbind the VAO afterwards so other VAO calls won't accidentally modify this VAO, but this rarely happens. Modifying other
+    // VAOs requires a call to glBindVertexArray anyways so we generally don't unbind VAOs (nor VBOs) when it's not directly necessary.
+    zeng.gl.bindVertexArray(0);
+
+    zeng.gl.bindBuffer(zeng.gl.ELEMENT_ARRAY_BUFFER, 0);
+
+    return .{ VAO, indices.len };
 }

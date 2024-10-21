@@ -12,11 +12,11 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    // use glfw package from package manager via build.zig.zon
+    // use glfw package from package manager via build.zig.zon - add as import
     const glfw_dep = b.dependency("mach_glfw", .{ .target = target, .optimize = optimize });
     exe.root_module.addImport("mach-glfw", glfw_dep.module("mach-glfw"));
 
-    // use opengl zig code
+    // use opengl zig code - add as import (is there a way to do it as not a module if its in a different file?)
     exe.root_module.addImport("gl", b.createModule(.{ .root_source_file = .{ .path = "libs/gl41.zig" } }));
 
     // use C source file
@@ -30,6 +30,17 @@ pub fn build(b: *std.Build) !void {
     exe.root_module.addIncludePath(.{
         .path = "c_libs/",
     });
+
+    // exe.root_module.addCSourceFiles(.{
+    //     .root = .{ .path = "c_libs/" },
+    //     .files = &[_][]const u8{
+    //         "imgui.cpp",
+    //         "imgui_draw.cpp",
+    //         "imgui_tables.cpp",
+    //         "imgui_demo.cpp",
+    //         "imgui_tables.cpp",
+    //     },
+    // });
 
     // install artifact
     b.installArtifact(exe);

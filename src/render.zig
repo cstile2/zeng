@@ -21,7 +21,6 @@ pub fn draw_mesh(entity_mesh: zeng.Mesh, entity_transform: zeng.Transform, proje
     zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, zeng.gl.UNSIGNED_INT, null);
 }
 
-var time__: f32 = 0.0;
 pub fn draw_skinned_mesh(entity_mesh: zeng.SkinnedMesh, entity_transform: zeng.Transform, projection_matrix: [16]f32, inv_camera_matrix: [16]f32) void {
     zeng.gl.useProgram(entity_mesh.material.shader_program_GPU);
     zeng.gl.bindVertexArray(entity_mesh.vao_gpu);
@@ -35,8 +34,6 @@ pub fn draw_skinned_mesh(entity_mesh: zeng.SkinnedMesh, entity_transform: zeng.T
     const bone_matrices_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program_GPU, "bone_matrices");
     const final_matrix_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program_GPU, "final_matrix");
     var arr: [64]zeng.Transform = .{zeng.identity_matrix()} ** 64;
-    time__ += 0.001;
-    @memcpy(&arr[0], &zeng.axis_angle_to_matrix(.{ .x = 0.0, .y = 0.0, .z = 1.0 }, time__));
     zeng.gl.uniformMatrix4fv(bone_matrices_location, @intCast(entity_mesh.num_bones), zeng.gl.FALSE, @ptrCast(&arr));
     var clip_matrix = zeng.multiply_matrices(projection_matrix, zeng.multiply_matrices(inv_camera_matrix, entity_transform));
     zeng.gl.uniformMatrix4fv(final_matrix_location, 1, zeng.gl.FALSE, &clip_matrix);

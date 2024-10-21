@@ -1,14 +1,16 @@
 const std = @import("std");
+const utils = @import("utils.zig");
 pub const TypeInfo = struct {
     hash: u64,
     type_size: u64,
     type_alignment: u8,
     component_id: ComponentID,
 };
-pub const EntityDataLocation = struct {
+pub const entity_current_location = struct {
     row: u64,
     archetype_hash: u64,
 };
+
 const ComponentID = u64;
 const ArchetypeID = u64;
 const ECSError = error{
@@ -28,24 +30,20 @@ pub fn Resource(comptime T: type) type {
 pub fn CompileECS(comptime __TypeRegistry: anytype) type {
     return struct {
         // integrate custom type-checking
-        pub const __runtime_type_information = __GENERATE_TYPE_INFOS(__TypeRegistry);
+        pub var __runtime_type_information = __GENERATE_TYPE_INFOS(__TypeRegistry);
         fn __GENERATE_TYPE_INFOS(comptime TypeReg: anytype) [TypeReg.len]TypeInfo {
-            var g: usize = 0;
             var ret: [TypeReg.len]TypeInfo = undefined;
             var curr = 0;
             for (TypeReg) |type_| {
                 ret[curr] = TypeInfo{ .hash = GET_COMPONENT_HASH(type_), .type_size = @sizeOf(type_), .type_alignment = std.math.log2(@alignOf(type_)), .component_id = curr };
+                if (ret[curr].type_size != @sizeOf(type_) or (ret[curr].type_size > 1024)) @compileError("blubber!: " ++ std.fmt.comptimePrint("{} {}", .{ @sizeOf(type_), ret[curr].type_size }));
                 curr += 1;
-                ret[curr - 1].type_size = @sizeOf(type_);
-                if (@sizeOf(type_) == 16) {
-                    g = 1;
-                }
             }
             return ret;
         }
 
         // comptime checkers
-        fn GET_COMPONENT_HASH(comptime T: type) u64 {
+        pub fn GET_COMPONENT_HASH(comptime T: type) u64 {
             var curr: u64 = 1;
             for (__TypeRegistry) |type_| {
                 if (type_ == T) {
@@ -55,7 +53,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
             }
             @compileError("Component type is not valid: " ++ @typeName(T));
         }
-        fn GET_COMPONENT_ID(comptime T: type) u64 {
+        pub fn GET_COMPONENT_ID(comptime T: type) u64 {
             var curr: u64 = 0;
             for (__TypeRegistry) |type_| {
                 if (type_ == T) {
@@ -65,14 +63,14 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
             }
             @compileError("Component type is not valid: " ++ @typeName(T));
         }
-        fn GET_COMPONENT_COMBO_HASH(comptime tuple_type: type) u64 {
+        pub fn GET_COMPONENT_COMBO_HASH(comptime tuple_type: type) u64 {
             comptime var curr_hash = 0;
             inline for (std.meta.fields(tuple_type)) |f| {
                 curr_hash = curr_hash | comptime GET_COMPONENT_HASH(f.type);
             }
             return curr_hash;
         }
-        fn GET_TYPE_COMBO_HASH(comptime tuple: anytype) u64 {
+        pub fn GET_TYPE_COMBO_HASH(comptime tuple: anytype) u64 {
             comptime var curr_hash = 0;
             inline for (tuple) |field| {
                 curr_hash = curr_hash | comptime GET_COMPONENT_HASH(field);
@@ -80,76 +78,30 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
             return curr_hash;
         }
 
-        /// an object to easily let you iterate through all entities that have a specific set of components
-        pub const QueryIterator = struct {
-            _current_table: ?*ArchetypeTable,
-            _relevant_tables: std.AutoArrayHashMap(*ArchetypeTable, void),
-            _world: *World,
-            _tables_index: u64,
-            /// gathers info from ECS world (slow) and creates an iterator to be used for iteration (fast)
-            pub fn create(world: *World, comptime tuple_of_types: anytype) !QueryIterator {
-                const hash = comptime GET_TYPE_COMBO_HASH(tuple_of_types);
-                var ret: QueryIterator = undefined;
-                ret._relevant_tables = std.AutoArrayHashMap(*ArchetypeTable, void).init(world._allocator);
-                ret._world = world;
-                ret._tables_index = 0;
-                for (world._tables.values()) |*table| {
-                    if (table.archetype_hash & hash == hash) {
-                        ret._relevant_tables.put(table, void{}) catch unreachable;
-                    }
-                }
-                if (ret._relevant_tables.count() > 0) {
-                    ret._current_table = ret._relevant_tables.keys()[0];
-                } else {
-                    ret._current_table = null;
-                }
-                return ret;
-            }
-            /// must be called after the iterator will no longer be used, so that it's memory can be freed
-            pub fn destroy(self: *QueryIterator) !void {
-                self._relevant_tables.deinit();
-            }
-            /// finds the next group of entities with the correct components
-            pub fn next(this: *QueryIterator) bool {
-                if (this._relevant_tables.count() < 1) return false;
-                if (this._tables_index >= this._relevant_tables.keys().len) {
-                    return false;
-                }
-                this._current_table = this._relevant_tables.keys()[this._tables_index];
-                this._tables_index += 1;
-                return true;
-            }
-            /// faster than creating a new iterator if you need to do another pass on the same entities
-            pub fn reset(self: *QueryIterator) void {
-                self._tables_index = 0;
-                self._current_table = self._relevant_tables.keys()[0];
-            }
-            /// retrieves the array of a component type for a group of entities
-            pub fn field(this: *QueryIterator, T: type) ![]T {
-                var slice: []T = undefined;
-                const field_index = comptime GET_COMPONENT_ID(T);
-                slice.ptr = @alignCast(@ptrCast((this._current_table.?.storages.getEntry(field_index) orelse return ECSError.RequestFailed).value_ptr.array.ptr));
-                slice.len = this._current_table.?.count;
-                return slice;
-            }
-            /// retrieves specified components of a single entity, as either pointers or value copies
-            pub fn get(self: *QueryIterator, edl: EntityDataLocation, input: anytype) !void {
-                try self._world.get_component(edl, input);
-            }
-        };
+        pub const entity_id = u64;
+
+        pub const entity_locations = [16384]entity_current_location;
 
         pub fn Query(comptime types: anytype) type {
             return struct {
-                _relevant_tables: std.AutoArrayHashMap(ArchetypeID, *ArchetypeTable),
-                pub const my_types: @TypeOf(types) = types;
+                pub const TYPES: @TypeOf(types) = types;
+                _relevant_tables: std.AutoArrayHashMap(ArchetypeID, *const ArchetypeTable),
+                components: std.ArrayList([types.len]ComponentColumn), // make columns faster during iteration
 
                 pub fn create(world: *World, allocator: std.mem.Allocator) !@This() {
                     const minimum_set_hash = comptime GET_TYPE_COMBO_HASH(types);
                     var ret: @This() = undefined;
-                    ret._relevant_tables = std.AutoArrayHashMap(ArchetypeID, *ArchetypeTable).init(allocator);
+                    ret._relevant_tables = std.AutoArrayHashMap(ArchetypeID, *const ArchetypeTable).init(allocator);
+                    ret.components = std.ArrayList([types.len]ComponentColumn).initCapacity(allocator, types.len) catch unreachable;
                     for (world._tables.values()) |*table| {
                         if (table.archetype_hash & minimum_set_hash == minimum_set_hash) {
                             ret._relevant_tables.put(table.archetype_hash, table) catch unreachable;
+
+                            ret.components.append(undefined) catch unreachable;
+                            inline for (comptime 0..types.len) |i| {
+                                _ = table.entry_ptr(types[i], 0) catch unreachable;
+                                ret.components.items[ret.components.items.len - 1][i] = table.storages.get(comptime GET_COMPONENT_ID(types[i])).?;
+                            }
                         }
                     }
                     return ret;
@@ -157,13 +109,17 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                 pub fn destroy(self: *@This()) !void {
                     self._relevant_tables.deinit();
                 }
-                pub fn pointer_fetch(self: @This(), edl: EntityDataLocation, input: anytype) !void {
+                pub fn pointer_fetch(self: @This(), edl: entity_current_location, input: anytype) !void {
                     inline for (input) |*member| {
                         member.* = try self.get_component(edl, @TypeOf(member.*.*));
                     }
                 }
-                pub fn get_component(self: @This(), edl: EntityDataLocation, T: type) !*T {
+                pub fn get_component(self: @This(), edl: entity_current_location, T: type) !*T {
                     return try self._relevant_tables.getEntry(edl.archetype_hash).?.value_ptr.*.entry_ptr(T, edl.row);
+                }
+                pub fn get(self: @This(), ents: entity_locations, entity: entity_id, T: type) *T {
+                    const edl = ents[entity];
+                    return self._relevant_tables.getEntry(edl.archetype_hash).?.value_ptr.*.entry_ptr(T, edl.row) catch unreachable;
                 }
             };
         }
@@ -172,6 +128,8 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
         pub const World = struct {
             _tables: std.AutoArrayHashMap(ArchetypeID, ArchetypeTable),
             _allocator: std.mem.Allocator,
+            _count: entity_id = 0,
+            _public_ids: entity_locations = undefined,
             /// initializes the ECS world - required for use
             pub fn init(allocator: std.mem.Allocator) World {
                 return .{
@@ -185,34 +143,38 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                     try table.deinit();
                 }
                 self._tables.deinit();
-            }
-            /// internal helper function - retrieve an archetype table and create one if none exists
-            pub fn _get_create_table_by_id(self: *World, archetype_id: ArchetypeID, allocator: std.mem.Allocator) !*ArchetypeTable {
-                const table_get_put = try self._tables.getOrPut(archetype_id);
-                if (table_get_put.found_existing) return table_get_put.value_ptr;
-
-                const table = table_get_put.value_ptr;
-                table.init(128, allocator);
-                var curr_bit_field: u64 = 1;
-                var index: u64 = 0;
-                while (curr_bit_field != 0 and index < __runtime_type_information.len) {
-                    if (curr_bit_field & archetype_id != 0) {
-                        try table.add_component_type_id(allocator, __runtime_type_information[index]);
-                    }
-                    curr_bit_field = curr_bit_field << 1;
-                    index += 1;
-                }
-                return table;
+                // self._entity_to_location.deinit();
+                // self._location_to_entity.deinit();
             }
             /// spawn an entity with component values specified in a tuple
-            pub fn spawn(self: *World, tuple: anytype) !EntityDataLocation {
+            pub fn spawn(self: *World, tuple: anytype) !entity_id {
                 const tuple_hash = comptime GET_COMPONENT_COMBO_HASH(@TypeOf(tuple));
-                var table = try self._get_create_table_by_id(tuple_hash, self._allocator);
-                try table.insert_entity_tuple(tuple);
-                return EntityDataLocation{ .archetype_hash = table.archetype_hash, .row = table.count - 1 };
+                var table = try self._request_table(tuple_hash, self._allocator);
+                table.insert_components_comptime(tuple) catch unreachable;
+
+                self._public_ids[self._count] = entity_current_location{ .archetype_hash = table.archetype_hash, .row = table.count - 1 };
+                table.row_to_public_ids[table.count - 1] = self._count;
+                self._count += 1;
+
+                return self._count - 1;
+            }
+            /// spawn an entity with component values specified as types and pointers
+            pub fn spawn_runtime(self: *World, ts: []TypeInfo, ptrs: [][*]u8) !entity_id {
+                var tuple_hash = 0;
+                for (ts) |t| {
+                    tuple_hash = tuple_hash | t.hash;
+                }
+                var table = try self._request_table(tuple_hash, self._allocator);
+                table.insert_components_runtime(ts, ptrs) catch unreachable;
+
+                self._public_ids[self._count] = entity_current_location{ .archetype_hash = table.archetype_hash, .row = table.count - 1 };
+                table.row_to_public_ids[table.count - 1] = self._count;
+                self._count += 1;
+
+                return self._count - 1;
             }
             /// set the value of or add a new component of specified type and value
-            pub fn insert_component(self: *World, V: anytype, edl: *EntityDataLocation) !void {
+            pub fn insert(self: *World, V: anytype, edl: *entity_current_location) !void {
                 // calculate the new hash
                 const old_hash = edl.archetype_hash;
                 const new_hash = (comptime GET_COMPONENT_HASH(@TypeOf(V))) | old_hash;
@@ -225,49 +187,62 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
 
                 // copy values from old table to new table where the new entity is
                 const old_table = self._tables.getEntry(old_hash).?.value_ptr;
-                var new_table = try self._get_create_table_by_id(new_hash, self._allocator);
-                try new_table.insert_entity_copy(old_table, edl.row);
+                var new_table = try self._request_table(new_hash, self._allocator);
+                try new_table.insert_existing(old_table, edl.row);
+
+                const public_id = old_table.ptrs_to_public_ids[edl.row];
+                self._public_ids[public_id] = entity_current_location{ .archetype_hash = new_hash, .row = new_table.count - 1 };
+                new_table.row_to_public_ids[new_table.count - 1] = public_id;
 
                 // set new value from tuple literal to where the new entity is
                 (try new_table.entry_ptr(@TypeOf(V), new_table.count - 1)).* = V;
 
                 // swap remove entity from old table
-                try old_table.swap_remove_entity(edl.row);
+                try old_table.swap_remove_entity(edl.row, self);
 
                 // update edl
                 edl.row = new_table.count - 1;
                 edl.archetype_hash = new_hash;
             }
-            /// retrieve a specific component or set of components as pointers or copies
-            pub fn get_component(self: *World, edl: EntityDataLocation, input: anytype) !void {
-                switch (@typeInfo(@TypeOf(input))) {
-                    .Struct => |stru| {
-                        if (stru.is_tuple) {
-                            inline for (&input) |member| {
-                                if (@typeInfo(@TypeOf(member.*)) == .Pointer) {
-                                    member.* = try (self._tables.getEntry(edl.archetype_hash) orelse return ECSError.RequestFailed).value_ptr.entry_ptr(std.meta.Child(@TypeOf(member.*)), edl.row);
-                                } else {
-                                    member.* = (try (self._tables.getEntry(edl.archetype_hash) orelse return ECSError.RequestFailed).value_ptr.entry_ptr(@TypeOf(member.*), edl.row)).*;
-                                }
-                            }
-                        } else {
-                            @compileError("Invalid parameter: Must be a (*)struct, or a tuple of (*)structs");
-                        }
-                    },
-                    .Pointer => {
-                        if (@typeInfo(@TypeOf(input.*)) == .Pointer) {
-                            input.* = try (self._tables.getEntry(edl.archetype_hash) orelse return ECSError.RequestFailed).value_ptr.entry_ptr(std.meta.Child(@TypeOf(input.*)), edl.row);
-                        } else {
-                            input.* = (try (self._tables.getEntry(edl.archetype_hash) orelse return ECSError.RequestFailed).value_ptr.entry_ptr(@TypeOf(input.*), edl.row)).*;
-                        }
-                    },
-                    else => {
-                        @compileError("Invalid parameter: Must be a (*)struct, or a tuple of (*)structs");
-                    },
+            /// set the value of or add a new component of specified type and value - runtime
+            pub fn insert_runtime(self: *World, t: TypeInfo, ptr: [*]u8, edl: entity_current_location) !void {
+                const old_edl = entity_current_location{ .row = edl.row, .archetype_hash = edl.archetype_hash };
+
+                // calculate the new hash
+                const old_hash = old_edl.archetype_hash;
+                const new_hash = t.hash | old_hash;
+
+                // test if we stay in same table and exit early
+                if (new_hash == old_hash) {
+                    @memcpy(try self._tables.getEntry(old_hash).?.value_ptr.entry_ptr_runtime(t.component_id, old_edl.row), ptr[0..t.type_size]);
+                    return;
                 }
+
+                // copy values from old table to new table where the new entity is
+                const old_table = self._tables.getEntry(old_hash).?.value_ptr;
+                var new_table = try self._request_table(new_hash, self._allocator);
+                try new_table.insert_existing(old_table, old_edl.row);
+
+                const public_id = old_table.row_to_public_ids[old_edl.row];
+                self._public_ids[public_id] = entity_current_location{ .archetype_hash = new_hash, .row = new_table.count - 1 };
+                new_table.row_to_public_ids[new_table.count - 1] = public_id;
+
+                // set new value from tuple literal to where the new entity is
+                @memcpy(try new_table.entry_ptr_runtime(t.component_id, new_table.count - 1), ptr[0..t.type_size]);
+
+                // swap remove entity from old table
+                try old_table.swap_remove_entity(self, old_edl.row);
+            }
+            /// retrieve references to components of an entity
+            pub fn get(self: *World, edl: entity_current_location, Ts: anytype) !utils.tuple_of_ptrs(Ts) {
+                var ret: utils.tuple_of_ptrs(Ts) = undefined;
+                inline for (&ret) |*member| {
+                    member.* = try (self._tables.getEntry(edl.archetype_hash) orelse return ECSError.RequestFailed).value_ptr.entry_ptr(@TypeOf(member.*.*), edl.row);
+                }
+                return ret;
             }
             /// removes a component if that component type is on the specified entity
-            pub fn remove_component(self: *World, T: type, edl: *EntityDataLocation) !void {
+            pub fn remove(self: *World, T: type, edl: *entity_current_location) !void {
                 // calculate the new hash
                 const old_hash = edl.archetype_hash;
                 const new_hash = ~(comptime GET_COMPONENT_HASH(T)) & old_hash;
@@ -277,15 +252,42 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
 
                 // copy values from old table to new table where the new entity is
                 const old_table = self._tables.getEntry(old_hash).?.value_ptr;
-                var new_table = try self._get_create_table_by_id(new_hash, self._allocator);
-                try new_table.insert_entity_copy(old_table, edl.row);
+                var new_table = try self._request_table(new_hash, self._allocator);
+                try new_table.insert_existing(old_table, edl.row);
+
+                const public_id = old_table.ptrs_to_public_ids[edl.row];
+                self._public_ids[public_id] = entity_current_location{ .archetype_hash = new_hash, .row = new_table.count - 1 };
+                new_table.row_to_public_ids[new_table.count - 1] = public_id;
 
                 // swap remove entity from old table
-                try old_table.swap_remove_entity(edl.row);
+                try old_table.swap_remove_entity(edl.row, self);
 
                 // update edl
                 edl.row = new_table.count - 1;
                 edl.archetype_hash = new_hash;
+            }
+            /// internal helper function - retrieve an archetype table and create one if none exists
+            pub fn _request_table(self: *World, archetype_id: ArchetypeID, allocator: std.mem.Allocator) !*ArchetypeTable {
+                const table_get_put = try self._tables.getOrPut(archetype_id);
+                if (table_get_put.found_existing) {
+                    // std.debug.print("table already exists: {b}\n", .{archetype_id});
+                    return table_get_put.value_ptr;
+                }
+                // std.debug.print("creating new table: {b}\n", .{archetype_id});
+                const table = table_get_put.value_ptr;
+
+                table.init(128, allocator);
+                var curr_bit_field: u64 = 1;
+                var index: u64 = 0;
+                while (curr_bit_field != 0 and index < __runtime_type_information.len) {
+                    if (curr_bit_field & archetype_id != 0) {
+                        try table.construct_column(allocator, __runtime_type_information[index]);
+                    }
+                    curr_bit_field = curr_bit_field << 1;
+                    index += 1;
+                }
+                // std.debug.print("newly created table hash: {b}\n", .{table.archetype_hash});
+                return table;
             }
             /// print world information
             pub fn _print(self: World) void {
@@ -317,46 +319,47 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
         pub const ArchetypeTable = struct {
             archetype_hash: u64 = 0,
             storages: std.AutoArrayHashMap(ComponentID, ComponentColumn),
+            row_to_public_ids: []entity_id,
             capacity: u64 = 0,
             count: u64 = 0,
-            next: ?*ArchetypeTable = null,
             allocator: std.mem.Allocator,
             pub fn init(self: *ArchetypeTable, capacity: u64, allocator: std.mem.Allocator) void {
                 self.allocator = allocator;
                 self.archetype_hash = 0;
                 self.storages = std.AutoArrayHashMap(ComponentID, ComponentColumn).init(allocator);
+                self.row_to_public_ids = allocator.alloc(entity_id, capacity) catch unreachable;
                 self.capacity = capacity;
                 self.count = 0;
-                self.next = null;
             }
             pub fn deinit(self: *ArchetypeTable) !void {
                 for (self.storages.values()) |*component_storage| {
                     try component_storage.deinit(self.allocator);
                 }
                 self.storages.deinit();
+                self.allocator.free(self.row_to_public_ids);
             }
-            pub fn add_component_type_id(self: *ArchetypeTable, allocator: std.mem.Allocator, T_run: TypeInfo) !void {
+            pub fn construct_column(self: *ArchetypeTable, allocator: std.mem.Allocator, T_run: TypeInfo) !void {
                 const get_put = try self.storages.getOrPut(T_run.component_id);
                 if (get_put.found_existing) return ECSError.RedundantOperation;
                 try get_put.value_ptr.init(T_run, self.capacity, allocator);
                 self.archetype_hash = self.archetype_hash | T_run.hash;
             }
-            pub fn _maybe_double_capacity(self: *ArchetypeTable) !void {
-                if (self.count >= self.capacity) {
-                    for (self.storages.values()) |*component_storage| {
-                        try component_storage.double_size(self.allocator);
-                    }
-                    self.capacity *= 2;
-                }
-            }
-            pub fn insert_entity_tuple(self: *ArchetypeTable, tuple: anytype) !void {
+            pub fn insert_components_comptime(self: *ArchetypeTable, tuple: anytype) !void {
                 try self._maybe_double_capacity();
                 inline for (tuple) |field| {
                     (try (self.storages.getEntry(comptime GET_COMPONENT_ID(@TypeOf(field))) orelse return ECSError.RequestFailed).value_ptr.entry_ptr(self.count, @TypeOf(field))).* = field;
                 }
                 self.count += 1;
             }
-            pub fn insert_entity_copy(self: *ArchetypeTable, old_table: *ArchetypeTable, old_row: u64) !void {
+            pub fn insert_components_runtime(self: *ArchetypeTable, ts: []TypeInfo, ptrs: [][*]u8) !void {
+                try self._maybe_double_capacity();
+                for (ts, ptrs) |t, ptr| {
+                    _ = t; // autofix
+                    _ = ptr; // autofix
+                    // (try (self.storages.getEntry(t.component_id) orelse return ECSError.RequestFailed).value_ptr.entry_ptr_runtime().* = field;
+                }
+            }
+            pub fn insert_existing(self: *ArchetypeTable, old_table: *ArchetypeTable, old_row: u64) !void {
                 try self._maybe_double_capacity();
                 for (self.storages.values()) |*new_storage| {
                     for (old_table.storages.values()) |*old_storage| {
@@ -369,10 +372,13 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                 }
                 self.count += 1;
             }
-            pub fn entry_ptr(self: *ArchetypeTable, T: type, row: u64) !*T {
+            pub fn entry_ptr(self: *const ArchetypeTable, T: type, row: u64) !*T {
                 return (try self.storages.getEntry(comptime GET_COMPONENT_ID(T)).?.value_ptr.entry_ptr(row, T));
             }
-            pub fn swap_remove_entity(self: *ArchetypeTable, row: u64) !void {
+            pub fn entry_ptr_runtime(self: *ArchetypeTable, id: ComponentID, row: u64) ![*]u8 {
+                return (try self.storages.getEntry(id).?.value_ptr.entry_ptr_runtime(row));
+            }
+            pub fn swap_remove_entity(self: *ArchetypeTable, world: *World, row: u64) !void {
                 if (row >= self.count) {
                     return ECSError.OutOfBounds;
                 }
@@ -385,7 +391,21 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                     const upper = try component_storage.entry_bytes(row);
                     @memcpy(upper, bottom);
                 }
+
+                const public_id = self.row_to_public_ids[self.count - 1];
+                world._public_ids[public_id] = entity_current_location{ .archetype_hash = self.archetype_hash, .row = row };
+                self.row_to_public_ids[row] = public_id;
+
                 self.count -= 1;
+            }
+            pub fn _maybe_double_capacity(self: *ArchetypeTable) !void {
+                if (self.count >= self.capacity) {
+                    for (self.storages.values()) |*component_storage| {
+                        try component_storage.double_capacity(self.allocator);
+                    }
+                    self.row_to_public_ids = self.allocator.realloc(self.row_to_public_ids, self.capacity * 2) catch unreachable;
+                    self.capacity *= 2;
+                }
             }
         };
 
@@ -404,7 +424,7 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                 if (self.type_info.type_size == 0) return;
                 allocator.vtable.free(allocator.ptr, self.array, self.type_info.type_alignment, @returnAddress());
             }
-            pub fn double_size(self: *ComponentColumn, allocator: std.mem.Allocator) !void {
+            pub fn double_capacity(self: *ComponentColumn, allocator: std.mem.Allocator) !void {
                 self.capacity *= 2;
                 if (self.type_info.type_size == 0) return;
                 const temp = (allocator.vtable.alloc(allocator.ptr, self.type_info.type_size * self.capacity * 2, self.type_info.type_alignment, @returnAddress()) orelse return ECSError.RequestFailed)[0 .. self.type_info.type_size * self.capacity * 2];
@@ -419,10 +439,13 @@ pub fn CompileECS(comptime __TypeRegistry: anytype) type {
                 return self.array[row * self.type_info.type_size .. (row + 1) * self.type_info.type_size];
             }
             pub fn entry_ptr(self: *ComponentColumn, row: u64, T: type) !*T {
+                return @as(*T, @ptrFromInt(@intFromPtr(self.array.ptr) + row * self.type_info.type_size));
+            }
+            pub fn entry_ptr_runtime(self: *ComponentColumn, row: u64) ![*]u8 {
                 if (row >= self.capacity) {
                     return ECSError.OutOfBounds;
                 }
-                return @as(*T, @ptrFromInt(@intFromPtr(self.array.ptr) + row * self.type_info.type_size));
+                return @ptrFromInt(@intFromPtr(self.array.ptr) + row * self.type_info.type_size);
             }
         };
     };

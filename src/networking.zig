@@ -32,7 +32,7 @@ fn WINDOWS_set_socket_non_blocking(sock: std.os.socket_t) !void {
 }
 
 // prepare a socket and address
-pub fn make_udp_sock_and_address(address: anytype, port: anytype, comptime nonblocking: bool) !SocketAndAddress {
+pub fn make_udp_sock_and_address(address: anytype, port: anytype, nonblocking: bool) !SocketAndAddress {
     const addr = try std.net.Address.parseIp(address, port);
     const sock = try std.os.socket(std.os.AF.INET, std.os.SOCK.DGRAM, std.os.IPPROTO.UDP);
     if (nonblocking)
@@ -90,6 +90,20 @@ pub fn network_recieve_all(socket: std.os.socket_t, world: *ECS.World) !void {
             break :get_messages_loop;
         }
     }
+}
+
+pub fn do_setup(is_server: bool) !SocketAndAddress {
+    var socket_and_address: SocketAndAddress = undefined;
+    if (is_server) {
+        socket_and_address = try zeng.networking.make_udp_sock_and_address("127.0.0.1", 12345, true);
+        try zeng.networking.bind_socket_and_address(socket_and_address);
+    } else {
+        socket_and_address = try zeng.networking.make_udp_sock_and_address("192.168.1.104", 12345, true);
+    }
+    return socket_and_address;
+}
+pub fn undo_setup(socket_and_address: SocketAndAddress) void {
+    std.os.close(socket_and_address.socket);
 }
 
 // for reference

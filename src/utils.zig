@@ -1,28 +1,6 @@
 const std = @import("std");
 
-pub fn TUP(comptime types: anytype) type {
-    comptime var new_fields2: [types.len]std.builtin.Type.StructField = undefined;
-    comptime for (types, 0..) |_type, i| {
-        new_fields2[i] = .{
-            .type = _type,
-            .name = std.fmt.comptimePrint("{d}", .{i}),
-            .default_value = null,
-            .is_comptime = false,
-            .alignment = @alignOf(_type),
-        };
-    };
-    const payload_type2 = @Type(.{
-        .Struct = .{
-            .layout = .Auto,
-            .fields = &new_fields2,
-            .decls = &.{},
-            .is_tuple = true,
-        },
-    });
-    return payload_type2;
-}
-
-pub fn TYPETUP(comptime t: std.builtin.Type) [t.Fn.params.len]type {
+pub fn fn_parameter_types(comptime t: std.builtin.Type) [t.Fn.params.len]type {
     var types: [t.Fn.params.len]type = undefined;
     for (0..types.len) |i| {
         types[i] = t.Fn.params[i].type.?;
@@ -30,14 +8,64 @@ pub fn TYPETUP(comptime t: std.builtin.Type) [t.Fn.params.len]type {
     return types;
 }
 
+pub fn tuple_of_types(comptime types: anytype) type {
+    comptime var struct_fields: [types.len]std.builtin.Type.StructField = undefined;
+    comptime for (types, 0..) |_type, i| {
+        struct_fields[i] = .{
+            .type = _type,
+            .name = std.fmt.comptimePrint("{d}", .{i}),
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = @alignOf(_type),
+        };
+    };
+    const payload_type = @Type(.{
+        .Struct = .{
+            .layout = .Auto,
+            .fields = &struct_fields,
+            .decls = &.{},
+            .is_tuple = true,
+        },
+    });
+    return payload_type;
+}
+
+pub fn tuple_of_ptrs(comptime types: anytype) type {
+    comptime var struct_fields: [types.len]std.builtin.Type.StructField = undefined;
+    comptime for (types, 0..) |_type, i| {
+        struct_fields[i] = .{
+            .type = *_type,
+            .name = std.fmt.comptimePrint("{d}", .{i}),
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = @alignOf(_type),
+        };
+    };
+    const payload_type = @Type(.{
+        .Struct = .{
+            .layout = .Auto,
+            .fields = &struct_fields,
+            .decls = &.{},
+            .is_tuple = true,
+        },
+    });
+    return payload_type;
+}
+
 pub fn type_id(comptime T: type) usize {
-    var a: u8 = 0;
-    comptime var c: u8 = 0;
+    return @intFromPtr(&@typeName(T));
+}
 
-    inline for (@typeName(T)) |char| {
-        a = a ^ char ^ c;
-        c += 1;
+var type_registry: std.StringArrayHashMap(u32) = undefined;
+var type_registry_next_id: u32 = 0;
+pub fn warmup_registry(allocator: std.mem.Allocator) void {
+    type_registry = std.StringArrayHashMap(u32).init(allocator);
+}
+pub fn runtime_type_id(comptime T: type) !u32 {
+    const result = try type_registry.getOrPut(@typeName(T));
+    if (result.found_existing) {} else {
+        result.value_ptr.* = type_registry_next_id;
+        type_registry_next_id += 1;
     }
-
-    return @intCast(a);
+    return result.value_ptr.*;
 }
