@@ -43,7 +43,7 @@ pub fn separate_text(text: []const u8, comptime delimiter: u8, allocator: std.me
     return ret[0..ret_count];
 }
 
-pub fn instantiate_scene(world: *ECS.World, filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture_GPU: u32) ECS.entity_id {
+pub fn instantiate_scene(world: *ECS.world, filepath: anytype, allocator: std.mem.Allocator, shader_program_GPU: u32, texture_GPU: u32) ECS.entity_id {
     var ret: ECS.entity_id = undefined;
 
     // open file from filepath > close after done
@@ -59,16 +59,6 @@ pub fn instantiate_scene(world: *ECS.World, filepath: anytype, allocator: std.me
     var index: u8 = 0;
     while (curr_byte < data_bytes.len) {
         defer index += 1;
-
-        // create vao mesh
-        var VAO: u32 = undefined;
-        zeng.gl.genVertexArrays(1, &VAO);
-        zeng.gl.bindVertexArray(VAO);
-        defer {
-            zeng.gl.bindVertexArray(0);
-            zeng.gl.bindBuffer(zeng.gl.ELEMENT_ARRAY_BUFFER, 0);
-            zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, 0);
-        }
 
         // read current place as a u32 > increment current byte by size of this u32 (4 bytes)
         const size_name: u32 = @as(*u32, @alignCast(@ptrCast(data_bytes[curr_byte .. curr_byte + 4]))).*;
@@ -108,7 +98,12 @@ pub fn instantiate_scene(world: *ECS.World, filepath: anytype, allocator: std.me
         // read the default rotation quaternion of this mesh node
         const transform_rotation_data = @as(*[4]f32, @alignCast(@ptrCast(data_bytes[curr_byte .. curr_byte + 4 * 4])));
         curr_byte = curr_byte + 4 * 4;
-        const transform_rotation = zeng.Quat{ .x = transform_rotation_data[0], .y = transform_rotation_data[1], .z = transform_rotation_data[2], .w = transform_rotation_data[3] };
+        const transform_rotation = zeng.quat{ .x = transform_rotation_data[0], .y = transform_rotation_data[1], .z = transform_rotation_data[2], .w = transform_rotation_data[3] };
+
+        // create vao mesh
+        var VAO: u32 = undefined;
+        zeng.gl.genVertexArrays(1, &VAO);
+        zeng.gl.bindVertexArray(VAO);
 
         // create vertex buffer object (holds vertex data) > bind it > store the data from vertices array
         var VBO: u32 = undefined;
@@ -132,15 +127,15 @@ pub fn instantiate_scene(world: *ECS.World, filepath: anytype, allocator: std.me
         zeng.gl.enableVertexAttribArray(2);
 
         // create a transformation matrix using the position + rotation read from the file
-        var transform: [16]f32 = zeng.identity_matrix();
-        transform = zeng.multiply_matrices(zeng.quaternion_to_matrix(transform_rotation), transform);
+        var transform: [16]f32 = zeng.mat_identity;
+        transform = zeng.mat_mult(zeng.quat_to_mat(transform_rotation), transform);
         transform[12..15].* = transform_position.*;
 
         ret = world.spawn(.{
-            zeng.Mesh{
+            zeng.mesh{
                 .vao_gpu = VAO,
                 .indices_length = @divTrunc(@as(i32, @intCast(sizeb)), 4),
-                .material = zeng.Material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture_GPU },
+                .material = zeng.material{ .shader_program_GPU = shader_program_GPU, .texture_GPU = texture_GPU },
             },
             transform,
         }) catch unreachable;
@@ -194,25 +189,29 @@ pub fn load_shader(allocator: std.mem.Allocator, vertex_path: anytype, fragment_
     return ret;
 }
 
-pub fn load_texture(path: anytype) u32 {
+pub fn load_texture(path: anytype, srgb: bool, flip_y: bool) u32 {
+    zeng.c.stbi_set_flip_vertically_on_load(@intFromBool(flip_y));
+
     var ret: u32 = undefined;
 
     // load image texture via stb_image library
     var width: i32 = undefined;
     var height: i32 = undefined;
     var num_channels: i32 = undefined;
-    const image_data: [*c]u8 = zeng.c.stbi_load(path, &width, &height, &num_channels, 3);
+    const image_data: [*c]u8 = zeng.c.stbi_load(@ptrCast(path), &width, &height, &num_channels, 3);
+    std.debug.print("{s} {} {} {}\n", .{ path, width, height, num_channels });
     defer zeng.c.stbi_image_free(image_data);
 
     // create texture location > bind > set filtering > put the array data into the texture > generate mips
     zeng.gl.genTextures(1, &ret);
     zeng.gl.bindTexture(zeng.gl.TEXTURE_2D, ret);
-    defer zeng.gl.bindTexture(zeng.gl.TEXTURE_2D, 0);
+
     zeng.gl.texParameteri(zeng.gl.TEXTURE_2D, zeng.gl.TEXTURE_MIN_FILTER, zeng.gl.NEAREST);
     zeng.gl.texParameteri(zeng.gl.TEXTURE_2D, zeng.gl.TEXTURE_MAG_FILTER, zeng.gl.NEAREST);
     //Engine.gl.pixelStorei(Engine.gl.UNPACK_ALIGNMENT, 1);
-    zeng.gl.texImage2D(zeng.gl.TEXTURE_2D, 0, zeng.gl.RGB, width, height, 0, zeng.gl.RGB, zeng.gl.UNSIGNED_BYTE, image_data);
+    zeng.gl.texImage2D(zeng.gl.TEXTURE_2D, 0, if (srgb) zeng.gl.SRGB else zeng.gl.RGB, width, height, 0, zeng.gl.RGB, zeng.gl.UNSIGNED_BYTE, image_data);
     zeng.gl.generateMipmap(zeng.gl.TEXTURE_2D);
+    zeng.opengl_log_error() catch unreachable;
 
     return ret;
 }
@@ -286,511 +285,7 @@ test "Serialize" {
     try std.testing.expectEqual(Gr{}, g);
 }
 
-// GLTF Parsing Code Below:
-
-const ARRAY_OF_ZEROS = [4]i32{ 0, 0, 0, 0 };
-
-const StringLiteral = struct {
-    string: []const u8,
-};
-const IntConstant = struct {
-    value: i128,
-};
-const FloatConstant = struct {
-    value: f64,
-};
-const TokenTag = enum {
-    l_paren,
-    r_paren,
-    l_brace,
-    r_brace,
-    l_square,
-    r_square,
-
-    string_literal,
-    int_constant,
-    float_constant,
-    semicolon,
-
-    colon,
-    comma,
-
-    _true,
-};
-const Token = union(TokenTag) {
-    // misc
-    l_paren: void,
-    r_paren: void,
-    l_brace: void,
-    r_brace: void,
-    l_square: void,
-    r_square: void,
-
-    string_literal: StringLiteral,
-    int_constant: IntConstant,
-    float_constant: FloatConstant,
-
-    semicolon: void,
-    colon: void,
-    comma: void,
-
-    _true,
-};
-
-const ParseError = error{
-    parse_error,
-};
-const Primitive = struct {
-    attributes: std.ArrayList(Attribute),
-};
-const BufferView = struct {
-    length: u32,
-    offset: u32,
-};
-const Sampler = struct {
-    // a sampler simply references the input timestamps and the corresponding output values (like quaternion or vec3)
-    input: u32,
-    output: u32,
-};
-const Channel = struct {
-    // a channel simply declares a link between a node and its animation data for a single property (like rotation or translation)
-    sampler: u32,
-    target_node: u32,
-};
-const Animation = struct {
-    // raw animation tracks:
-    samplers: std.ArrayList(Sampler),
-
-    // information linking animation tracks to specific nodes (integers in gltf index space)
-    channels: std.ArrayList(Channel),
-};
-const AttributeType = enum {
-    POSITION,
-    NORMAL,
-    TEXCOORD_0,
-    COLOR_0,
-    JOINTS_0,
-    WEIGHTS_0,
-    indices,
-};
-const Attribute = struct {
-    // an attribute is a piece of data that is stored in every vertex of a mesh
-    _type: AttributeType,
-    index: u32,
-};
-
-pub var nodes: [1024]u32 = undefined;
-pub var nodes_len: u32 = 0;
-pub var meshes: [1024]Primitive = undefined;
-pub var meshes_len: u32 = 0;
-pub var accessors: [1024]u32 = undefined;
-pub var accessors_len: u32 = 0;
-pub var buffer_views: [1024]BufferView = undefined;
-pub var buffer_views_len: u32 = 0;
-
-pub var animations: [1024]Animation = undefined;
-pub var animations_len: usize = 0;
-
-var global_json_hierarchy: std.ArrayList([]const u8) = undefined;
-fn hierarchy_string(buff: [*]u8) []u8 {
-    var curr: usize = 0;
-    for (global_json_hierarchy.items) |item| {
-        buff[curr] = '.';
-        curr += 1;
-        @memcpy(buff[curr .. curr + item.len], item);
-        curr += item.len;
-    }
-    return buff[0..curr];
-}
-fn backup(slice: []u8, count: usize) []u8 {
-    return slice[slice.len - count ..];
-}
-fn context_is(str: anytype) bool {
-    var returnable_path_buffer: [1028]u8 = undefined;
-    const p = hierarchy_string(&returnable_path_buffer);
-    if (str.len > p.len) return false;
-    return std.mem.eql(u8, backup(p, str.len), str);
-}
-
-pub fn contains(char: u8, string: []const u8) bool {
-    for (string) |s_char| {
-        if (s_char == char) {
-            return true;
-        }
-    }
-    return false;
-}
-pub fn lexer(bytes: []const u8, tokens: *std.ArrayList(Token)) !void {
-    var char_number: u32 = 0;
-    var curr: u64 = 0;
-    while (curr < bytes.len) {
-        defer curr += 1;
-        defer char_number += 1;
-
-        if (bytes[curr] == '\n') {
-            char_number = 0;
-        } else if (bytes[curr] == ';') {
-            try tokens.append(Token{ .semicolon = void{} });
-        } else if (bytes[curr] == ',') {
-            try tokens.append(Token{ .comma = void{} });
-        } else if (bytes[curr] == ':') {
-            try tokens.append(Token{ .colon = void{} });
-        } else if (bytes[curr] == '{') {
-            try tokens.append(Token{ .l_brace = void{} });
-        } else if (bytes[curr] == '}') {
-            try tokens.append(Token{ .r_brace = void{} });
-        } else if (bytes[curr] == '(') {
-            try tokens.append(Token{ .l_paren = void{} });
-        } else if (bytes[curr] == ')') {
-            try tokens.append(Token{ .r_paren = void{} });
-        } else if (bytes[curr] == '[') {
-            try tokens.append(Token{ .l_square = void{} });
-        } else if (bytes[curr] == ']') {
-            try tokens.append(Token{ .r_square = void{} });
-        } else if (bytes[curr] == '"') {
-            const start = curr;
-            curr += 1;
-            while (curr < bytes.len and bytes[curr] != '"') {
-                curr += 1;
-            }
-            try tokens.append(Token{ .string_literal = StringLiteral{ .string = bytes[start + 1 .. curr] } });
-        } else if (contains(bytes[curr], "-0123456789")) {
-            if (bytes[curr] == '-') {}
-            const start = curr;
-            var is_float = false;
-            var is_scientific = false;
-
-            curr += 1;
-            while (contains(bytes[curr], "0123456789")) {
-                curr += 1;
-            }
-            if (bytes[curr] == '.') {
-                is_float = true;
-                curr += 1;
-                while (contains(bytes[curr], "0123456789")) {
-                    curr += 1;
-                }
-                if (bytes[curr] == 'e') {
-                    is_scientific = true;
-                    curr += 1;
-                    if (bytes[curr] == '-') {
-                        curr += 1;
-                    }
-                }
-                while (contains(bytes[curr], "0123456789")) {
-                    curr += 1;
-                }
-            }
-
-            if (is_float) {
-                if (!is_scientific) {
-                    try tokens.append(Token{ .float_constant = FloatConstant{ .value = std.fmt.parseFloat(f64, bytes[start..curr]) catch unreachable } });
-                } else {
-                    try tokens.append(Token{ .float_constant = FloatConstant{ .value = 0.0 } });
-                }
-                // std.debug.print("float value: {}\n", .{tokens.getLast().float_constant.value});
-            } else {
-                try tokens.append(Token{ .int_constant = IntConstant{ .value = std.fmt.parseInt(i128, bytes[start..curr], 10) catch unreachable } });
-                // std.debug.print("int value: {}\n", .{tokens.getLast().int_constant.value});
-            }
-            curr -= 1;
-        } else if (contains(bytes[curr], "abcdefghijklmnopqrstuvwxyz")) {
-            const start = curr;
-            curr += 1;
-            while (curr < bytes.len and contains(bytes[curr], "abcdefghijklmnopqrstuvwxyz")) {
-                curr += 1;
-            }
-            if (std.mem.eql(u8, bytes[start..curr], "true")) {
-                try tokens.append(Token{ ._true = void{} });
-            }
-            curr -= 1;
-        }
-    }
-}
-pub fn parse_gltf(bytes: []u8, allocator: std.mem.Allocator) !void {
-    nodes_len = 0;
-    meshes_len = 0;
-    accessors_len = 0;
-    buffer_views_len = 0;
-
-    animations_len = 0;
-
-    global_json_hierarchy = std.ArrayList([]const u8).init(allocator);
-    defer global_json_hierarchy.deinit();
-
-    var tokens = std.ArrayList(Token).init(allocator);
-    defer tokens.deinit();
-    try lexer(bytes, &tokens);
-
-    if (tokens.items[0] != .l_brace) unreachable;
-
-    var curr: u64 = 1;
-    const a = gltf_leaf_list(allocator, tokens.items, &curr);
-    if (a == null) unreachable;
-
-    if (tokens.items[curr] != .r_brace) unreachable;
-}
-var current_primitive: *Primitive = undefined;
-var current_buffer_view: *BufferView = undefined;
-var current_animation: *Animation = undefined;
-var current_channel: *Channel = undefined;
-var current_sampler: *Sampler = undefined;
-fn match(tokens: []Token, tag: TokenTag, curr: *u64) bool {
-    if (curr.* >= tokens.len)
-        return false;
-    defer curr.* += 1;
-    if (tokens[curr.*] == tag) {
-        return true;
-    }
-    return false;
-}
-pub fn gltf_leaf_list(allocator: std.mem.Allocator, tokens: []Token, curr: *u64) ?u64 {
-    var temp = curr.*;
-    while (true) {
-        if (gltf_leaf(allocator, tokens, curr) == null) {
-            break;
-        }
-        temp = curr.*;
-        if (!match(tokens, .comma, curr)) {
-            break;
-        }
-    }
-    curr.* = temp;
-    return curr.*;
-}
-pub fn gltf_leaf(allocator: std.mem.Allocator, tokens: []Token, curr: *u64) ?u64 {
-    const temp = curr.*;
-    if (match(tokens, .string_literal, curr)) {
-        const str = tokens[curr.* - 1].string_literal.string;
-
-        if (tokens[curr.*] == .colon) {
-            curr.* += 1;
-
-            global_json_hierarchy.append(str) catch unreachable;
-            defer _ = global_json_hierarchy.pop();
-            if (context_is("attributes")) {
-                meshes[meshes_len] = .{ .attributes = std.ArrayList(Attribute).init(allocator) };
-                current_primitive = &meshes[meshes_len];
-                meshes_len += 1;
-            }
-
-            const result = gltf_leaf(allocator, tokens, curr);
-            return result;
-        } else {
-            return curr.*;
-        }
-    }
-    curr.* = temp;
-
-    if (match(tokens, .int_constant, curr)) {
-        if (context_is("meshes.[.primitives.[.attributes.POSITION")) {
-            current_primitive.attributes.append(.{ ._type = .POSITION, .index = @intCast(tokens[curr.* - 1].int_constant.value) }) catch unreachable;
-        } else if (context_is("meshes.[.primitives.[.attributes.NORMAL")) {
-            current_primitive.attributes.append(.{ ._type = .NORMAL, .index = @intCast(tokens[curr.* - 1].int_constant.value) }) catch unreachable;
-        } else if (context_is("meshes.[.primitives.[.attributes.TEXCOORD_0")) {
-            current_primitive.attributes.append(.{ ._type = .TEXCOORD_0, .index = @intCast(tokens[curr.* - 1].int_constant.value) }) catch unreachable;
-        } else if (context_is("meshes.[.primitives.[.indices")) {
-            current_primitive.attributes.append(.{ ._type = .indices, .index = @intCast(tokens[curr.* - 1].int_constant.value) }) catch unreachable;
-        } else if (context_is("nodes.[.mesh")) {
-            nodes[nodes_len] = @intCast(tokens[curr.* - 1].int_constant.value);
-            nodes_len += 1;
-        } else if (context_is("accessors.[.bufferView")) {
-            accessors[accessors_len] = @intCast(tokens[curr.* - 1].int_constant.value);
-            accessors_len += 1;
-        } else if (context_is("bufferViews.[.byteLength")) {
-            current_buffer_view.length = @intCast(tokens[curr.* - 1].int_constant.value);
-        } else if (context_is("bufferViews.[.byteOffset")) {
-            current_buffer_view.offset = @intCast(tokens[curr.* - 1].int_constant.value);
-        } else if (context_is("sampler")) {
-            current_channel.sampler = @intCast(tokens[curr.* - 1].int_constant.value);
-        } else if (context_is("target.node")) {
-            current_channel.target_node = @intCast(tokens[curr.* - 1].int_constant.value);
-        } else if (context_is("samplers.[.input")) { // index of an accessor containing keyframe timestamps
-            current_sampler.input = @intCast(tokens[curr.* - 1].int_constant.value);
-        } else if (context_is("samplers.[.output")) { // index of an accessor, containing keyframe output values
-            current_sampler.output = @intCast(tokens[curr.* - 1].int_constant.value);
-        }
-
-        return curr.*;
-    }
-    curr.* = temp;
-
-    if (match(tokens, .float_constant, curr)) return curr.*;
-    curr.* = temp;
-    if (match(tokens, ._true, curr)) return curr.*;
-    curr.* = temp;
-
-    if (match(tokens, .l_brace, curr)) {
-        if (context_is("bufferViews.[")) {
-            current_buffer_view = &buffer_views[buffer_views_len];
-            buffer_views_len += 1;
-        } else if (context_is("animations.[")) {
-            animations[animations_len].channels = std.ArrayList(Channel).init(allocator);
-            animations[animations_len].samplers = std.ArrayList(Sampler).init(allocator);
-            current_animation = &animations[animations_len];
-            animations_len += 1;
-        } else if (context_is("animations.[.channels.[")) {
-            current_animation.channels.append(undefined) catch unreachable;
-            current_channel = &current_animation.channels.items[current_animation.channels.items.len - 1];
-        } else if (context_is("animations.[.samplers.[")) {
-            current_animation.samplers.append(undefined) catch unreachable;
-            current_sampler = &current_animation.samplers.items[current_animation.samplers.items.len - 1];
-        }
-        if (gltf_leaf_list(allocator, tokens, curr) == null) return null;
-        if (!match(tokens, .r_brace, curr)) return null;
-
-        return curr.*;
-    }
-    curr.* = temp;
-
-    if (match(tokens, .l_square, curr)) {
-        global_json_hierarchy.append("[") catch unreachable;
-        defer _ = global_json_hierarchy.pop();
-        if (gltf_leaf_list(allocator, tokens, curr) == null) return null;
-        if (!match(tokens, .r_square, curr)) return null;
-        return curr.*;
-    }
-
-    return null;
-}
-
-pub fn gltf_extract_skinned_mesh(path: anytype, index: usize, shader_program_GPU: u32, texture_GPU: u32, allocator: std.mem.Allocator) !zeng.SkinnedMesh {
-    const buffer = get_file_bytes(path, allocator);
-
-    const accessor = meshes[nodes[index]];
-    var position_data_len: usize = 0;
-    var position_data_offset: usize = undefined;
-    var normal_data_len: usize = 0;
-    var normal_data_offset: usize = undefined;
-    var texcoord_data_len: usize = 0;
-    var texcoord_data_offset: usize = undefined;
-
-    var indices_len: usize = 0;
-    var indices_data_offset: usize = undefined;
-
-    for (accessor.attributes.items) |attrib| {
-        if (attrib._type == .POSITION) {
-            position_data_len = buffer_views[accessors[attrib.index]].length;
-            position_data_offset = buffer_views[accessors[attrib.index]].offset;
-        } else if (attrib._type == .NORMAL) {
-            normal_data_len = buffer_views[accessors[attrib.index]].length;
-            normal_data_offset = buffer_views[accessors[attrib.index]].offset;
-        } else if (attrib._type == .TEXCOORD_0) {
-            texcoord_data_len = buffer_views[accessors[attrib.index]].length;
-            texcoord_data_offset = buffer_views[accessors[attrib.index]].offset;
-        } else if (attrib._type == .indices) {
-            indices_len = buffer_views[accessors[attrib.index]].length;
-            indices_data_offset = buffer_views[accessors[attrib.index]].offset;
-        }
-    }
-
-    const mesh_data_size: usize = @divTrunc(position_data_len, 12) * 64; // was 32
-    var mesh_data = allocator.alloc(u8, mesh_data_size) catch unreachable;
-
-    var _curr: usize = 0;
-    var _i: usize = 0;
-    var _j: usize = 0;
-    var _k: usize = 0;
-    while (_i < position_data_len) {
-        if (position_data_len > 0) {
-            @memcpy(
-                mesh_data[_curr .. _curr + 12],
-                buffer[position_data_offset + _i .. position_data_offset + _i + 12],
-            );
-        } else {
-            unreachable;
-        }
-        _i += 12;
-        _curr += 12;
-
-        if (normal_data_len > 0) {
-            @memcpy(
-                mesh_data[_curr .. _curr + 12],
-                buffer[normal_data_offset + _j .. normal_data_offset + _j + 12],
-            );
-        } else {
-            @memset(mesh_data[_curr .. _curr + 12], 0);
-        }
-        _j += 12;
-        _curr += 12;
-
-        if (texcoord_data_len > 0) {
-            @memcpy(
-                mesh_data[_curr .. _curr + 8],
-                buffer[texcoord_data_offset + _k .. texcoord_data_offset + _k + 8],
-            );
-        } else {
-            @memset(mesh_data[_curr .. _curr + 8], 0);
-        }
-        _k += 8;
-        _curr += 8;
-
-        @memcpy(mesh_data[_curr .. _curr + 16], @as([*]const u8, @ptrCast(&ARRAY_OF_ZEROS))); //@skinned
-        _curr += 16;
-        @memcpy(mesh_data[_curr .. _curr + 16], @as([*]const u8, @ptrCast(&[4]f32{ 1.0, 0.0, 0.0, 0.0 }))); //@skinned
-        _curr += 16;
-    }
-    if (_i != position_data_len) unreachable;
-
-    var index_data = allocator.alloc(u32, @divTrunc(indices_len, 2)) catch unreachable;
-
-    var curr_: usize = 0;
-    while (curr_ * 2 < indices_len) {
-        var a: u16 = undefined;
-        @memcpy(@as([*]u8, @ptrCast(&a)), buffer[indices_data_offset + curr_ * 2 .. indices_data_offset + (curr_ + 1) * 2]);
-        index_data[curr_] = @intCast(a);
-        curr_ += 1;
-    }
-
-    // create VAO
-    var VAO: u32 = undefined;
-    zeng.gl.genVertexArrays(1, &VAO);
-    zeng.gl.bindVertexArray(VAO);
-    defer {
-        zeng.gl.bindVertexArray(0);
-        zeng.gl.bindBuffer(zeng.gl.ELEMENT_ARRAY_BUFFER, 0);
-        zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, 0);
-    }
-
-    // create vertex buffer object (holds vertex data) > bind it > store the data from vertices array
-    var VBO: u32 = undefined;
-    zeng.gl.genBuffers(1, &VBO);
-    zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, VBO);
-    defer zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, 0);
-    zeng.gl.bufferData(zeng.gl.ARRAY_BUFFER, @intCast(mesh_data.len), mesh_data.ptr, zeng.gl.STATIC_DRAW);
-
-    // create element buffer object (indices array) > bind it > store the data from the indices array
-    var EBO: u32 = undefined;
-    zeng.gl.genBuffers(1, &EBO);
-    zeng.gl.bindBuffer(zeng.gl.ELEMENT_ARRAY_BUFFER, EBO);
-    zeng.gl.bufferData(zeng.gl.ELEMENT_ARRAY_BUFFER, @intCast(index_data.len * 4), index_data.ptr, zeng.gl.STATIC_DRAW);
-
-    // data layout
-    const float_count = 3 + 3 + 2 + 4 + 4;
-    zeng.gl.vertexAttribPointer(0, 3, zeng.gl.FLOAT, zeng.gl.FALSE, float_count * @sizeOf(f32), @ptrFromInt(0)); // position
-    zeng.gl.vertexAttribPointer(1, 3, zeng.gl.FLOAT, zeng.gl.FALSE, float_count * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32))); // normal
-    zeng.gl.vertexAttribPointer(2, 2, zeng.gl.FLOAT, zeng.gl.FALSE, float_count * @sizeOf(f32), @ptrFromInt(6 * @sizeOf(f32))); // uv
-    zeng.gl.vertexAttribIPointer(3, 4, zeng.gl.INT, float_count * @sizeOf(i32), @ptrFromInt(8 * @sizeOf(f32))); // index
-    zeng.gl.vertexAttribPointer(4, 4, zeng.gl.FLOAT, zeng.gl.FALSE, float_count * @sizeOf(f32), @ptrFromInt(12 * @sizeOf(f32))); // weights
-
-    zeng.gl.enableVertexAttribArray(0);
-    zeng.gl.enableVertexAttribArray(1);
-    zeng.gl.enableVertexAttribArray(2);
-    zeng.gl.enableVertexAttribArray(3);
-    zeng.gl.enableVertexAttribArray(4);
-
-    return zeng.SkinnedMesh{
-        .indices_length = @intCast(@divTrunc(indices_len, 2)),
-        .material = .{
-            .shader_program_GPU = shader_program_GPU,
-            .texture_GPU = texture_GPU,
-        },
-        .vao_gpu = VAO,
-        .num_bones = 65,
-    };
-}
-
-pub fn thing() struct { u32, c_int } {
+pub fn create_square_mesh() struct { u32, c_int } {
     const vertices = [20]f32{
         1.0, 1.0, 0.0, 1.0, 1.0, // top right
         1.0, -1.0, 0.0, 1.0, 0.0, // bottom right
@@ -808,13 +303,8 @@ pub fn thing() struct { u32, c_int } {
     var EBO: c_uint = undefined;
 
     zeng.gl.genVertexArrays(1, &VAO);
-    // defer zeng.gl.deleteVertexArrays(1, &VAO);
-
     zeng.gl.genBuffers(1, &VBO);
-    // defer zeng.gl.deleteBuffers(1, &VBO);
-
     zeng.gl.genBuffers(1, &EBO);
-    // defer zeng.gl.deleteBuffers(1, &EBO);
 
     // bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
     zeng.gl.bindVertexArray(VAO);
@@ -832,14 +322,19 @@ pub fn thing() struct { u32, c_int } {
     zeng.gl.enableVertexAttribArray(0);
     zeng.gl.enableVertexAttribArray(1);
 
-    // note that this is allowed, the call to glVertexAttribPointer registered VBO as the vertex attribute's bound vertex buffer object so afterwards we can safely unbind
-    zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, 0);
-
-    // You can unbind the VAO afterwards so other VAO calls won't accidentally modify this VAO, but this rarely happens. Modifying other
-    // VAOs requires a call to glBindVertexArray anyways so we generally don't unbind VAOs (nor VBOs) when it's not directly necessary.
-    zeng.gl.bindVertexArray(0);
-
-    zeng.gl.bindBuffer(zeng.gl.ELEMENT_ARRAY_BUFFER, 0);
-
     return .{ VAO, indices.len };
+}
+
+pub fn concat(a: []const u8, b: []const u8, allocator: std.mem.Allocator) []u8 {
+    var result = allocator.alloc(u8, a.len + b.len) catch unreachable;
+    @memcpy(result[0..a.len], a);
+    @memcpy(result[a.len..], b);
+    return result;
+}
+pub fn concat_null(a: []const u8, b: []const u8, allocator: std.mem.Allocator) []u8 {
+    var result = allocator.alloc(u8, a.len + b.len + 1) catch unreachable;
+    @memcpy(result[0..a.len], a);
+    @memcpy(result[a.len .. a.len + b.len], b);
+    result[result.len - 1] = 0;
+    return result;
 }

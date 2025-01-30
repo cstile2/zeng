@@ -7,7 +7,7 @@ layout (location = 2) in vec2 v_tex_coord;
 layout (location = 3) in ivec4 my_bone_ids;
 layout (location = 4) in vec4 my_bone_weights;
 
-uniform mat4 bone_matrices[32];
+uniform mat4 bone_matrices[100];
 uniform mat4 final_matrix;
 
 out vec3 f_normal;
@@ -40,7 +40,6 @@ void main() {
     blend_normal = normalize(blend_normal);
     
     gl_Position = final_matrix * blend_pos;
-    // gl_Position = snap_to_position(gl_Position);
 
     f_normal = blend_normal;
     f_tex_coord = v_tex_coord;

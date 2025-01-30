@@ -31,17 +31,6 @@ pub fn build(b: *std.Build) !void {
         .path = "c_libs/",
     });
 
-    // exe.root_module.addCSourceFiles(.{
-    //     .root = .{ .path = "c_libs/" },
-    //     .files = &[_][]const u8{
-    //         "imgui.cpp",
-    //         "imgui_draw.cpp",
-    //         "imgui_tables.cpp",
-    //         "imgui_demo.cpp",
-    //         "imgui_tables.cpp",
-    //     },
-    // });
-
     // install artifact
     b.installArtifact(exe);
 

@@ -1,28 +1,29 @@
 const std = @import("std");
+const networking = @This();
 
 const FIONBIO: u32 = 0x8004667e;
 
 const ecs = @import("ecs.zig");
 const zeng = @import("zeng.zig");
 
-const Transform = zeng.Transform;
+const Transform = zeng.world_matrix;
 const EventWriter = zeng.EventWriter;
-const PlayerEvent = @import("main.zig").PlayerEvent;
+const PlayerEvent = @import("main.zig").player_event;
 const ECS = @import("main.zig").ECS;
 
-pub const NetAddressSized = struct {
-    client_addr: std.os.sockaddr,
-    client_addr_len: std.os.socklen_t,
-};
-pub const ConnectionID = u32; // represents the connection
-pub const NetworkID = u32; // gloablly unique identifier of an object that is synced between computers
-pub const SocketAndAddress = struct {
+// pub const NetAddressSized = struct {
+//     client_addr: std.os.sockaddr,
+//     client_addr_len: std.os.socklen_t,
+// };
+pub const connection_id = u32; // represents the connection
+pub const network_id = u32; // gloablly unique identifier of an object that is synced between computers
+pub const socket_address = struct {
     socket: std.os.socket_t,
     address: std.net.Address,
 };
-pub const RemoteMessage = struct {
+pub const remote_message = struct {
     payload: []u8,
-    target: SocketAndAddress,
+    target: socket_address,
 };
 
 fn WINDOWS_set_socket_non_blocking(sock: std.os.socket_t) !void {
@@ -32,25 +33,25 @@ fn WINDOWS_set_socket_non_blocking(sock: std.os.socket_t) !void {
 }
 
 // prepare a socket and address
-pub fn make_udp_sock_and_address(address: anytype, port: anytype, nonblocking: bool) !SocketAndAddress {
+pub fn make_udp_sock_and_address(address: anytype, port: anytype, nonblocking: bool) !socket_address {
     const addr = try std.net.Address.parseIp(address, port);
     const sock = try std.os.socket(std.os.AF.INET, std.os.SOCK.DGRAM, std.os.IPPROTO.UDP);
     if (nonblocking)
         try WINDOWS_set_socket_non_blocking(sock);
-    return SocketAndAddress{ .socket = sock, .address = addr };
+    return socket_address{ .socket = sock, .address = addr };
 }
 // (server usually) bind the specified socket and address for communication
-pub fn bind_socket_and_address(socket_and_address: SocketAndAddress) !void {
+pub fn bind_socket_and_address(socket_and_address: socket_address) !void {
     try std.os.bind(socket_and_address.socket, &socket_and_address.address.any, socket_and_address.address.getOsSockLen());
 }
 pub fn network_send_all(commands: *zeng.Commands) !void {
-    for (commands.remote_messages[0..commands.remote_messages_len]) |remote_message| {
-        _ = try std.os.sendto(remote_message.target.socket, remote_message.payload, 0, &remote_message.target.address.any, remote_message.target.address.getOsSockLen());
-        commands.allocator.free(remote_message.payload);
+    for (commands.remote_messages[0..commands.remote_messages_len]) |rem_message| {
+        _ = try std.os.sendto(rem_message.target.socket, rem_message.payload, 0, &rem_message.target.address.any, rem_message.target.address.getOsSockLen());
+        commands.allocator.free(rem_message.payload);
     }
     commands.remote_messages_len = 0;
 }
-pub fn network_recieve_all(socket: std.os.socket_t, world: *ECS.World) !void {
+pub fn network_recieve_all(socket: std.os.socket_t, world: *ECS.world) !void {
     var client_addr: std.os.sockaddr = undefined;
     var client_addr_len: std.os.socklen_t = @sizeOf(std.os.sockaddr);
 
@@ -72,7 +73,7 @@ pub fn network_recieve_all(socket: std.os.socket_t, world: *ECS.World) !void {
 
                     if (@sizeOf(@TypeOf(captures)) > 0) {
                         inline for (&captures) |*cap| {
-                            if (@TypeOf(cap.*) == *ECS.World) {
+                            if (@TypeOf(cap.*) == *ECS.world) {
                                 cap.* = world;
                             }
                         }
@@ -92,8 +93,8 @@ pub fn network_recieve_all(socket: std.os.socket_t, world: *ECS.World) !void {
     }
 }
 
-pub fn do_setup(is_server: bool) !SocketAndAddress {
-    var socket_and_address: SocketAndAddress = undefined;
+pub fn do_setup(is_server: bool) !socket_address {
+    var socket_and_address: socket_address = undefined;
     if (is_server) {
         socket_and_address = try zeng.networking.make_udp_sock_and_address("127.0.0.1", 12345, true);
         try zeng.networking.bind_socket_and_address(socket_and_address);
@@ -102,7 +103,7 @@ pub fn do_setup(is_server: bool) !SocketAndAddress {
     }
     return socket_and_address;
 }
-pub fn undo_setup(socket_and_address: SocketAndAddress) void {
+pub fn undo_setup(socket_and_address: socket_address) void {
     std.os.close(socket_and_address.socket);
 }
 
@@ -176,3 +177,7 @@ pub fn Client() !void {
         std.time.sleep(std.time.ns_per_s);
     }
 }
+
+// for clients using udp - sendto() - OS automatically assigns a port number to listen from
+
+// for servers - bind() is needed to specify which 
