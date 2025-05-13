@@ -1,6 +1,7 @@
 const std = @import("std");
 
-pub fn fn_parameter_types(comptime t: std.builtin.Type) [t.Fn.params.len]type {
+/// returns an array of types - each type corresponds to a function parameter
+pub fn fn_parameter_type_array(comptime t: std.builtin.Type) [t.Fn.params.len]type {
     var types: [t.Fn.params.len]type = undefined;
     for (0..types.len) |i| {
         types[i] = t.Fn.params[i].type.?;
@@ -8,9 +9,9 @@ pub fn fn_parameter_types(comptime t: std.builtin.Type) [t.Fn.params.len]type {
     return types;
 }
 
-pub fn tuple_of_types(comptime types: anytype) type {
-    comptime var struct_fields: [types.len]std.builtin.Type.StructField = undefined;
-    comptime for (types, 0..) |_type, i| {
+pub fn type_array_to_tuple_type(comptime types: anytype) type {
+    var struct_fields: [types.len]std.builtin.Type.StructField = undefined;
+    for (types, 0..) |_type, i| {
         struct_fields[i] = .{
             .type = _type,
             .name = std.fmt.comptimePrint("{d}", .{i}),
@@ -18,7 +19,7 @@ pub fn tuple_of_types(comptime types: anytype) type {
             .is_comptime = false,
             .alignment = @alignOf(_type),
         };
-    };
+    }
     const payload_type = @Type(.{
         .Struct = .{
             .layout = .Auto,

@@ -12,6 +12,10 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    exe.linkSystemLibrary("ole32");
+    exe.linkSystemLibrary("uuid");
+    exe.linkSystemLibrary("Mmdevapi");
+
     // use glfw package from package manager via build.zig.zon - add as import
     const glfw_dep = b.dependency("mach_glfw", .{ .target = target, .optimize = optimize });
     exe.root_module.addImport("mach-glfw", glfw_dep.module("mach-glfw"));

@@ -14,6 +14,6 @@ void main()
 
     vec3 texcolor = texture(image_texture, f_tex_coord).xyz;
 
-    FragColor = vec4(texcolor * (2.0 * shade + 0.15), 1.0);
+    FragColor = vec4(texcolor * (2.0 * shade + 0.1), 1.0);
     // FragColor.rgb = pow(FragColor.rgb, vec3(1.0/2.2));
 }
