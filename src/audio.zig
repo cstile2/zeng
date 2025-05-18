@@ -189,7 +189,7 @@ pub fn audio_engine_run() !void {
     ERROR = audio_client.lpVtbl.*.Start.?(audio_client);
     try check_error(ERROR);
 
-    // play_sound(get_sample_data_from_wave_file(zeng.get_file_bytes("assets/sounds/DARK_FANTASY.wav", std.heap.c_allocator)) catch unreachable, .loop);
+    // play_sound(get_audio_file_data(zeng.get_file_bytes("assets/sounds/DARK_FANTASY.wav", std.heap.c_allocator)) catch unreachable, .loop);
     while (true) {
         _ = c.WaitForSingleObject(audio_event_handle, c.INFINITE);
 

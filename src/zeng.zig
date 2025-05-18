@@ -213,6 +213,7 @@ pub const skeleton = struct {
     inverse_bind_matrices: []zeng.world_matrix,
     local_bone_matrices: []zeng.world_matrix,
     model_bone_matrices: []zeng.world_matrix,
+    animations: std.ArrayList(usize),
 };
 pub const skinned_mesh = struct {
     vao_gpu: u32,
@@ -258,6 +259,9 @@ pub fn quat_axis_angle(axis: vec3, angle: f32) quat {
 pub fn inv_lerp(a: f32, b: f32, v: f32) f32 {
     if (a == b) return 0.0; // Avoid division by zero; undefined behavior for constant ranges.
     return (v - a) / (b - a);
+}
+pub fn lerp(a: f32, b: f32, v: f32) f32 {
+    return a + (b - a) * v;
 }
 
 // Matrices

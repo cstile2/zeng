@@ -96,7 +96,7 @@ pub fn load_texture(path: anytype, srgb: bool, flip_y: bool) u32 {
     var height: i32 = undefined;
     var num_channels: i32 = undefined;
     const image_data: [*c]u8 = zeng.c.stbi_load(@ptrCast(path), &width, &height, &num_channels, 3);
-    std.debug.print("{s} {} {} {}\n", .{ path, width, height, num_channels });
+    // std.debug.print("{s} {} {} {}\n", .{ path, width, height, num_channels });
     defer zeng.c.stbi_image_free(image_data);
 
     // create texture location > bind > set filtering > put the array data into the texture > generate mips
@@ -145,6 +145,7 @@ pub fn deserialize_from_bytes(T: type, dest_bytes: [*]u8, src_bytes: []u8, src_c
         },
     }
 }
+
 pub fn create_square_mesh() struct { u32, c_int } {
     const vertices = [20]f32{
         1.0, 1.0, 0.0, 1.0, 1.0, // top right
@@ -259,6 +260,38 @@ pub fn create_cube_mesh() struct { u32, c_int } {
     zeng.gl.enableVertexAttribArray(1);
 
     return .{ VAO, indices.len };
+}
+pub fn create_triangle_mesh() struct { u32, u32 } {
+    const vertices = [9]f32{
+        0.0,  1.0,  0.0,
+        -1.0, -1.0, 0.0,
+        1.0,  -1.0, 0.0,
+    };
+    const indices = [3]u8{ 1, 0, 2 };
+
+    var VBO: c_uint = undefined;
+    var VAO: c_uint = undefined;
+    var EBO: c_uint = undefined;
+
+    zeng.gl.genVertexArrays(1, &VAO);
+    zeng.gl.genBuffers(1, &VBO);
+    zeng.gl.genBuffers(1, &EBO);
+
+    // bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
+    zeng.gl.bindVertexArray(VAO);
+
+    zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, VBO);
+    zeng.gl.bufferData(zeng.gl.ARRAY_BUFFER, @sizeOf(f32) * 9, &vertices, zeng.gl.STATIC_DRAW);
+
+    zeng.gl.bindBuffer(zeng.gl.ELEMENT_ARRAY_BUFFER, EBO);
+    zeng.gl.bufferData(zeng.gl.ELEMENT_ARRAY_BUFFER, 3 * @sizeOf(u8), &indices, zeng.gl.STATIC_DRAW);
+
+    // Specify and link our vertex attribute description
+    zeng.gl.vertexAttribPointer(0, 3, zeng.gl.FLOAT, zeng.gl.FALSE, 3 * @sizeOf(f32), null);
+
+    zeng.gl.enableVertexAttribArray(0);
+
+    return .{ VAO, VBO };
 }
 
 const StringLiteral = struct {
@@ -602,11 +635,6 @@ const SceneNodeWithMatrix = struct {
     matrix: [16]f32,
     gltf_id: usize = 0,
 };
-const intermediate_skin = struct {
-    inverse_bind_matrices: []zeng.world_matrix,
-    mapping: std.AutoHashMap(usize, usize),
-    bone_parent_indices: []isize,
-};
 const ChannelOutputDataTag = enum {
     rotation,
     translation,
@@ -670,17 +698,18 @@ fn get_float_from_numeric(n: *Node, idx: comptime_int) f32 {
 pub var global_mesh_verts: []zeng.vec3 = undefined;
 pub var global_mesh_indices: []u16 = undefined;
 
-pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []const u8, allocator: std.mem.Allocator, shader_program: u32, default_shader_program_GPU: u32, uv_checker_tex: u32) struct { []SceneNodeWithMatrix, []Animation, []zeng.skeleton, std.AutoArrayHashMap(usize, std.ArrayList(usize)) } {
-    const file_data = zeng.get_file_bytes(file_path, allocator);
+pub fn gltf_extract_resources(root_n: ?*Node, bin_path: []const u8, dependencies_path: []const u8, allocator: std.mem.Allocator, skin_shader_program: u32, static_shader_program: u32, default_texture: u32) struct { []SceneNodeWithMatrix, []Animation, []zeng.skeleton, std.AutoArrayHashMap(usize, std.ArrayList(usize)) } {
+    const bin_data = zeng.get_file_bytes(bin_path, allocator);
 
-    var top_level_objects = std.AutoHashMap(usize, void).init(allocator);
-    for (root_n.?.object.get("scenes").?.array.items) |scene_n| {
-        for (scene_n.object.get("nodes").?.array.items) |node_n| {
-            top_level_objects.put(@intCast(node_n.integer), void{}) catch unreachable;
-        }
-    }
+    // var top_level_objects = std.AutoHashMap(usize, void).init(allocator);
+    // for (root_n.?.object.get("scenes").?.array.items) |scene_n| {
+    //     for (scene_n.object.get("nodes").?.array.items) |node_n| {
+    //         top_level_objects.put(@intCast(node_n.integer), void{}) catch unreachable;
+    //     }
+    // }
+    var node_to_skin = std.AutoHashMap(usize, usize).init(allocator);
 
-    var intermediate_skins = std.ArrayList(intermediate_skin).init(allocator);
+    var skeleton_space_maps = std.ArrayList(std.AutoHashMap(usize, usize)).init(allocator);
     var result_nodes = std.ArrayList(SceneNodeWithMatrix).init(allocator);
     var result_animations = std.ArrayList(Animation).init(allocator);
     var result_skeletons = std.ArrayList(zeng.skeleton).init(allocator);
@@ -696,13 +725,17 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
     const _skins_n = root_n.?.object.get("skins");
 
     if (_skins_n) |skins_n| {
+        var current_skin_num: usize = 0;
         for (skins_n.array.items) |current_skin_n| {
-            var temp_mapping = std.AutoHashMap(usize, usize).init(allocator);
+            defer current_skin_num += 1;
+
+            var jointspace_to_nodespace = std.AutoHashMap(usize, usize).init(allocator);
 
             var bone_counter: usize = 0;
             for (current_skin_n.object.get("joints").?.array.items) |joint_n| {
                 defer bone_counter += 1;
-                temp_mapping.put(@intCast(joint_n.integer), bone_counter) catch unreachable;
+                jointspace_to_nodespace.put(@intCast(joint_n.integer), bone_counter) catch unreachable;
+                node_to_skin.put(@intCast(joint_n.integer), current_skin_num) catch unreachable;
             }
 
             const temp_bone_parent_indices = allocator.alloc(isize, bone_counter) catch unreachable;
@@ -710,10 +743,72 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
 
             const temp_inverse_bind_matrices = allocator.alloc(zeng.world_matrix, bone_counter) catch unreachable;
             const offset: usize, const length: usize, _ = get_offsest_and_length(@intCast(current_skin_n.object.get("inverseBindMatrices").?.integer), accessors_n.*, bufferviews_n.*);
-            @memcpy(@as([*]u8, @ptrCast(temp_inverse_bind_matrices)), file_data[offset .. offset + length]);
+            @memcpy(@as([*]u8, @ptrCast(temp_inverse_bind_matrices)), bin_data[offset .. offset + length]);
 
-            intermediate_skins.append(intermediate_skin{ .mapping = temp_mapping, .inverse_bind_matrices = temp_inverse_bind_matrices, .bone_parent_indices = temp_bone_parent_indices }) catch unreachable;
-            result_skeletons.append(.{ .inverse_bind_matrices = temp_inverse_bind_matrices, .bone_parent_indices = temp_bone_parent_indices, .local_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable, .model_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable }) catch unreachable;
+            skeleton_space_maps.append(jointspace_to_nodespace) catch unreachable;
+            result_skeletons.append(.{ .inverse_bind_matrices = temp_inverse_bind_matrices, .bone_parent_indices = temp_bone_parent_indices, .local_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable, .model_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable, .animations = std.ArrayList(usize).init(allocator) }) catch unreachable;
+        }
+    }
+    if (_animations_n != null) {
+        for (_animations_n.?.array.items) |current_animation| {
+            var temp_channels = std.ArrayList(AnimationChannel).init(allocator);
+
+            const channels_n = current_animation.object.get("channels");
+            const samplers_n = current_animation.object.get("samplers");
+            if (channels_n == null or samplers_n == null) break;
+
+            var max_timestamp: f32 = 0.0;
+            var owner_skin: usize = 0;
+            for (channels_n.?.array.items) |channel| {
+                const sampler = samplers_n.?.array.items[@intCast(channel.object.get("sampler").?.integer)];
+
+                const input_accessor_index: usize = @intCast(sampler.object.get("input").?.integer);
+                const output_accessor_index: usize = @intCast(sampler.object.get("output").?.integer);
+                const input_offset, const input_length, _ = get_offsest_and_length(input_accessor_index, accessors_n.*, bufferviews_n.*);
+                const output_offset, const output_length, _ = get_offsest_and_length(output_accessor_index, accessors_n.*, bufferviews_n.*);
+
+                var target_index: usize = @intCast(channel.object.get("target").?.object.get("node").?.integer);
+                owner_skin = node_to_skin.get(target_index).?;
+                target_index = skeleton_space_maps.items[owner_skin].get(target_index).?; // REMAP from node space to a  skin[0] bone TODO: make this use more than just the first skin in the file
+
+                const temp_inputs: []f32 = allocator.alloc(f32, input_length / 4) catch unreachable;
+                @memcpy(@as([*]u8, @ptrCast(temp_inputs)), bin_data[input_offset .. input_offset + input_length]);
+
+                const target_path = channel.object.get("target").?.object.get("path").?.string;
+                var output_type: ChannelOutputDataTag = undefined;
+                if (std.mem.eql(u8, target_path, "rotation")) {
+                    output_type = .rotation;
+                } else if (std.mem.eql(u8, target_path, "translation")) {
+                    output_type = .translation;
+                } else if (std.mem.eql(u8, target_path, "scale")) {
+                    output_type = .scale;
+                } else unreachable;
+
+                var temp_outputs: ChannelOutputData = undefined;
+                if (output_type == .rotation) {
+                    temp_outputs = ChannelOutputData{ .rotation = allocator.alloc(zeng.quat, output_length / 16) catch unreachable };
+                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.rotation)), bin_data[output_offset .. output_offset + output_length]);
+                } else if (output_type == .translation) {
+                    temp_outputs = ChannelOutputData{ .translation = allocator.alloc(zeng.vec3, output_length / 12) catch unreachable };
+                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.translation)), bin_data[output_offset .. output_offset + output_length]);
+                } else if (output_type == .scale) {
+                    temp_outputs = ChannelOutputData{ .scale = allocator.alloc(zeng.vec3, output_length / 12) catch unreachable };
+                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.scale)), bin_data[output_offset .. output_offset + output_length]);
+                } else unreachable;
+
+                for (temp_inputs) |f| {
+                    max_timestamp = @max(max_timestamp, f);
+                }
+
+                temp_channels.append(AnimationChannel{
+                    .target = target_index,
+                    .inputs = temp_inputs,
+                    .outputs = temp_outputs,
+                }) catch unreachable;
+            }
+
+            result_animations.append(Animation{ .channels = temp_channels.items, .duration = max_timestamp }) catch unreachable;
+            result_skeletons.items[owner_skin].animations.append(result_animations.items.len - 1) catch unreachable;
         }
     }
 
@@ -726,9 +821,9 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
             var entry = std.ArrayList(usize).init(allocator);
             children_blk: for (children.?.array.items) |child| {
                 // test is any skin contains BOTH the child and the parent - otherwise add children to the hierarchy
-                for (intermediate_skins.items) |skin| {
-                    if (skin.mapping.contains(current_node_index) and skin.mapping.contains(@intCast(child.integer))) { // this is an armature connection - don't add it to the global children hierarchy - add it inside the skeleton
-                        skin.bone_parent_indices[skin.mapping.get(@intCast(child.integer)).?] = @intCast(skin.mapping.get(current_node_index).?);
+                for (skeleton_space_maps.items, 0..) |skin, s| {
+                    if (skin.contains(current_node_index) and skin.contains(@intCast(child.integer))) { // this is an armature connection - don't add it to the global children hierarchy - add it inside the skeleton
+                        result_skeletons.items[s].bone_parent_indices[skin.get(@intCast(child.integer)).?] = @intCast(skin.get(current_node_index).?);
                         continue :children_blk;
                     }
                 }
@@ -743,7 +838,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
         const mesh_index_n = current_node_n.object.get("mesh");
         const skin_index_n = current_node_n.object.get("skin");
         if (mesh_index_n != null and skin_index_n != null) {
-            var base_color_texture_gpu: u32 = uv_checker_tex;
+            var base_color_texture_gpu: u32 = default_texture;
 
             const mesh_n = root_n.?.object.get("meshes").?.array.items[@intCast(mesh_index_n.?.integer)];
             const primitive_n = mesh_n.object.get("primitives").?.array.items[0];
@@ -809,7 +904,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                 if (position_data_len > 0) {
                     @memcpy(
                         mesh_data[_curr .. _curr + 3 * position_component_size],
-                        file_data[position_data_offset + _i .. position_data_offset + _i + 3 * position_component_size],
+                        bin_data[position_data_offset + _i .. position_data_offset + _i + 3 * position_component_size],
                     );
                 } else {
                     unreachable;
@@ -820,7 +915,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                 if (normal_data_len > 0) {
                     @memcpy(
                         mesh_data[_curr .. _curr + 3 * normal_component_size],
-                        file_data[normal_data_offset + _j .. normal_data_offset + _j + 3 * normal_component_size],
+                        bin_data[normal_data_offset + _j .. normal_data_offset + _j + 3 * normal_component_size],
                     );
                 } else {
                     @memset(mesh_data[_curr .. _curr + 3 * normal_component_size], 0);
@@ -831,7 +926,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                 if (texcoord_data_len > 0) {
                     @memcpy(
                         mesh_data[_curr .. _curr + 2 * texcoord_component_size],
-                        file_data[texcoord_data_offset + _k .. texcoord_data_offset + _k + 2 * texcoord_component_size],
+                        bin_data[texcoord_data_offset + _k .. texcoord_data_offset + _k + 2 * texcoord_component_size],
                     );
                 } else {
                     @memset(mesh_data[_curr .. _curr + 2 * texcoord_component_size], 0);
@@ -842,7 +937,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                 if (joints_data_len > 0) {
                     @memcpy(
                         mesh_data[_curr .. _curr + 4 * joints_component_size],
-                        file_data[joints_data_offset + _l .. joints_data_offset + _l + 4 * joints_component_size],
+                        bin_data[joints_data_offset + _l .. joints_data_offset + _l + 4 * joints_component_size],
                     );
                 } else {
                     @memset(mesh_data[_curr .. _curr + 4 * joints_component_size], 0);
@@ -853,7 +948,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                 if (weights_data_len > 0) {
                     @memcpy(
                         mesh_data[_curr .. _curr + 4 * weights_component_size],
-                        file_data[weights_data_offset + _m .. weights_data_offset + _m + 4 * weights_component_size],
+                        bin_data[weights_data_offset + _m .. weights_data_offset + _m + 4 * weights_component_size],
                     );
                 } else {
                     @memset(mesh_data[_curr .. _curr + 4 * weights_component_size], 0);
@@ -865,7 +960,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
 
             const index_data = allocator.alloc(u8, indices_data_len) catch unreachable;
 
-            @memcpy(@as([*]u8, @ptrCast(index_data)), file_data[indices_data_offset .. indices_data_offset + indices_data_len]);
+            @memcpy(@as([*]u8, @ptrCast(index_data)), bin_data[indices_data_offset .. indices_data_offset + indices_data_len]);
 
             var VAO: u32 = undefined;
             zeng.gl.genVertexArrays(1, &VAO);
@@ -901,7 +996,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                         .indices_length = @intCast(indices_data_len / indices_component_size),
                         .indices_type = get_component_type_enum(indices_component_type),
                         .material = .{
-                            .shader_program = shader_program,
+                            .shader_program = skin_shader_program,
                             .texture = base_color_texture_gpu,
                         },
                         .vao_gpu = VAO,
@@ -935,11 +1030,14 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                 scale.z = get_float_from_numeric(_scale, 2);
             }
             const mat = zeng.mat_tran(zeng.mat_mult(zeng.quat_to_mat(rotation), zeng.mat_scal(zeng.mat_identity, scale)), translation);
-            // std.debug.print("{} {} {}\n", .{ translation, scale, rotation });
+            if (name != null and std.mem.eql(u8, name.?.string, "C\\u00edrculo.017")) {
+                // std.debug.print("{} {} {}\n", .{ translation, scale, rotation });
+                std.debug.print("{any}\n", .{mat});
+            }
 
             const mesh_n = root_n.?.object.get("meshes").?.array.items[@intCast(mesh_index_n.?.integer)];
             for (mesh_n.object.get("primitives").?.array.items) |primitive_n| {
-                var base_color_texture_gpu: u32 = uv_checker_tex;
+                var base_color_texture_gpu: u32 = default_texture;
                 const attributes_n = primitive_n.object.get("attributes").?;
                 if (primitive_n.object.get("material") != null and _textures_n != null and _images_n != null) {
                     const material_index: usize = @intCast(primitive_n.object.get("material").?.integer);
@@ -947,7 +1045,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                     const base_color_texture_index: usize = @intCast(material_n.object.get("pbrMetallicRoughness").?.object.get("baseColorTexture").?.object.get("index").?.integer);
                     const base_color_texture_image_index: usize = @intCast(_textures_n.?.array.items[base_color_texture_index].object.get("source").?.integer);
                     const base_color_texture_image_str = _images_n.?.array.items[base_color_texture_image_index].object.get("uri").?.string;
-                    std.debug.print("image: {s}\n", .{base_color_texture_image_str});
+                    // std.debug.print("image: {s}\n", .{base_color_texture_image_str});
                     base_color_texture_gpu = zeng.load_texture(zeng.concat_as_null_terminated(dependencies_path, base_color_texture_image_str, allocator), true, false);
                 }
 
@@ -971,9 +1069,9 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                 if (name != null and std.mem.eql(u8, name.?.string, "groundly")) {
                     if (indices_component_size != 2) unreachable;
                     global_mesh_verts = allocator.alloc(zeng.vec3, position_data_len / 12) catch unreachable;
-                    @memcpy(@as([*]u8, @ptrCast(global_mesh_verts)), file_data[position_data_offset .. position_data_offset + position_data_len]);
+                    @memcpy(@as([*]u8, @ptrCast(global_mesh_verts)), bin_data[position_data_offset .. position_data_offset + position_data_len]);
                     global_mesh_indices = allocator.alloc(u16, indices_data_len / 2) catch unreachable;
-                    @memcpy(@as([*]u8, @ptrCast(global_mesh_indices)), file_data[indices_data_offset .. indices_data_offset + indices_data_len]);
+                    @memcpy(@as([*]u8, @ptrCast(global_mesh_indices)), bin_data[indices_data_offset .. indices_data_offset + indices_data_len]);
                     std.debug.print("TRIS: {}\n", .{global_mesh_indices.len / 3});
                 }
 
@@ -985,7 +1083,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                     if (position_data_len > 0) {
                         @memcpy(
                             mesh_data[_curr .. _curr + 3 * position_component_size],
-                            file_data[position_data_offset + _i .. position_data_offset + _i + 3 * position_component_size],
+                            bin_data[position_data_offset + _i .. position_data_offset + _i + 3 * position_component_size],
                         );
                     } else {
                         unreachable;
@@ -996,7 +1094,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                     if (normal_data_len > 0) {
                         @memcpy(
                             mesh_data[_curr .. _curr + 3 * normal_component_size],
-                            file_data[normal_data_offset + _j .. normal_data_offset + _j + 3 * normal_component_size],
+                            bin_data[normal_data_offset + _j .. normal_data_offset + _j + 3 * normal_component_size],
                         );
                     } else {
                         @memset(mesh_data[_curr .. _curr + 3 * normal_component_size], 0);
@@ -1007,7 +1105,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                     if (texcoord_data_len > 0) {
                         @memcpy(
                             mesh_data[_curr .. _curr + 2 * texcoord_component_size],
-                            file_data[texcoord_data_offset + _k .. texcoord_data_offset + _k + 2 * texcoord_component_size],
+                            bin_data[texcoord_data_offset + _k .. texcoord_data_offset + _k + 2 * texcoord_component_size],
                         );
                     } else {
                         @memset(mesh_data[_curr .. _curr + 2 * texcoord_component_size], 0);
@@ -1019,7 +1117,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
 
                 const index_data = allocator.alloc(u8, indices_data_len) catch unreachable;
 
-                @memcpy(@as([*]u8, @ptrCast(index_data)), file_data[indices_data_offset .. indices_data_offset + indices_data_len]);
+                @memcpy(@as([*]u8, @ptrCast(index_data)), bin_data[indices_data_offset .. indices_data_offset + indices_data_len]);
 
                 var VAO: u32 = undefined;
                 zeng.gl.genVertexArrays(1, &VAO);
@@ -1050,7 +1148,7 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
                             .indices_length = @intCast(indices_data_len / indices_component_size),
                             .indices_type = get_component_type_enum(indices_component_type),
                             .material = .{
-                                .shader_program = default_shader_program_GPU,
+                                .shader_program = static_shader_program,
                                 .texture = base_color_texture_gpu,
                             },
                             .vao_gpu = VAO,
@@ -1093,75 +1191,10 @@ pub fn gltf_extract(root_n: ?*Node, file_path: []const u8, dependencies_path: []
         }
     }
 
-    if (_animations_n != null) {
-        for (_animations_n.?.array.items) |current_animation| {
-            var temp_channels = std.ArrayList(AnimationChannel).init(allocator);
-
-            const channels_n = current_animation.object.get("channels");
-            const samplers_n = current_animation.object.get("samplers");
-            if (channels_n == null or samplers_n == null) break;
-
-            var max_timestamp: f32 = 0.0;
-
-            for (channels_n.?.array.items) |channel| {
-                const sampler = samplers_n.?.array.items[@intCast(channel.object.get("sampler").?.integer)];
-
-                const input_accessor_index: usize = @intCast(sampler.object.get("input").?.integer);
-                const output_accessor_index: usize = @intCast(sampler.object.get("output").?.integer);
-                const input_offset, const input_length, _ = get_offsest_and_length(input_accessor_index, accessors_n.*, bufferviews_n.*);
-                const output_offset, const output_length, _ = get_offsest_and_length(output_accessor_index, accessors_n.*, bufferviews_n.*);
-
-                var target_n: usize = @intCast(channel.object.get("target").?.object.get("node").?.integer);
-                target_n = intermediate_skins.items[0].mapping.get(target_n).?; // REMAP to work with skin[0] TODO: make this use more than just the first skin in the file
-
-                const temp_inputs: []f32 = allocator.alloc(f32, input_length / 4) catch unreachable;
-                @memcpy(@as([*]u8, @ptrCast(temp_inputs)), file_data[input_offset .. input_offset + input_length]);
-
-                const target_path = channel.object.get("target").?.object.get("path").?.string;
-                var output_type: ChannelOutputDataTag = undefined;
-                if (std.mem.eql(u8, target_path, "rotation")) {
-                    output_type = .rotation;
-                } else if (std.mem.eql(u8, target_path, "translation")) {
-                    output_type = .translation;
-                } else if (std.mem.eql(u8, target_path, "scale")) {
-                    output_type = .scale;
-                } else unreachable;
-
-                var temp_outputs: ChannelOutputData = undefined;
-                if (output_type == .rotation) {
-                    temp_outputs = ChannelOutputData{ .rotation = allocator.alloc(zeng.quat, output_length / 16) catch unreachable };
-                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.rotation)), file_data[output_offset .. output_offset + output_length]);
-                } else if (output_type == .translation) {
-                    temp_outputs = ChannelOutputData{ .translation = allocator.alloc(zeng.vec3, output_length / 12) catch unreachable };
-                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.translation)), file_data[output_offset .. output_offset + output_length]);
-                } else if (output_type == .scale) {
-                    temp_outputs = ChannelOutputData{ .scale = allocator.alloc(zeng.vec3, output_length / 12) catch unreachable };
-                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.scale)), file_data[output_offset .. output_offset + output_length]);
-                } else unreachable;
-
-                for (temp_inputs) |f| {
-                    max_timestamp = @max(max_timestamp, f);
-                }
-
-                temp_channels.append(AnimationChannel{
-                    .target = target_n,
-                    .inputs = temp_inputs,
-                    .outputs = temp_outputs,
-                }) catch unreachable;
-            }
-
-            result_animations.append(Animation{ .channels = temp_channels.items, .duration = max_timestamp }) catch unreachable;
-        }
-    }
-
     return .{ result_nodes.items, result_animations.items, result_skeletons.items, result_children_list };
 }
-pub fn instantiate(world: *ecs.world, ctx: *zeng.engine_context, gltf_path: []const u8, bin_path: []const u8, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, singular_animation_player: ?*main.animation_player) ecs.entity_id {
-    const mesh_slice, const animation_slice, _, const parent_child_map = zeng.gltf_extract(zeng.gltf_parse(zeng.get_file_bytes(gltf_path, ctx.arena_allocator), ctx.arena_allocator), bin_path, "assets/gltf/", ctx.arena_allocator, skin_shader, static_shader, uv_checker_tex);
+pub fn instantiate(mesh_slice: []SceneNodeWithMatrix, parent_child_map: std.AutoArrayHashMap(usize, std.ArrayList(usize)), world: *ecs.world, ctx: *zeng.engine_context) ecs.entity_id {
     var node_mapping = std.AutoArrayHashMap(usize, ecs.entity_id).init(ctx.arena_allocator);
-    if (singular_animation_player != null) {
-        singular_animation_player.?.animations = animation_slice;
-    }
     var top_level_children = std.ArrayList(ecs.entity_id).init(ctx.arena_allocator);
     for (mesh_slice) |mesh_like| {
         if (mesh_like.node == .skinned_mesh) {
@@ -1170,9 +1203,6 @@ pub fn instantiate(world: *ecs.world, ctx: *zeng.engine_context, gltf_path: []co
                 main.local_matrix{ .transform = mesh_like.matrix },
                 mesh_like.node.skinned_mesh,
             });
-            if (singular_animation_player != null) {
-                singular_animation_player.?.skeleton_ptr = mesh_like.node.skinned_mesh.skeleton;
-            }
             top_level_children.append(entity_id) catch unreachable;
             node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
         } else if (mesh_like.node == .static_mesh) {
@@ -1184,7 +1214,7 @@ pub fn instantiate(world: *ecs.world, ctx: *zeng.engine_context, gltf_path: []co
             top_level_children.append(entity_id) catch unreachable;
             node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
         } else if (mesh_like.node == .empty) {
-            std.debug.print("hello!!!\n", .{});
+            std.debug.print("empty node spawned!\n", .{});
             const entity_id = world.spawn(.{
                 zeng.mat_identity,
                 main.local_matrix{ .transform = mesh_like.matrix },
@@ -1222,36 +1252,15 @@ pub fn instantiate(world: *ecs.world, ctx: *zeng.engine_context, gltf_path: []co
 
     return model_root;
 }
+pub fn auto_import(ctx: *zeng.engine_context, world: *ecs.world, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, uv_checker_tex: u32) ecs.entity_id {
+    const buffer_0 = ctx.arena_allocator.alloc(u8, folder_name.len + file_name.len + 5) catch unreachable;
+    const full_file_path = std.fmt.bufPrint(buffer_0, "{s}{s}.gltf", .{ folder_name, file_name }) catch unreachable;
+    const buffer_1 = ctx.arena_allocator.alloc(u8, folder_name.len + file_name.len + 4) catch unreachable;
+    const full_bin_path = std.fmt.bufPrint(buffer_1, "{s}{s}.bin", .{ folder_name, file_name }) catch unreachable;
 
-pub fn create_triangle_mesh() struct { u32, u32 } {
-    const vertices = [9]f32{
-        0.0,  1.0,  0.0,
-        -1.0, -1.0, 0.0,
-        1.0,  -1.0, 0.0,
-    };
-    const indices = [3]u8{ 1, 0, 2 };
-
-    var VBO: c_uint = undefined;
-    var VAO: c_uint = undefined;
-    var EBO: c_uint = undefined;
-
-    zeng.gl.genVertexArrays(1, &VAO);
-    zeng.gl.genBuffers(1, &VBO);
-    zeng.gl.genBuffers(1, &EBO);
-
-    // bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
-    zeng.gl.bindVertexArray(VAO);
-
-    zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, VBO);
-    zeng.gl.bufferData(zeng.gl.ARRAY_BUFFER, @sizeOf(f32) * 9, &vertices, zeng.gl.STATIC_DRAW);
-
-    zeng.gl.bindBuffer(zeng.gl.ELEMENT_ARRAY_BUFFER, EBO);
-    zeng.gl.bufferData(zeng.gl.ELEMENT_ARRAY_BUFFER, 3 * @sizeOf(u8), &indices, zeng.gl.STATIC_DRAW);
-
-    // Specify and link our vertex attribute description
-    zeng.gl.vertexAttribPointer(0, 3, zeng.gl.FLOAT, zeng.gl.FALSE, 3 * @sizeOf(f32), null);
-
-    zeng.gl.enableVertexAttribArray(0);
-
-    return .{ VAO, VBO };
+    const mesh_slice, const animation_slice, const skeleton_slice, const parent_child_map = zeng.gltf_extract_resources(zeng.gltf_parse(zeng.get_file_bytes(full_file_path, ctx.arena_allocator), ctx.arena_allocator), full_bin_path, folder_name, ctx.arena_allocator, skin_shader, static_shader, uv_checker_tex);
+    _ = skeleton_slice; // autofix
+    _ = animation_slice; // autofix
+    const model_root = zeng.instantiate(mesh_slice, parent_child_map, world, ctx);
+    return model_root;
 }

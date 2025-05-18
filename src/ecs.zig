@@ -81,8 +81,8 @@ fn transfer_entity(wrld: *world, start_table: *archetype_table, end_table: *arch
     for (end_table.storages.values()) |*new_storage| {
         for (start_table.storages.values()) |*old_storage| {
             if (old_storage.type_info.component_id == new_storage.type_info.component_id) {
-                const old = old_storage.get_slice(unstable.row) catch unreachable;
-                const new = new_storage.get_slice(end_table.count) catch unreachable;
+                const old = old_storage.get_slice(unstable.row);
+                const new = new_storage.get_slice(end_table.count);
                 @memcpy(new, old);
             }
         }
@@ -100,8 +100,8 @@ fn swap_remove_entity(w: *world, table: *archetype_table, row: u64) !void {
     if (row >= table.count) unreachable;
     if (row == table.count - 1) return;
     for (table.storages.values()) |*component_storage| {
-        const bottom = try component_storage.get_slice(table.count - 1);
-        const upper = try component_storage.get_slice(row);
+        const bottom = component_storage.get_slice(table.count - 1);
+        const upper = component_storage.get_slice(row);
         @memcpy(upper, bottom);
     }
     const public_id = table.public_ids[table.count - 1];
@@ -188,13 +188,13 @@ pub fn query_iterator(comptime types: anytype) type {
 
             var current_columns = self.q.ordered_component_columns.items[self.current_table];
 
-            var thing: ptrs_to_components = undefined;
-            inline for (&thing, comptime 0..) |*_thing, i| {
-                _thing.* = current_columns[i].get(self.index, @TypeOf(_thing.*.*));
+            var component_ptrs: ptrs_to_components = undefined;
+            inline for (&component_ptrs, comptime 0..) |*component_ptr, i| {
+                component_ptr.* = current_columns[i].get(self.index, @TypeOf(component_ptr.*.*));
             }
 
             self.index += 1;
-            return thing;
+            return component_ptrs;
         }
         pub fn reset(self: *@This()) void {
             self.index = 0;
@@ -284,14 +284,14 @@ pub const world = struct {
         const old_hash = old_edl.archetype_hash;
         const new_hash = t.hash | old_hash;
         if (new_hash == old_hash) {
-            const src = try self.tables.getPtr(old_hash).?.get_slice(t.component_id, old_edl.row);
+            const src = self.tables.getPtr(old_hash).?.get_slice(t.component_id, old_edl.row);
             @memcpy(src, ptr[0..t.type_size]);
             return;
         }
         var new_table = try self.ensure_table(new_hash);
         const old_table = self.tables.getPtr(old_hash).?;
         transfer_entity(self, old_table, new_table, old_edl);
-        @memcpy(try new_table.get_slice(t.component_id, new_table.count - 1), ptr[0..t.type_size]);
+        @memcpy(new_table.get_slice(t.component_id, new_table.count - 1), ptr[0..t.type_size]);
     }
     /// retrieve references to components of an entity
     pub fn get(self: *world, id: entity_id, T: type) ?*T {
@@ -431,7 +431,7 @@ pub const archetype_table = struct {
     pub fn get(self: *const archetype_table, T: type, row: u64) ?*T {
         return (self.storages.getPtr(comptime COMP_TYPE_TO_ID(T)) orelse return null).get(row, T);
     }
-    pub fn get_slice(self: *archetype_table, id: component_id, row: u64) ![]u8 {
+    pub fn get_slice(self: *archetype_table, id: component_id, row: u64) []u8 {
         return self.storages.getPtr(id).?.get_slice(row);
     }
 };
@@ -441,7 +441,7 @@ pub const component_column = struct {
     capacity: u64 = undefined,
     type_info: comp_rtti = undefined,
 
-    pub fn init(self: *component_column, T_run: comp_rtti, capacity: u64, allocator: std.mem.Allocator) !void {
+    pub fn init(self: *component_column, T_run: comp_rtti, capacity: usize, allocator: std.mem.Allocator) !void {
         self.capacity = capacity;
         self.type_info = T_run;
         if (self.type_info.type_size == 0) return;
@@ -462,10 +462,10 @@ pub const component_column = struct {
         allocator.vtable.free(allocator.ptr, self.array, self.type_info.type_alignment, @returnAddress());
         self.array = temp;
     }
-    pub fn get(self: *component_column, row: u64, T: type) *T {
+    pub fn get(self: *component_column, row: usize, T: type) *T {
         return @as(*T, @ptrFromInt(@intFromPtr(self.array.ptr) + row * self.type_info.type_size));
     }
-    pub fn get_slice(self: *component_column, row: u64) ![]u8 {
+    pub fn get_slice(self: *component_column, row: usize) []u8 {
         if (row >= self.capacity) unreachable;
         return self.array[row * self.type_info.type_size .. (row + 1) * self.type_info.type_size];
     }

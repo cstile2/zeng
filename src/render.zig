@@ -2,6 +2,9 @@ const zeng = @import("zeng.zig");
 const std = @import("std");
 
 pub fn draw_text(string: []const u8, ui_ren: *@import("main.zig").text_render_res) void {
+    zeng.gl.disable(zeng.gl.DEPTH_TEST);
+    defer zeng.gl.enable(zeng.gl.DEPTH_TEST);
+
     zeng.gl.useProgram(ui_ren.shader_program);
     zeng.gl.bindVertexArray(ui_ren.vao);
     zeng.gl.bindTexture(zeng.gl.TEXTURE_2D, ui_ren.texture);
@@ -56,7 +59,7 @@ pub const triangle_debug_info = struct {
     projection_matrix: [16]f32,
     inv_camera_matrix: [16]f32,
 };
-pub fn draw_triangle(tri: [3]zeng.vec3, info: triangle_debug_info) void {
+pub fn debug_draw_triangle(tri: [3]zeng.vec3, info: triangle_debug_info) void {
     zeng.gl.useProgram(info.debug_shader);
     zeng.gl.bindVertexArray(info.vao);
     zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, info.vbo);

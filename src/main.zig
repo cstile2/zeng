@@ -16,6 +16,8 @@ pub const COMPONENT_TYPES = [_]type{
     children,
     local_matrix,
     player,
+    animation_component,
+    zeng.skeleton,
 };
 pub const sphere_collider = struct {
     radius: f32 = 1.0,
@@ -41,9 +43,13 @@ pub const player = struct {
     velocity: zeng.vec3,
     ground_normal: zeng.vec3,
     grounded: bool,
+    animator: ecs.entity_id,
+};
+pub const animation_component = struct {
+    time: f32,
+    current_animation: usize,
 };
 
-pub const debug_res = @import("render.zig").triangle_debug_info;
 pub const RESOURCE_TYPES = [_]type{
     ecs.world,
     zeng.engine_context,
@@ -56,6 +62,8 @@ pub const RESOURCE_TYPES = [_]type{
     sound_res,
     std.Random.Xoshiro256,
     debug_res,
+    animation_res,
+    skeleton_res,
 };
 pub const time_res = struct {
     delta_time: f64,
@@ -90,6 +98,11 @@ pub const entity_dependency_res = struct {
         return @ptrCast(this.map.get(.{ id, comp_type }) orelse return null);
     }
 };
+pub const debug_res = @import("render.zig").triangle_debug_info;
+pub const animation_res = std.ArrayList(zeng.Animation);
+pub const skeleton_res = std.ArrayList(zeng.skeleton);
+
+pub const Pose = struct { []zeng.quat, []zeng.vec3, []zeng.vec3 };
 
 pub fn main() !void {
     var is_server: bool = true;
@@ -112,23 +125,23 @@ pub fn main() !void {
     var fet: zeng.resource_fetcher = undefined;
     try zeng.engine_start(&ctx, &res, &world, &fet);
     defer zeng.engine_end(&ctx, &res, &world);
-
-    const triangle_vao, const triangle_vbo = zeng.create_triangle_mesh();
-
     _ = try std.Thread.spawn(.{}, aud.audio_engine_run, .{});
 
+    const triangle_vao, const triangle_vbo = zeng.create_triangle_mesh();
     const sky_shader = zeng.load_shader(ctx.allocator, "assets/shaders/sky_vertex.shader", "assets/shaders/sky_fragment.shader");
     const static_shader = zeng.load_shader(ctx.allocator, "assets/shaders/basic_vertex.shader", "assets/shaders/basic_fragment.shader");
     const skin_shader = zeng.load_shader(ctx.allocator, "assets/shaders/skinned_vertex.shader", "assets/shaders/basic_fragment.shader");
     const debug_shader = zeng.load_shader(ctx.allocator, "assets/shaders/debug_vertex.shader", "assets/shaders/debug_fragment.shader");
     const uv_checker_tex = zeng.load_texture("assets/images/uv_checker.png", true, false);
-    var singular_animation_player = animation_player{ .skeleton_ptr = undefined, .time = 0.0, .animations = undefined, .current_animation = 3 };
+    const black_tex = zeng.load_texture("assets/images/black.png", true, false);
 
-    const land_root = zeng.instantiate(&world, &ctx, "assets/gltf/land.gltf", "assets/gltf/land.bin", skin_shader, static_shader, uv_checker_tex, null);
-    const model_root = zeng.instantiate(&world, &ctx, "assets/gltf/static_test.gltf", "assets/gltf/static_test.bin", skin_shader, static_shader, uv_checker_tex, &singular_animation_player);
-    const castle_root = zeng.instantiate(&world, &ctx, "assets/gltf/medieval.gltf", "assets/gltf/medieval.bin", skin_shader, static_shader, uv_checker_tex, null);
-    world.get(castle_root, zeng.world_matrix).?.* = zeng.mat_tran(zeng.mat_scal(zeng.mat_identity, zeng.vec3.ONE.mult(3.5)), zeng.vec3{ .z = -6.0, .y = 2.0 });
-    world.add(player{ .velocity = zeng.vec3.ZERO, .ground_normal = zeng.vec3.UP, .grounded = false }, model_root);
+    const land_root = zeng.auto_import(&ctx, &world, "assets/gltf/", "land", skin_shader, static_shader, uv_checker_tex);
+    const mesh_slice1, const animation_slice1, const skeleton_slice1, const parent_child_map1 = zeng.gltf_extract_resources(zeng.gltf_parse(zeng.get_file_bytes("assets/gltf/static_test.gltf", ctx.arena_allocator), ctx.arena_allocator), "assets/gltf/static_test.bin", "assets/gltf/", ctx.arena_allocator, skin_shader, static_shader, uv_checker_tex);
+    const model_root = zeng.instantiate(mesh_slice1, parent_child_map1, &world, &ctx);
+    world.add(player{ .velocity = zeng.vec3.ZERO, .ground_normal = zeng.vec3.UP, .grounded = false, .animator = undefined }, model_root);
+    const castle_root = zeng.auto_import(&ctx, &world, "assets/gltf/", "medieval", skin_shader, static_shader, uv_checker_tex);
+    world.get(castle_root, zeng.world_matrix).?.* = zeng.mat_tran(zeng.mat_scal(zeng.mat_identity, zeng.vec3.ONE.mult(3.5)), zeng.vec3{ .x = -10.0, .z = -6.0, .y = -2.0 });
+    const pistol_root = zeng.auto_import(&ctx, &world, "assets/gltf/", "pistol", skin_shader, static_shader, black_tex);
 
     const square_vao, const square_indices_length = zeng.create_square_mesh();
     res.insert(text_render_res{ .shader_program = zeng.load_shader(ctx.allocator, "assets/shaders/screen.shader", "assets/shaders/screenfrag.shader"), .texture = zeng.load_texture("assets/images/sdf_font.png", false, true), .vao = square_vao, .indices_len = square_indices_length });
@@ -140,21 +153,28 @@ pub fn main() !void {
     res.insert(ctx);
     // res.insert(networking_res{ .main_socket = main_socket, .server_address = server_address, .is_server = is_server });
     res.insert(sound_res{ .first = aud.get_audio_file_data(zeng.get_file_bytes("assets/sounds/ahem.wav", ctx.arena_allocator)) catch unreachable });
+    res.insert(animation_res.init(ctx.arena_allocator));
+    for (animation_slice1) |A| {
+        res.get(animation_res).append(A) catch unreachable;
+    }
+    res.insert(skeleton_res.init(ctx.arena_allocator));
+    var e: ecs.entity_id = undefined;
+    for (skeleton_slice1) |S| {
+        // res.get(skeleton_res).append(S) catch unreachable;
+        e = world.spawn(.{ S, animation_component{ .time = 0.0, .current_animation = 0 } });
+    }
+    world.get(model_root, player).?.animator = e;
 
-    const main_camera = world.spawn(.{
-        zeng.camera{ .projection_matrix = undefined },
-        zeng.mat_identity,
-        fly_component{},
-        sphere_collider{ .radius = 1.0 },
-    });
+    const main_camera = world.spawn(.{ zeng.camera{ .projection_matrix = undefined }, zeng.mat_identity, fly_component{}, sphere_collider{ .radius = 1.0 } });
     res.get(main_camera_res).matrix = world.get(main_camera, zeng.world_matrix).?;
     res.get(main_camera_res).camera = world.get(main_camera, zeng.camera).?;
     zeng.window_resize_handler(ctx.active_window, ctx.active_window.getSize().width, ctx.active_window.getSize().height);
     ctx.active_window.setInputModeCursor(.disabled);
 
     var paused: bool = false;
+    // var anim_t: f32 = 0.0;
     while (!ctx.active_window.shouldClose()) {
-        // std.time.sleep(std.time.ns_per_ms * 8);
+        // std.time.sleep(std.time.ns_per_ms * 40);
         zeng.start_of_frame();
         // if (is_server) zeng.net.SERVER_recieve_all(main_socket, &res);
 
@@ -171,26 +191,27 @@ pub fn main() !void {
         }
         res.get(main_camera_res).matrix = world.get(main_camera, zeng.world_matrix).?;
         res.get(main_camera_res).camera = world.get(main_camera, zeng.camera).?;
-        // zeng.gl.clearColor(0.4, 0.7, 0.9, 1.0);
         zeng.gl.clear(zeng.gl.COLOR_BUFFER_BIT);
 
         res.insert(debug_res{ .vao = triangle_vao, .vbo = triangle_vbo, .debug_shader = debug_shader, .projection_matrix = res.get(main_camera_res).camera.projection_matrix, .inv_camera_matrix = zeng.mat_invert(res.get(main_camera_res).matrix.*) });
 
         fet.run_system(mouse_look_system);
         fet.run_system(fly_system);
-        if (!paused) {
-            animation_pose(&singular_animation_player, @floatCast(res.get(time_res).dt));
 
+        if (!paused) {
             fet.run_system(spawn_system);
             fet.run_system(circle_collision_system);
-            fet.run_system(player_system0);
-            fet.run_system(player_system);
+            fet.run_system(player_collision_system);
+            fet.run_system(player_movement_system);
             fet.run_system(follower_system);
 
             sync_transforms_children(castle_root, fet.fresh_query(.{zeng.world_matrix}), fet.fresh_query(.{children}), fet.fresh_query(.{local_matrix}));
             sync_transforms_children(land_root, fet.fresh_query(.{zeng.world_matrix}), fet.fresh_query(.{children}), fet.fresh_query(.{local_matrix}));
             sync_transforms_children(model_root, fet.fresh_query(.{zeng.world_matrix}), fet.fresh_query(.{children}), fet.fresh_query(.{local_matrix}));
         }
+        world.get(pistol_root, zeng.world_matrix).?.* = zeng.mat_tran(world.get(main_camera, zeng.world_matrix).?.*, zeng.mat_mult_vec4(world.get(main_camera, zeng.world_matrix).?.*, zeng.vec4{ .x = 0.15, .y = -0.15, .z = -0.2 }).to_vec3());
+        sync_transforms_children(pistol_root, fet.fresh_query(.{zeng.world_matrix}), fet.fresh_query(.{children}), fet.fresh_query(.{local_matrix}));
+
         zeng.gl.useProgram(sky_shader);
         zeng.gl.bindVertexArray(square_vao);
         zeng.gl.uniformMatrix4fv(zeng.gl.getUniformLocation(sky_shader, "camera_world_space"), 1, zeng.gl.FALSE, res.get(main_camera_res).matrix);
@@ -198,10 +219,6 @@ pub fn main() !void {
         zeng.gl.drawElements(zeng.gl.TRIANGLES, square_indices_length, zeng.gl.UNSIGNED_INT, null);
         zeng.gl.clear(zeng.gl.DEPTH_BUFFER_BIT);
         fet.run_system(render_system);
-
-        @import("render.zig").draw_triangle(.{ zeng.vec3.ZERO, zeng.vec3.RIGHT.mult(0.05), zeng.vec3.UP.mult(0.05) }, res.get(debug_res).*);
-
-        ctx.active_window.swapBuffers();
 
         res.get(zeng.commands).process_commands(&world);
         // if (!is_server) zeng.net.CLIENT_send_all(res.get(zeng.commands));
@@ -296,7 +313,7 @@ pub fn mouse_look_system(ctx: *zeng.engine_context, q: *ecs.query(.{ zeng.world_
 }
 
 /// Render all entities with a transform and a mesh
-pub fn render_system(tt: *time_res, ui_ren: *text_render_res, cam: *main_camera_res, render_q: *ecs.query(.{ zeng.world_matrix, zeng.mesh }), skinned_q: *ecs.query(.{ zeng.world_matrix, zeng.skinned_mesh })) !void {
+pub fn render_system(ctx: *zeng.engine_context, tt: *time_res, ui_ren: *text_render_res, cam: *main_camera_res, render_q: *ecs.query(.{ zeng.world_matrix, zeng.mesh }), skinned_q: *ecs.query(.{ zeng.world_matrix, zeng.skinned_mesh })) !void {
     const inv_camera_matrix: [16]f32 = zeng.mat_invert(cam.matrix.*);
 
     var render_iterator = render_q.iterator();
@@ -316,6 +333,8 @@ pub fn render_system(tt: *time_res, ui_ren: *text_render_res, cam: *main_camera_
     // zeng.draw_text("the end is never the end is never the end is never the ", ui_ren);
     var buffer: [64]u8 = undefined;
     zeng.draw_text(try std.fmt.bufPrint(buffer[0..], "{d:.4}", .{1.0 / tt.delta_time}), ui_ren);
+
+    ctx.active_window.swapBuffers();
 }
 
 /// Makes all follower entities follow their target
@@ -332,7 +351,7 @@ pub fn follower_system(T: *time_res, follower_q: *ecs.query(.{ follow_component,
     }
 }
 
-pub fn player_system0(player_q: *ecs.query(.{ player, zeng.world_matrix }), debug: *debug_res) !void {
+pub fn player_collision_system(player_q: *ecs.query(.{ player, zeng.world_matrix }), debug: *debug_res) !void {
     var player_it = player_q.iterator();
     while (player_it.next()) |player_curr| {
         const plyr, const world_matrix = player_curr;
@@ -413,7 +432,7 @@ pub fn player_system0(player_q: *ecs.query(.{ player, zeng.world_matrix }), debu
     }
 }
 
-pub fn player_system(T: *time_res, player_q: *ecs.query(.{ player, zeng.world_matrix }), ctx: *zeng.engine_context, cam: *main_camera_res) !void {
+pub fn player_movement_system(T: *time_res, player_q: *ecs.query(.{ player, zeng.world_matrix }), animator_q: *ecs.query(.{ zeng.skeleton, animation_component }), ctx: *zeng.engine_context, cam: *main_camera_res, animations: *animation_res) !void {
     var player_it = player_q.iterator();
     while (player_it.next()) |player_curr| {
         const p, const m = player_curr;
@@ -439,10 +458,6 @@ pub fn player_system(T: *time_res, player_q: *ecs.query(.{ player, zeng.world_ma
             p.ground_normal = zeng.vec3.UP;
         }
 
-        if (!p.grounded) {
-            p.velocity = p.velocity.add(zeng.vec3.UP.mult(-9.8 * T.dt));
-            p.ground_normal = zeng.vec3.UP;
-        }
         const acc: f32 = 40.0;
         const basis_right = zeng.mat_right(cam.matrix.*).slide(p.ground_normal).normalized();
         const basis_forward = basis_right.cross(p.ground_normal);
@@ -453,18 +468,46 @@ pub fn player_system(T: *time_res, player_q: *ecs.query(.{ player, zeng.world_ma
             if (input_vect.length() < 0.1) p.velocity = p.velocity.add(p.velocity.neg().clamp(acc * T.dt));
             p.velocity = p.velocity.clamp(3.8);
         } else {
+            p.velocity = p.velocity.add(zeng.vec3.UP.mult(-9.8 * T.dt));
+            p.ground_normal = zeng.vec3.UP;
             p.velocity = p.velocity.add(move_vect.mult(acc * 0.3 * T.dt));
             p.velocity = p.velocity.slide(zeng.vec3.UP).clamp(3.5).add(p.velocity.project(zeng.vec3.UP));
         }
 
-        if (p.velocity.slide(zeng.vec3.UP).length() > 0.1)
-            m.* = zeng.mat_rebasis(m.*, p.velocity.slide(zeng.vec3.UP).cross(zeng.vec3.UP.neg()).normalized(), zeng.vec3.UP, p.velocity.slide(zeng.vec3.UP).normalized());
+        if (p.velocity.slide(zeng.vec3.UP).length() > 0.1) m.* = zeng.mat_rebasis(m.*, p.velocity.slide(zeng.vec3.UP).cross(zeng.vec3.UP.neg()).normalized(), zeng.vec3.UP, p.velocity.slide(zeng.vec3.UP).normalized());
 
         var o = zeng.mat_position(m.*);
         o = o.add(p.velocity.mult(T.dt));
         zeng.mat_position_set(m, o);
+
+        const anim = animator_q.get(p.animator, animation_component).?;
+        const sk = animator_q.get(p.animator, zeng.skeleton).?;
+        const _t = p.velocity.div(2.0).clamp(1.0).length();
+        anim.time += T.dt / zeng.lerp(animations.items[1].duration, animations.items[4].duration, _t);
+        while (anim.time > 1.0) {
+            anim.time -= 1.0;
+        }
+
+        const pose = get_animation_pose_normalized(&animations.items[1], anim.time, sk.bone_parent_indices.len, ctx.allocator);
+        const pose2 = get_animation_pose_normalized(&animations.items[4], anim.time, sk.bone_parent_indices.len, ctx.allocator);
+        lerp_pose(pose, pose2, _t);
+        apply_pose(sk, pose);
+        ctx.allocator.free(pose[0]);
+        ctx.allocator.free(pose[1]);
+        ctx.allocator.free(pose[2]);
+        ctx.allocator.free(pose2[0]);
+        ctx.allocator.free(pose2[1]);
+        ctx.allocator.free(pose2[2]);
     }
 }
+
+// pub fn animation_system(ctx: *zeng.engine_context, animations: *animation_res, q: *ecs.query(.{ zeng.skeleton, animation_component })) !void {
+//     var it = q.iterator();
+//     while (it.next()) |s_a| {
+//         const skeleton, const anim = s_a;
+//         _ = anim; // autofix
+//     }
+// }
 
 // Extra stuff
 pub fn sync_transforms_children(id: ecs.entity_id, q_transform: *ecs.query(.{zeng.world_matrix}), q_children: *ecs.query(.{children}), q_local_transform: *ecs.query(.{local_matrix})) void {
@@ -535,17 +578,11 @@ pub fn animation_pose(anim: *animation_player, delta_time: f32) void {
         curr += 1;
     }
 }
-pub fn get_animation_pose(animation: *zeng.Animation, time: f32, skeleton: *zeng.skeleton) void {
-    _ = skeleton; // autofix
-    // var _time = __time;
-    // _time += delta_time;
-    // while (_time > animation.duration) {
-    //     _time -= animation.duration;
-    // }
-
-    var rotations: [100]zeng.quat = .{zeng.quat.IDENTITY} ** 100;
-    var translations: [100]zeng.vec3 = .{zeng.vec3.ZERO} ** 100;
-    var scales: [100]zeng.vec3 = .{zeng.vec3.ONE} ** 100;
+pub fn get_animation_pose_normalized(animation: *zeng.Animation, time_norm: f32, num: usize, allocator: std.mem.Allocator) Pose {
+    const time = time_norm * animation.duration;
+    var rotations = allocator.alloc(zeng.quat, num) catch unreachable;
+    var translations = allocator.alloc(zeng.vec3, num) catch unreachable;
+    var scales = allocator.alloc(zeng.vec3, num) catch unreachable;
     for (animation.channels) |channel| {
         const idx = binary_search(channel.inputs, time);
         const lerp_amount = zeng.inv_lerp(channel.inputs[idx], channel.inputs[idx + 1], time);
@@ -558,17 +595,27 @@ pub fn get_animation_pose(animation: *zeng.Animation, time: f32, skeleton: *zeng
             scales[channel.target] = channel.outputs.scale[idx].lerp(channel.outputs.scale[idx + 1], lerp_amount);
         }
     }
-
-    // var curr: usize = 0;
-    // while (curr < skeleton.bone_parent_indices.len) {
-    //     skeleton.local_bone_matrices[curr] = zeng.mat_tran(zeng.mat_mult(zeng.quat_to_mat(rotations[curr]), zeng.mat_scal(zeng.mat_identity, scales[curr])), translations[curr]);
-    //     const parent_index = skeleton.bone_parent_indices[curr];
-    //     if (parent_index != -1) {
-    //         skeleton.local_bone_matrices[curr] = zeng.mat_mult(skeleton.local_bone_matrices[@intCast(parent_index)], skeleton.local_bone_matrices[curr]);
-    //     }
-    //     skeleton.model_bone_matrices[curr] = zeng.mat_mult(skeleton.local_bone_matrices[curr], skeleton.inverse_bind_matrices[curr]);
-    //     curr += 1;
-    // }
+    return .{ rotations, translations, scales };
+}
+pub fn apply_pose(skeleton: *zeng.skeleton, pose: Pose) void {
+    var curr: usize = 0;
+    while (curr < skeleton.bone_parent_indices.len) {
+        skeleton.local_bone_matrices[curr] = zeng.mat_tran(zeng.mat_mult(zeng.quat_to_mat(pose[0][curr]), zeng.mat_scal(zeng.mat_identity, pose[2][curr])), pose[1][curr]);
+        const parent_index = skeleton.bone_parent_indices[curr];
+        if (parent_index != -1) {
+            skeleton.local_bone_matrices[curr] = zeng.mat_mult(skeleton.local_bone_matrices[@intCast(parent_index)], skeleton.local_bone_matrices[curr]);
+        }
+        skeleton.model_bone_matrices[curr] = zeng.mat_mult(skeleton.local_bone_matrices[curr], skeleton.inverse_bind_matrices[curr]);
+        curr += 1;
+    }
+}
+pub fn lerp_pose(pose_a: Pose, pose_b: Pose, t: f32) void {
+    for (pose_a[0], pose_b[0]) |*a, b| {
+        a.* = a.nlerp(b, t);
+    }
+    for (pose_a[1], pose_b[1]) |*a, b| {
+        a.* = a.lerp(b, t);
+    }
 }
 
 // next up - need to import materials(?) and create rendering to support them
@@ -579,22 +626,16 @@ pub fn get_animation_pose(animation: *zeng.Animation, time: f32, skeleton: *zeng
 // robust text rendering
 // better rendering - lights
 
-// idea for object dependencies - have objects publish themselves to a global dependency resource (hashmap), allowing other objects to get a direct reference to components
-// the objects which publish themselves are responsible for maintaining their references and deleting themselves from the registry
-
-// ecs alternative: objects have stable mem addresses in contiguous arrays. objects link together using relationships/trees
-// relationship_map: std.AutoHashMap(struct{*anyopaque, *anyopaque}, void) = undefined; - best for o(1) determining if relationship exists
-// relationship_map: std.AutoHashMap(*anyopaque, List(*anyopaque)) = undefined; - best for traversing graph
-// parent_map: []usize; - best for children knowing their parent - only works for tree graphs
-
-// general graphs - adjacency list map, trees - parent map
-
-// entities and the components themselves must be accessed through entity_id's - which feels bad cuz seems slow and is tedious
-
 // if entity tables recycle rows instead of filling them immediately, we can make unstable ID's be stable! They are already so close to being stable
 // new form entity_id (table_index, row_index) -> index into the worlds new table array to acquire table pointer, dereference it, index using row - MUCH better
 // if table pointers were stable, and rows were stable, entity (component) pointers would also be stable - until deletion
+// but stability kinda means non-tight iteration
 
-// THE PLAN: make component pointers stable: liveness will be determined through some global structure like a hashmap to determine generation number
-// this keeps sanity checks optional, meaning if we are sure that certain pointers are good to go, we can use them directly - easier to look at and faster
-// entity references are strange tho - we don't just need a single component at all times - so we have the entity layer and component layer. We probably need both.
+// scenes are very useful actually - they provided the necessary components.
+
+// problem: one entity (animator + skeleton) needs to communicate with another
+
+// skinned_mesh: mesh
+// skeleton: references memory for posing
+// entity_a: skeleton + animator
+// entity_b: skinned_mesh + id of entity_a

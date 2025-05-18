@@ -303,10 +303,10 @@ pub fn shape_separation(a_coll: collider_info, b_coll: collider_info, info: rend
     // std.debug.print("{} {}\n", .{ len, it });
     for (0..len) |i| {
         for (i + 1..len) |j| {
-            render.draw_triangle(.{ tet[i], tet[j], tet[j] }, info);
+            render.debug_draw_triangle(.{ tet[i], tet[j], tet[j] }, info);
         }
     }
-    if (len == 1) render.draw_triangle(.{ tet[0], tet[0].add(vec3.RIGHT.mult(0.05)), tet[0].add(vec3.UP.mult(0.05)) }, info);
+    if (len == 1) render.debug_draw_triangle(.{ tet[0], tet[0].add(vec3.RIGHT.mult(0.05)), tet[0].add(vec3.UP.mult(0.05)) }, info);
     return cp;
 }
 pub fn shape_separation2(a_coll: collider_info, b_coll: collider_info, info: render.triangle_debug_info, num: usize) vec3 {
@@ -331,10 +331,10 @@ pub fn shape_separation2(a_coll: collider_info, b_coll: collider_info, info: ren
     std.debug.print("{} {}\n", .{ len, it });
     for (0..len) |i| {
         for (i + 1..len) |j| {
-            render.draw_triangle(.{ tet[i], tet[j], tet[j] }, info);
+            render.debug_draw_triangle(.{ tet[i], tet[j], tet[j] }, info);
         }
     }
-    if (len == 1) render.draw_triangle(.{ tet[0], tet[0].add(vec3.RIGHT.mult(0.05)), tet[0].add(vec3.UP.mult(0.05)) }, info);
+    if (len == 1) render.debug_draw_triangle(.{ tet[0], tet[0].add(vec3.RIGHT.mult(0.05)), tet[0].add(vec3.UP.mult(0.05)) }, info);
     return v;
 }
 fn dist(tet: [4]vec3, len: usize) gjk_state {
