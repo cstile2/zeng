@@ -97,6 +97,14 @@ pub const vec3 = extern struct {
     pub fn lerp(a: vec3, b: vec3, t: f32) vec3 {
         return a.mult(1.0 - t).add(b.mult(t));
     }
+    pub fn slerp(a: vec3, b: vec3, t: f32) vec3 {
+        var _dot = a.dot(b);
+        _dot = std.math.clamp(_dot, -1.0, 1.0);
+
+        const theta = std.math.acos(_dot) * t;
+        const relative = b.sub(a.mult(_dot)).normalized();
+        return a.mult(@cos(theta)).add(relative.mult(@sin(theta)));
+    }
     pub fn neg(v: vec3) vec3 {
         return .{ .x = -v.x, .y = -v.y, .z = -v.z };
     }
@@ -141,6 +149,40 @@ pub const quat = packed struct {
     y: f32 = 0.0,
     z: f32 = 0.0,
     w: f32 = 0.0,
+    pub fn add(self: quat, other: quat) quat {
+        return quat{
+            .x = self.x + other.x,
+            .y = self.y + other.y,
+            .z = self.z + other.z,
+            .w = self.w + other.w,
+        };
+    }
+    pub fn add2(self: quat, other: quat) quat {
+        const _dot = quat.dot(self, other);
+        var b = other;
+        if (_dot < 0.0) {
+            b = quat{
+                .x = -other.x,
+                .y = -other.y,
+                .z = -other.z,
+                .w = -other.w,
+            };
+        }
+        return quat{
+            .x = self.x + b.x,
+            .y = self.y + b.y,
+            .z = self.z + b.z,
+            .w = self.w + b.w,
+        };
+    }
+    pub fn mult(self: quat, scalar: f32) quat {
+        return quat{
+            .x = self.x * scalar,
+            .y = self.y * scalar,
+            .z = self.z * scalar,
+            .w = self.w * scalar,
+        };
+    }
     pub fn lenSq(self: quat) f32 {
         return self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w;
     }
@@ -220,8 +262,9 @@ pub const skinned_mesh = struct {
     indices_length: i32,
     indices_type: gl.GLenum,
     material: material,
-    skeleton: *skeleton,
+    skeleton: ecs.entity_id,
 };
+pub const cpu_mesh = struct {};
 
 // Math
 pub fn quat_to_mat(q: quat) [16]f32 {
@@ -616,7 +659,7 @@ pub const engine_context = struct {
 pub fn window_resize_handler(window: zeng.glfw.Window, width: u32, height: u32) void {
     zeng.gl.viewport(0, 0, @intCast(width), @intCast(height));
     if (window.getUserPointer(zeng.resources_t)) |res| {
-        res.get(main.main_camera_res).camera.projection_matrix = zeng.mat_perspective_projection(1.5, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
+        res.get(main.main_camera_res).camera.projection_matrix = zeng.mat_perspective_projection(1.2, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
     }
 }
 pub fn engine_start(gd: *zeng.engine_context, res: *resources_t, world: *ecs.world, dep: *resource_fetcher) !void {
@@ -751,6 +794,11 @@ pub const resources_t = struct {
             self.allocator.destroy(ref);
         }
         a.value_ptr.* = @ptrCast(new_guy);
+    }
+    pub fn insert_ptr(self: *resources_t, p: anytype) void {
+        const erased = @as(*anyopaque, @ptrCast(p));
+        const type_id = utils.type_id(@typeInfo(@TypeOf(p)).Pointer.child);
+        self.map.put(type_id, erased) catch unreachable;
     }
     pub fn get(resources: *resources_t, p: type) *p {
         return @alignCast(@ptrCast(resources.map.getPtr(utils.type_id(p)).?.*));

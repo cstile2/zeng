@@ -1,13 +1,20 @@
 const std = @import("std");
 const zeng = @import("zeng.zig");
 const render = @import("render.zig");
+const ecs = @import("ecs.zig");
 
 const vec3 = zeng.vec3;
 const vec2 = zeng.vec2;
 
+pub const collider_type = enum {
+    mesh,
+    sphere,
+    support_based,
+};
 pub const collider_info = struct {
+    tag: collider_type = .sphere,
     support: *const fn (vec3, collider_info) vec3,
-    data: *anyopaque,
+    data: *const anyopaque,
     matrix: zeng.world_matrix,
 };
 
@@ -34,7 +41,7 @@ pub fn cube(dir: vec3, coll: collider_info) vec3 {
     };
 }
 pub fn triangle(dir: vec3, coll: collider_info) vec3 {
-    const tri_data = @as(*[3]vec3, @alignCast(@ptrCast(coll.data)));
+    const tri_data = @as(*const [3]vec3, @alignCast(@ptrCast(coll.data)));
 
     var max_float = tri_data[0].dot(dir);
     var max_pos: vec3 = tri_data[0];
@@ -375,7 +382,7 @@ fn solve_simplex3(a: vec3, b: vec3, c: vec3, o: vec3) gjk_state {
     // const tet = [3]vec3{ a, b, c };
     const _n = b.sub(a).cross(c.sub(a));
     if (_n.length_sq() < eps) {
-        std.debug.print("N: {}\n", .{_n.length_sq()});
+        // std.debug.print("N: {}\n", .{_n.length_sq()});
         // unreachable;
         const _a = solve_simplex2(vec3.ZERO, a, b);
         const _b = solve_simplex2(vec3.ZERO, b, c);
@@ -574,4 +581,52 @@ fn excluding(tet: [4]vec3, len: usize, index: usize) struct { [4]vec3, usize } {
         }
     }
     return .{ out, out_len };
+}
+
+pub const raycast_result = struct {
+    normal: vec3,
+    t: f32,
+    entity_id: ecs.entity_id,
+};
+pub fn ray_cast_triangle(ro: vec3, rd: vec3, v0: vec3, v1: vec3, v2: vec3, result: *raycast_result) bool {
+    const v1v0 = v1.sub(v0);
+    const v2v0 = v2.sub(v0);
+    const rov0 = ro.sub(v0);
+    const n = vec3.cross(v1v0, v2v0);
+    const q = vec3.cross(rov0, rd);
+    const d: f32 = 1.0 / vec3.dot(rd, n);
+    const u: f32 = d * vec3.dot(q.neg(), v2v0);
+    const v: f32 = d * vec3.dot(q, v1v0);
+    result.t = d * vec3.dot(n.neg(), rov0);
+    result.normal = n;
+    if (result.t < 0.0) return false;
+    if (u < 0.0 or v < 0.0 or (u + v) > 1.0) return false;
+    return true;
+}
+
+pub fn ray_cast(ro: vec3, rd: vec3, physics_data: []collider_info, result: *raycast_result) bool {
+    result.t = std.math.floatMax(f32);
+    var hit = false;
+    for (physics_data) |coll| {
+        if (coll.tag == .mesh) {
+            const positions, const indices = @as(*const struct { []vec3, []u32 }, @alignCast(@ptrCast(coll.data))).*;
+
+            var curr_tri: usize = 0;
+            while (curr_tri < indices.len) {
+                defer curr_tri += 3;
+
+                const a = zeng.mat_mult_vec4(coll.matrix, positions[indices[curr_tri + 0]].to_vec4(1.0)).to_vec3();
+                const b = zeng.mat_mult_vec4(coll.matrix, positions[indices[curr_tri + 1]].to_vec4(1.0)).to_vec3();
+                const c = zeng.mat_mult_vec4(coll.matrix, positions[indices[curr_tri + 2]].to_vec4(1.0)).to_vec3();
+
+                var res: raycast_result = undefined;
+                const is_hitting = ray_cast_triangle(ro, rd, a, b, c, &res);
+                if (is_hitting) {
+                    if (res.t < result.t) result.* = res;
+                    hit = true;
+                }
+            }
+        }
+    }
+    return hit;
 }

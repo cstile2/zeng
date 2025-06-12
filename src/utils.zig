@@ -1,4 +1,5 @@
 const std = @import("std");
+const zeng = @import("zeng.zig");
 
 /// returns an array of types - each type corresponds to a function parameter
 pub fn fn_parameter_type_array(comptime t: std.builtin.Type) [t.Fn.params.len]type {
@@ -69,4 +70,11 @@ pub fn runtime_type_id(comptime T: type) !u32 {
         type_registry_next_id += 1;
     }
     return result.value_ptr.*;
+}
+
+pub fn convert_float_slice_to_vec_slice(s: []f32) []zeng.vec3 {
+    var ret: []zeng.vec3 = undefined;
+    ret.ptr = @ptrCast(s.ptr);
+    ret.len = s.len / 3;
+    return ret;
 }

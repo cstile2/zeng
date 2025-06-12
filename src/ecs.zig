@@ -294,8 +294,8 @@ pub const world = struct {
         @memcpy(new_table.get_slice(t.component_id, new_table.count - 1), ptr[0..t.type_size]);
     }
     /// retrieve references to components of an entity
-    pub fn get(self: *world, id: entity_id, T: type) ?*T {
-        const unstable = self.locations.get(id).?;
+    pub fn get(self: *const world, id: entity_id, T: type) ?*T {
+        const unstable = self.locations.get(id) orelse unreachable;
         return (self.tables.getPtr(unstable.archetype_hash) orelse return null).get(T, unstable.row);
     }
     /// removes a component if that component type is on the specified entity
@@ -340,7 +340,7 @@ pub const world = struct {
         if (table_get_put.found_existing) return table_get_put.value_ptr;
 
         const table = table_get_put.value_ptr;
-        table.init(512, self.allocator);
+        table.init(1000, self.allocator);
 
         var curr_bit_field: u64 = 1;
         var index: usize = 0;
@@ -429,9 +429,11 @@ pub const archetype_table = struct {
         }
     }
     pub fn get(self: *const archetype_table, T: type, row: u64) ?*T {
+        if (row >= self.count) unreachable;
         return (self.storages.getPtr(comptime COMP_TYPE_TO_ID(T)) orelse return null).get(row, T);
     }
     pub fn get_slice(self: *archetype_table, id: component_id, row: u64) []u8 {
+        if (row >= self.count) unreachable;
         return self.storages.getPtr(id).?.get_slice(row);
     }
 };
@@ -463,6 +465,7 @@ pub const component_column = struct {
         self.array = temp;
     }
     pub fn get(self: *component_column, row: usize, T: type) *T {
+        if (row >= self.capacity) unreachable;
         return @as(*T, @ptrFromInt(@intFromPtr(self.array.ptr) + row * self.type_info.type_size));
     }
     pub fn get_slice(self: *component_column, row: usize) []u8 {

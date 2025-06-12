@@ -1,5 +1,6 @@
 const zeng = @import("zeng.zig");
 const std = @import("std");
+const ecs = @import("ecs.zig");
 
 pub fn draw_text(string: []const u8, ui_ren: *@import("main.zig").text_render_res) void {
     zeng.gl.disable(zeng.gl.DEPTH_TEST);
@@ -34,7 +35,7 @@ pub fn draw_mesh(entity_mesh: zeng.mesh, entity_transform: zeng.world_matrix, pr
 
     zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, entity_mesh.indices_type, null);
 }
-pub fn draw_animated_skinned_mesh(entity_mesh: zeng.skinned_mesh, entity_transform: zeng.world_matrix, projection_matrix: [16]f32, inv_camera_matrix: [16]f32) void {
+pub fn draw_animated_skinned_mesh(world: *ecs.world, entity_mesh: zeng.skinned_mesh, entity_transform: zeng.world_matrix, projection_matrix: [16]f32, inv_camera_matrix: [16]f32) void {
     zeng.gl.useProgram(entity_mesh.material.shader_program);
     zeng.gl.bindVertexArray(entity_mesh.vao_gpu);
     zeng.gl.bindTexture(zeng.gl.TEXTURE_2D, entity_mesh.material.texture);
@@ -42,7 +43,7 @@ pub fn draw_animated_skinned_mesh(entity_mesh: zeng.skinned_mesh, entity_transfo
     var clip_matrix = zeng.mat_mult(projection_matrix, zeng.mat_mult(inv_camera_matrix, entity_transform));
 
     const bone_matrices_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "bone_matrices");
-    zeng.gl.uniformMatrix4fv(bone_matrices_location, 100, zeng.gl.FALSE, @ptrCast(entity_mesh.skeleton.model_bone_matrices));
+    zeng.gl.uniformMatrix4fv(bone_matrices_location, 100, zeng.gl.FALSE, @ptrCast(world.get(entity_mesh.skeleton, zeng.skeleton).?.model_bone_matrices));
 
     const world_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "world");
     const clip_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "clip");
