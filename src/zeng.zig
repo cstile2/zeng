@@ -264,7 +264,11 @@ pub const skinned_mesh = struct {
     material: material,
     skeleton: ecs.entity_id,
 };
-pub const cpu_mesh = struct {};
+pub const cpu_mesh = struct {
+    indices: []u32,
+    positions: []vec3,
+};
+pub const skeleton_pose = struct { []zeng.quat, []zeng.vec3, []zeng.vec3 };
 
 // Math
 pub fn quat_to_mat(q: quat) [16]f32 {
@@ -303,7 +307,7 @@ pub fn inv_lerp(a: f32, b: f32, v: f32) f32 {
     if (a == b) return 0.0; // Avoid division by zero; undefined behavior for constant ranges.
     return (v - a) / (b - a);
 }
-pub fn lerp(a: f32, b: f32, v: f32) f32 {
+pub fn lerp(a: anytype, b: anytype, v: anytype) @TypeOf(a) {
     return a + (b - a) * v;
 }
 
@@ -829,6 +833,16 @@ pub fn GET_PROC_CODE(comptime func: anytype) u32 {
     }
     @compileError("invalid procedure");
 }
+pub fn GET_MSG_CODE(T: type) u32 {
+    var count: u32 = 0;
+    for (rpc.REMOTE_MESSAGE_TYPES) |msg_type| {
+        if (msg_type == T) {
+            return count;
+        }
+        count += 1;
+    }
+    @compileError("invalid remote message type!");
+}
 pub const commands = struct {
     pub const Command = struct {
         stuff: [256]u8,
@@ -845,8 +859,12 @@ pub const commands = struct {
     queued_commands: [1024]Command = undefined,
     queued_commands_curr: u32 = 0,
 
-    remote_messages: [128]remote_message,
-    remote_messages_len: u8,
+    remote_messages: [4000]remote_message,
+    remote_messages_len: u16,
+
+    time: f64 = 0.0,
+
+    random: std.Random,
 
     /// queues the spawning of an entity until sometime later in this frame
     pub fn spawn(self: *commands, payload: anytype) void {
@@ -911,8 +929,37 @@ pub const commands = struct {
         zeng.serialize_to_bytes(procedure_code, payload_array, &payload_curr);
         zeng.serialize_to_bytes(args, payload_array, &payload_curr);
 
-        self.remote_messages[self.remote_messages_len] = remote_message{ .payload = payload_array[0..payload_curr], .target_socket = socket, .target_address = address };
+        self.remote_messages[self.remote_messages_len] = remote_message{ .payload = payload_array[0..payload_curr], .sender_socket = socket, .target_address = address };
         self.remote_messages_len += 1;
+    }
+
+    pub fn remote_event(self: *commands, socket: net.socket_t, address: net.Address_t, event: anytype) void {
+        if (self.random.float(f32) < 0.7) return;
+        const payload_array = self.allocator.alloc(u8, 4 + @sizeOf(@TypeOf(event))) catch unreachable;
+        var curr_byte: u32 = 0;
+        zeng.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
+        zeng.serialize_to_bytes(event, payload_array, &curr_byte);
+
+        const jittered_delay = self.random.float(f32) * 0.2 + 1.0; // 60ms + 150ms
+
+        self.remote_messages[self.remote_messages_len] = remote_message{ .payload = self.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = socket, .target_address = address, .time_to_send = self.time + jittered_delay };
+        self.remote_messages_len += 1;
+    }
+
+    pub fn remote_event_(self: *commands, socket: net.socket_t, address: net.Address_t, event: anytype) void {
+        const payload_array = self.allocator.alloc(u8, 4 + @sizeOf(@TypeOf(event))) catch unreachable;
+        var curr_byte: u32 = 0;
+        zeng.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
+        zeng.serialize_to_bytes(event, payload_array, &curr_byte);
+
+        self.remote_messages[self.remote_messages_len] = remote_message{ .payload = self.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = socket, .target_address = address, .time_to_send = self.time };
+        self.remote_messages_len += 1;
+    }
+
+    pub fn destroy(self: *commands) void {
+        for (self.remote_messages[0..self.remote_messages_len]) |mes| {
+            self.allocator.free(mes.payload);
+        }
     }
 };
 

@@ -77,7 +77,8 @@
 				66,
 				67,
 				68,
-				69
+				69,
+				70
 			]
 		}
 	],
@@ -1254,6 +1255,10 @@
 				1,
 				7
 			]
+		},
+		{
+			"mesh":70,
+			"name":"Cube.017"
 		}
 	],
 	"meshes":[
@@ -2164,6 +2169,19 @@
 						"TEXCOORD_0":215
 					},
 					"indices":7
+				}
+			]
+		},
+		{
+			"name":"Cube.001",
+			"primitives":[
+				{
+					"attributes":{
+						"POSITION":216,
+						"NORMAL":217,
+						"TEXCOORD_0":218
+					},
+					"indices":219
 				}
 			]
 		}
@@ -4164,6 +4182,40 @@
 			"componentType":5126,
 			"count":24,
 			"type":"VEC2"
+		},
+		{
+			"bufferView":216,
+			"componentType":5126,
+			"count":24,
+			"max":[
+				17.974613189697266,
+				1.7000000476837158,
+				-5.967553615570068
+			],
+			"min":[
+				16.025386810302734,
+				0.30000001192092896,
+				-10.032445907592773
+			],
+			"type":"VEC3"
+		},
+		{
+			"bufferView":217,
+			"componentType":5126,
+			"count":24,
+			"type":"VEC3"
+		},
+		{
+			"bufferView":218,
+			"componentType":5126,
+			"count":24,
+			"type":"VEC2"
+		},
+		{
+			"bufferView":219,
+			"componentType":5123,
+			"count":36,
+			"type":"SCALAR"
 		}
 	],
 	"bufferViews":[
@@ -5462,12 +5514,36 @@
 			"byteLength":192,
 			"byteOffset":1411008,
 			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":288,
+			"byteOffset":1411200,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":288,
+			"byteOffset":1411488,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":192,
+			"byteOffset":1411776,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":72,
+			"byteOffset":1411968,
+			"target":34963
 		}
 	],
 	"buffers":[
 		{
-			"byteLength":1411200,
-			"uri":"head.bin"
+			"byteLength":1412040,
+			"uri":"outdoor_map_6_8_25.bin"
 		}
 	]
 }

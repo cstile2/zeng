@@ -6,6 +6,16 @@ const ecs = @import("ecs.zig");
 const vec3 = zeng.vec3;
 const vec2 = zeng.vec2;
 
+pub const mesh_collider_data = struct {
+    positions: []vec3,
+    indices: []u32,
+};
+
+pub const mesh_triangle_data = struct {
+    indices: [3]u32,
+    positions: []vec3,
+};
+
 pub const collider_type = enum {
     mesh,
     sphere,
@@ -16,6 +26,11 @@ pub const collider_info = struct {
     support: *const fn (vec3, collider_info) vec3,
     data: *const anyopaque,
     matrix: zeng.world_matrix,
+
+    pub fn _support(self: collider_info, dir: vec3) vec3 {
+        const _dir = zeng.mat_mult_vec4(zeng.mat_invert(self.matrix), dir.to_vec4(0.0)).to_vec3();
+        return zeng.mat_mult_vec4(self.matrix, self.support(_dir, self).to_vec4(1.0)).to_vec3();
+    }
 };
 
 pub fn sphere(dir: vec3, coll: collider_info) vec3 {
@@ -49,6 +64,21 @@ pub fn triangle(dir: vec3, coll: collider_info) vec3 {
         if (vert.dot(dir) > max_float) {
             max_float = vert.dot(dir);
             max_pos = vert;
+        }
+    }
+
+    return max_pos;
+}
+
+pub fn mesh_triangle(dir: vec3, coll: collider_info) vec3 {
+    const tri_data = @as(*const mesh_triangle_data, @alignCast(@ptrCast(coll.data)));
+
+    var max_float = tri_data.positions[tri_data.indices[0]].dot(dir);
+    var max_pos: vec3 = tri_data.positions[tri_data.indices[0]];
+    for (tri_data.indices) |ind| {
+        if (tri_data.positions[ind].dot(dir) > max_float) {
+            max_float = tri_data.positions[ind].dot(dir);
+            max_pos = tri_data.positions[ind];
         }
     }
 
@@ -609,15 +639,15 @@ pub fn ray_cast(ro: vec3, rd: vec3, physics_data: []collider_info, result: *rayc
     var hit = false;
     for (physics_data) |coll| {
         if (coll.tag == .mesh) {
-            const positions, const indices = @as(*const struct { []vec3, []u32 }, @alignCast(@ptrCast(coll.data))).*;
+            const mesh_data = @as(*const mesh_collider_data, @alignCast(@ptrCast(coll.data))).*;
 
             var curr_tri: usize = 0;
-            while (curr_tri < indices.len) {
+            while (curr_tri < mesh_data.indices.len) {
                 defer curr_tri += 3;
 
-                const a = zeng.mat_mult_vec4(coll.matrix, positions[indices[curr_tri + 0]].to_vec4(1.0)).to_vec3();
-                const b = zeng.mat_mult_vec4(coll.matrix, positions[indices[curr_tri + 1]].to_vec4(1.0)).to_vec3();
-                const c = zeng.mat_mult_vec4(coll.matrix, positions[indices[curr_tri + 2]].to_vec4(1.0)).to_vec3();
+                const a = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 0]].to_vec4(1.0)).to_vec3();
+                const b = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 1]].to_vec4(1.0)).to_vec3();
+                const c = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 2]].to_vec4(1.0)).to_vec3();
 
                 var res: raycast_result = undefined;
                 const is_hitting = ray_cast_triangle(ro, rd, a, b, c, &res);
@@ -629,4 +659,55 @@ pub fn ray_cast(ro: vec3, rd: vec3, physics_data: []collider_info, result: *rayc
         }
     }
     return hit;
+}
+
+pub const GRID_SIZE = 0.5;
+pub const TOL = 0.36;
+pub const TOL_ = 0.01;
+pub fn quantize(s: f32, GRIDSIZE: f32) isize {
+    return @intFromFloat(@round(s / GRIDSIZE));
+}
+pub const ivec3 = struct { isize, isize, isize };
+pub fn construct_spatial_hash_grid(colliders: std.ArrayList(collider_info), spatial_hash_grid: *std.AutoHashMap(ivec3, std.ArrayList(*collider_info)), allocator: std.mem.Allocator) void {
+    for (colliders.items) |*collider| {
+        const right, const left, const up, const down, const forward, const backward = collider_bounds(collider.*);
+
+        var i: isize = left;
+        while (i <= right) {
+            defer i += 1;
+
+            var j: isize = down;
+            while (j <= up) {
+                defer j += 1;
+
+                var k: isize = backward;
+                while (k <= forward) {
+                    defer k += 1;
+
+                    const guy = spatial_hash_grid.getOrPut(.{ i, j, k }) catch unreachable;
+                    if (!guy.found_existing) guy.value_ptr.* = std.ArrayList(*collider_info).init(allocator);
+
+                    guy.value_ptr.append(collider) catch unreachable;
+                }
+            }
+        }
+    }
+}
+
+pub fn collider_bounds(collider: collider_info) struct { isize, isize, isize, isize, isize, isize } {
+    const _right = collider._support(zeng.vec3.RIGHT).x + TOL;
+    const _left = collider._support(zeng.vec3.RIGHT.neg()).x - TOL;
+    const _up = collider._support(zeng.vec3.UP).y + TOL;
+    const _down = collider._support(zeng.vec3.UP.neg()).y - TOL;
+    const _forward = collider._support(zeng.vec3.FORWARD).z + TOL;
+    const _backward = collider._support(zeng.vec3.FORWARD.neg()).z - TOL;
+
+    const right = quantize(_right, GRID_SIZE);
+    const left = quantize(_left, GRID_SIZE);
+    const up = quantize(_up, GRID_SIZE);
+    const down = quantize(_down, GRID_SIZE);
+    const forward = quantize(_forward, GRID_SIZE);
+    const backward = quantize(_backward, GRID_SIZE);
+
+    return .{ right, left, up, down, forward, backward };
 }

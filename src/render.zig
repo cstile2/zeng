@@ -2,7 +2,7 @@ const zeng = @import("zeng.zig");
 const std = @import("std");
 const ecs = @import("ecs.zig");
 
-pub fn draw_text(string: []const u8, ui_ren: *@import("main.zig").text_render_res) void {
+pub fn draw_text(string: []const u8, ui_ren: *@import("main.zig").text_render_res, x: f32, y: f32) void {
     zeng.gl.disable(zeng.gl.DEPTH_TEST);
     defer zeng.gl.enable(zeng.gl.DEPTH_TEST);
 
@@ -14,7 +14,7 @@ pub fn draw_text(string: []const u8, ui_ren: *@import("main.zig").text_render_re
 
     var horizontal: usize = 0;
     for (string) |char| {
-        zeng.gl.uniform2f(zeng.gl.getUniformLocation(ui_ren.shader_program, "screen_pos"), @as(f32, @floatFromInt(horizontal)) * 0.038, 0.0);
+        zeng.gl.uniform2f(zeng.gl.getUniformLocation(ui_ren.shader_program, "screen_pos"), @as(f32, @floatFromInt(horizontal)) * 0.038 + x, y);
         zeng.gl.uniform2f(zeng.gl.getUniformLocation(ui_ren.shader_program, "image_point"), @as(f32, @floatFromInt((char - 32) % 16)), @as(f32, @floatFromInt((char - 32) / 16)));
         zeng.gl.drawElements(zeng.gl.TRIANGLES, ui_ren.indices_len, zeng.gl.UNSIGNED_INT, null);
         horizontal += 1;
@@ -53,6 +53,45 @@ pub fn draw_animated_skinned_mesh(world: *ecs.world, entity_mesh: zeng.skinned_m
     zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, entity_mesh.indices_type, null);
 }
 
+pub const color_f32 = struct {
+    r: f32,
+    g: f32,
+    b: f32,
+
+    pub const WHITE = color_f32{ .r = 1.0, .g = 1.0, .b = 1.0 };
+    pub const BLACK = color_f32{ .r = 0.0, .g = 0.0, .b = 0.0 };
+    pub const RED = color_f32{ .r = 1.0, .g = 0.0, .b = 0.0 };
+    pub const GREEN = color_f32{ .r = 0.0, .g = 1.0, .b = 0.0 };
+    pub const BLUE = color_f32{ .r = 0.0, .g = 0.0, .b = 1.0 };
+    pub const YELLOW = color_f32{ .r = 1.0, .g = 1.0, .b = 0.0 };
+    pub const CYAN = color_f32{ .r = 0.0, .g = 1.0, .b = 1.0 };
+    pub const MAGENTA = color_f32{ .r = 1.0, .g = 0.0, .b = 1.0 };
+    pub const GRAY = color_f32{ .r = 0.5, .g = 0.5, .b = 0.5 };
+    pub const ORANGE = color_f32{ .r = 1.0, .g = 0.5, .b = 0.0 };
+    pub const PURPLE = color_f32{ .r = 0.5, .g = 0.0, .b = 0.5 };
+    pub const LIME = color_f32{ .r = 0.0, .g = 1.0, .b = 0.5 };
+};
+pub fn draw_rect(ctx: zeng.engine_context, ui_ren: *@import("main.zig").rect_render_res, x: f32, y: f32, w: f32, h: f32, color: color_f32) void {
+    zeng.gl.useProgram(ui_ren.shader_program);
+    zeng.gl.bindVertexArray(ui_ren.vao);
+
+    // Set position and size uniforms if needed
+    const screen_res_location = zeng.gl.getUniformLocation(ui_ren.shader_program, "screen_res");
+    const pos_location = zeng.gl.getUniformLocation(ui_ren.shader_program, "screen_pos");
+    const size_location = zeng.gl.getUniformLocation(ui_ren.shader_program, "dims");
+    const color_location = zeng.gl.getUniformLocation(ui_ren.shader_program, "_color");
+    zeng.gl.uniform2f(screen_res_location, @floatFromInt(ctx.active_window.getSize().width), @floatFromInt(ctx.active_window.getSize().height));
+    zeng.gl.uniform2f(pos_location, x, y);
+    zeng.gl.uniform2f(size_location, w, h);
+    zeng.gl.uniform3f(color_location, color.r, color.g, color.b);
+
+    zeng.gl.disable(zeng.gl.DEPTH_TEST);
+    zeng.gl.drawElements(zeng.gl.TRIANGLES, 6, zeng.gl.UNSIGNED_INT, null);
+    zeng.gl.enable(zeng.gl.DEPTH_TEST);
+
+    zeng.opengl_log_error() catch void{};
+}
+
 pub const triangle_debug_info = struct {
     vao: u32,
     vbo: u32,
@@ -73,9 +112,11 @@ pub fn debug_draw_triangle(tri: [3]zeng.vec3, info: triangle_debug_info) void {
     zeng.gl.uniformMatrix4fv(world_location, 1, zeng.gl.FALSE, &zeng.mat_identity);
     zeng.gl.uniformMatrix4fv(clip_location, 1, zeng.gl.FALSE, &clip_matrix);
 
+    zeng.gl.disable(zeng.gl.DEPTH_TEST);
     zeng.gl.disable(zeng.gl.CULL_FACE);
     zeng.gl.polygonMode(zeng.gl.FRONT_AND_BACK, zeng.gl.LINE);
     zeng.gl.drawElements(zeng.gl.TRIANGLES, 3, zeng.gl.UNSIGNED_BYTE, null);
     zeng.gl.polygonMode(zeng.gl.FRONT_AND_BACK, zeng.gl.FILL);
     zeng.gl.enable(zeng.gl.CULL_FACE);
+    zeng.gl.enable(zeng.gl.DEPTH_TEST);
 }

@@ -3,15 +3,22 @@ const std = @import("std");
 const ecs = @import("ecs.zig");
 const zeng = @import("zeng.zig");
 const rpc = @import("rpc.zig");
+const main = @import("main.zig");
 
 const FIONBIO: u32 = 0x8004667e;
 
 pub const connection_id = u32; // represents the connection
 pub const network_id = u32; // gloablly unique identifier of an object that is synced between computers
 pub const remote_message = struct {
+    time_to_send: f64,
     payload: []u8,
-    target_socket: net.socket_t,
-    target_address: net.address_t,
+    sender_socket: net.socket_t,
+    target_address: net.Address_t,
+};
+
+pub const Address_t = struct {
+    sockaddr: std.os.sockaddr,
+    socklen: std.os.socklen_t,
 };
 
 pub const socket_t = std.os.socket_t;
@@ -34,12 +41,18 @@ pub fn assign_addr_to_sock(socket: socket_t, my_address: address_t) !void {
     try std.os.bind(socket, &my_address.any, my_address.getOsSockLen());
 }
 
-pub fn CLIENT_send_all(commands: *zeng.commands) void {
-    for (commands.remote_messages[0..commands.remote_messages_len]) |rem_message| {
-        _ = std.os.sendto(rem_message.target_socket, rem_message.payload, 0, &rem_message.target_address.any, rem_message.target_address.getOsSockLen()) catch unreachable;
-        commands.allocator.free(rem_message.payload);
+pub fn SEND_NET_MESSAGES(commands: *zeng.commands) void {
+    var curr: usize = 0;
+    while (curr < commands.remote_messages_len) {
+        const rem_message = commands.remote_messages[curr];
+        if (rem_message.time_to_send <= commands.time) {
+            _ = std.os.sendto(rem_message.sender_socket, rem_message.payload, 0, &rem_message.target_address.sockaddr, rem_message.target_address.socklen) catch unreachable;
+            commands.allocator.free(rem_message.payload);
+
+            commands.remote_messages[curr] = commands.remote_messages[commands.remote_messages_len - 1];
+            commands.remote_messages_len -= 1;
+        } else curr += 1;
     }
-    commands.remote_messages_len = 0;
 }
 pub fn SERVER_recieve_all(socket: std.os.socket_t, res: *zeng.resources_t) void {
     _ = res; // autofix
@@ -69,13 +82,48 @@ pub fn SERVER_recieve_all(socket: std.os.socket_t, res: *zeng.resources_t) void 
         }
     }
 }
+pub fn RECIEVE_NET_MESSAGES(socket: std.os.socket_t, res: *zeng.resources_t) void {
+    var client_addr: std.os.sockaddr = undefined;
+    var client_addr_len: std.os.socklen_t = @sizeOf(std.os.sockaddr);
+
+    var recv_read_buf: [4096]u8 = undefined;
+    get_messages_loop: while (true) {
+        const recv_result = std.os.recvfrom(socket, &recv_read_buf, 0, &client_addr, &client_addr_len);
+
+        if (recv_result) |_| {
+            var event_code: u32 = undefined;
+            @memcpy(@as([*]u8, @ptrCast(&event_code)), recv_read_buf[0..4]);
+
+            inline for (rpc.REMOTE_MESSAGE_TYPES) |msg_type| {
+                if (event_code == comptime zeng.GET_MSG_CODE(msg_type)) {
+                    var payload: msg_type = undefined;
+
+                    var curr: u32 = 4;
+                    zeng.deserialize_from_bytes(msg_type, @as([*]u8, @ptrCast(&payload)), recv_read_buf[0..], &curr, 0);
+
+                    if (res.get(main.events(msg_type)).addresses != null) {
+                        const address = net.Address_t{ .sockaddr = client_addr, .socklen = client_addr_len };
+                        res.get(main.events(msg_type)).send_with_address(payload, address);
+                    } else {
+                        // res.get(main.events(msg_type)).send(payload);
+                        unreachable;
+                    }
+                }
+            }
+        } else |err| {
+            if (err != error.WouldBlock) // no more messages to read
+                std.debug.print("recv error: '{}'\n", .{err});
+            break :get_messages_loop;
+        }
+    }
+}
 
 pub fn do_setup(address_string: []const u8, port: u16, is_server: bool) !struct { socket_t, address_t } {
     var socket: socket_t = undefined;
     var address: address_t = undefined;
     if (is_server) {
         socket, address = try zeng.net.make_socket_and_address(address_string, port, true);
-        try zeng.net.assign_addr_to_sock(socket, address);
+        try assign_addr_to_sock(socket, address);
     } else {
         socket, address = try zeng.net.make_socket_and_address(address_string, port, true);
     }

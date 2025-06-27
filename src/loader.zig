@@ -2,6 +2,7 @@ const std = @import("std");
 const zeng = @import("zeng.zig");
 const ecs = @import("ecs.zig");
 const main = @import("main.zig");
+const phy = @import("physics.zig");
 
 pub fn get_file_bytes(filepath: []const u8, allocator: std.mem.Allocator) []u8 {
     // open file from filepath > close after done
@@ -114,8 +115,8 @@ pub fn load_texture(path: anytype, srgb: bool, flip_y: bool) u32 {
 }
 pub fn serialize_to_bytes(payload: anytype, dest_bytes: []u8, dest_curr_byte: *u32) void {
     switch (@typeInfo(@TypeOf(payload))) {
-        .Int, .Float, .Bool, .Pointer => {
-            @memcpy(dest_bytes[dest_curr_byte.* .. dest_curr_byte.* + @sizeOf(@TypeOf(payload))], std.mem.toBytes(payload)[0..]);
+        .Int, .Float, .Bool, .Pointer, .Array => {
+            @memcpy(dest_bytes[dest_curr_byte.* .. dest_curr_byte.* + @sizeOf(@TypeOf(payload))], std.mem.toBytes(payload)[0..@sizeOf(@TypeOf(payload))]);
             dest_curr_byte.* += @sizeOf(@TypeOf(payload));
         },
         .Struct => {
@@ -131,7 +132,7 @@ pub fn serialize_to_bytes(payload: anytype, dest_bytes: []u8, dest_curr_byte: *u
 }
 pub fn deserialize_from_bytes(T: type, dest_bytes: [*]u8, src_bytes: []u8, src_curr_byte: *u32, offset: u32) void {
     switch (@typeInfo(T)) {
-        .Int, .Float, .Bool, .Pointer => {
+        .Int, .Float, .Bool, .Pointer, .Array => {
             @memcpy(dest_bytes[offset .. offset + @sizeOf(T)], src_bytes[src_curr_byte.* .. src_curr_byte.* + @sizeOf(T)]);
             src_curr_byte.* += @sizeOf(T);
         },
@@ -854,8 +855,11 @@ fn get_float_from_numeric(n: *Node, idx: comptime_int) f32 {
     return @floatFromInt(n.array.items[idx].integer);
 }
 
-pub var global_mesh_verts: []zeng.vec3 = undefined;
-pub var global_mesh_indices: []u32 = undefined;
+// pub var global_mesh_verts: []zeng.vec3 = undefined;
+// pub var global_mesh_indices: []u32 = undefined;
+
+pub var global_colliders: ?std.ArrayList(zeng.cpu_mesh) = null;
+pub var global_matrices: ?std.ArrayList(zeng.world_matrix) = null;
 
 pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies_path: []const u8, allocator: std.mem.Allocator, skin_shader_program: u32, static_shader_program: u32, default_texture: u32) struct { []gltf_node_w_matrix, []Animation, []zeng.skeleton, std.AutoArrayHashMap(usize, std.ArrayList(usize)), std.AutoHashMap(usize, void), std.AutoHashMap(usize, usize) } {
     var result_top_level_objects = std.AutoHashMap(usize, void).init(allocator);
@@ -1227,12 +1231,17 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                 const mesh_data_size: usize = (position_data_len / position_component_size) * (3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size);
                 var mesh_data = allocator.alloc(u8, mesh_data_size) catch unreachable;
 
-                if (name != null and std.mem.eql(u8, name.?.string, "groundly")) {
+                // if (name != null and std.mem.eql(u8, name.?.string, "Grid")) {
+                {
                     if (indices_component_size != 2) unreachable;
-                    global_mesh_verts = allocator.alloc(zeng.vec3, position_data_len / 12) catch unreachable;
-                    @memcpy(@as([*]u8, @ptrCast(global_mesh_verts)), bin_data[position_data_offset .. position_data_offset + position_data_len]);
-                    global_mesh_indices = allocator.alloc(u32, indices_data_len / 2) catch unreachable;
-                    // @memcpy(@as([*]u8, @ptrCast(global_mesh_indices)), bin_data[indices_data_offset .. indices_data_offset + indices_data_len]);
+
+                    var collider_positions: []zeng.vec3 = undefined;
+                    var collider_indices: []u32 = undefined;
+
+                    collider_positions = allocator.alloc(zeng.vec3, position_data_len / 12) catch unreachable;
+                    @memcpy(@as([*]u8, @ptrCast(collider_positions)), bin_data[position_data_offset .. position_data_offset + position_data_len]);
+
+                    collider_indices = allocator.alloc(u32, indices_data_len / 2) catch unreachable;
                     var curr_ind: usize = 0;
                     while (curr_ind < indices_data_len) {
                         defer curr_ind += 2;
@@ -1240,9 +1249,18 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                         var i: u16 = undefined;
                         @memcpy(@as([*]u8, @ptrCast(&i)), bin_data[indices_data_offset + curr_ind .. indices_data_offset + curr_ind + 2]);
                         const _i: u32 = @intCast(i);
-                        global_mesh_indices[curr_ind / 2] = _i;
+                        collider_indices[curr_ind / 2] = _i;
                     }
-                    std.debug.print("TRIS: {}\n", .{global_mesh_indices.len / 3});
+                    std.debug.print("TRIS: {}\n", .{collider_indices.len / 3});
+
+                    const collider_mesh = zeng.cpu_mesh{ .indices = collider_indices, .positions = collider_positions };
+
+                    if (global_colliders == null) {
+                        global_matrices = std.ArrayList(zeng.world_matrix).init(allocator);
+                        global_colliders = std.ArrayList(zeng.cpu_mesh).init(allocator);
+                    }
+                    global_colliders.?.append(collider_mesh) catch unreachable;
+                    global_matrices.?.append(mat) catch unreachable;
                 }
 
                 var _curr: usize = 0;
