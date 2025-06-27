@@ -16,6 +16,7 @@ pub const remote_message = struct {
     target_address: net.Address_t,
 };
 
+/// this holds the information given by recvfrom representing the address of the sender
 pub const Address_t = struct {
     sockaddr: std.os.sockaddr,
     socklen: std.os.socklen_t,
@@ -91,14 +92,16 @@ pub fn RECIEVE_NET_MESSAGES(socket: std.os.socket_t, res: *zeng.resources_t) voi
         const recv_result = std.os.recvfrom(socket, &recv_read_buf, 0, &client_addr, &client_addr_len);
 
         if (recv_result) |_| {
+            var redundancy_code: usize = undefined;
+            @memcpy(@as([*]u8, @ptrCast(&redundancy_code)), recv_read_buf[0..@sizeOf(usize)]);
             var event_code: u32 = undefined;
-            @memcpy(@as([*]u8, @ptrCast(&event_code)), recv_read_buf[0..4]);
+            @memcpy(@as([*]u8, @ptrCast(&event_code)), recv_read_buf[@sizeOf(usize) .. @sizeOf(usize) + @sizeOf(u32)]);
 
             inline for (rpc.REMOTE_MESSAGE_TYPES) |msg_type| {
                 if (event_code == comptime zeng.GET_MSG_CODE(msg_type)) {
                     var payload: msg_type = undefined;
 
-                    var curr: u32 = 4;
+                    var curr: u32 = @sizeOf(usize) + @sizeOf(u32);
                     zeng.deserialize_from_bytes(msg_type, @as([*]u8, @ptrCast(&payload)), recv_read_buf[0..], &curr, 0);
 
                     if (res.get(main.events(msg_type)).addresses != null) {

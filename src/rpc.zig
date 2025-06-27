@@ -34,11 +34,11 @@ pub const state_correction = struct {
     world_matrix: zeng.world_matrix,
 };
 pub const client_tick = struct {
-    hi_res: main.hi_res_tick,
+    time: f64,
 };
 pub const server_tick_offset = struct {
-    server_hi_res: main.hi_res_tick,
-    client_hi_res: main.hi_res_tick,
+    server_time: f64,
+    client_time: f64,
 };
 pub const missed_input = struct {};
 pub const input_chunck = struct {

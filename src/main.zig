@@ -390,46 +390,36 @@ pub fn main() !void {
     }
 
     var input_buffer: ring_buffer(rpc.input_message) = undefined;
-    // var tick: isize = 40;
     var pos = ctx.active_window.getCursorPos();
     var last_x: f64 = 0.0;
     var last_y: f64 = 0.0;
     var dx: f64 = 0.0;
     var dy: f64 = 0.0;
     var first = true;
-    var synced_timescale: f64 = 1.0;
+    var synced_time: f64 = 0.0;
+    var timescale: f64 = 1.0;
     var sim_timescale: f64 = 1.0;
-    var synced_tick_diff: isize = 0.0;
-    var CLIENT_clock_buffer: f64 = 0.0;
-    var CLIENT_clock_buffer_adjustment: f64 = 0.0;
-    // var clock: f64 = 0.0;
-    var CLIENT_cooldown: f64 = 0.0;
+    var buffer_time: f64 = 0.0;
+    var buffer_velocity: f64 = 0.0;
+    var buffer_cooldown: f64 = 0.0;
     var warm = false;
     const fixed_delta: f64 = 1.0 / 60.0;
-    var synced_accum: f64 = 0.0;
     var accum: f64 = 0.0;
-    var synced_tick: isize = 0;
-    var synced_tick_buffer: isize = 10;
-    var input_tick: isize = 0;
+    var tick: isize = 0;
+    var draw_local_alignment: f64 = 0.0;
+    var draw_time_alignment: f64 = 0.0;
     while (!ctx.active_window.shouldClose()) {
         zeng.start_of_frame();
         defer zeng.end_of_frame(&res);
         commands.time += res.get(time_res).delta_time;
         res.get(time_res).elapsed_time += res.get(time_res).delta_time;
-        // clock += res.get(time_res).delta_time * CLIENT_timescale;
-        CLIENT_cooldown -= res.get(time_res).delta_time;
-        if (CLIENT_cooldown < -15.0) {
-            CLIENT_clock_buffer_adjustment = -0.006;
-
-            synced_tick_buffer -= 1;
-
-            CLIENT_cooldown = 0.0;
-        } else if (CLIENT_cooldown < 0.0) {
-            CLIENT_clock_buffer_adjustment = 0.0;
+        buffer_cooldown -= res.get(time_res).delta_time;
+        if (buffer_cooldown < -10.0) {
+            buffer_velocity = -0.004;
+        } else if (buffer_cooldown < 0.0) {
+            buffer_velocity = 0.0;
         }
-        CLIENT_clock_buffer += res.get(time_res).delta_time * CLIENT_clock_buffer_adjustment;
-        accum += res.get(time_res).delta_time * sim_timescale;
-        synced_accum += res.get(time_res).delta_time * synced_timescale;
+        buffer_time += res.get(time_res).delta_time * buffer_velocity;
 
         zeng.net.RECIEVE_NET_MESSAGES(main_socket, &res);
 
@@ -448,56 +438,42 @@ pub fn main() !void {
         const local_matrix_q = fet.fresh_query(.{local_matrix});
 
         for (server_tick_offset_events.array.items, server_tick_offset_events.addresses.?.items) |server_tick_offset_event, _| {
-            // const rtt = clock - server_tick_offset_event.client_clock;
-            var stable = accum;
-            while (stable >= fixed_delta) stable -= fixed_delta;
+            const time_offset = server_tick_offset_event.server_time - (server_tick_offset_event.client_time + synced_time) * 0.5;
+            draw_time_alignment = time_offset;
 
-            // const clock_offset = server_tick_offset_event.server_clock - (server_tick_offset_event.client_clock + clock) / 2.0;
-
-            // const avg_client_tick = (@as(f64, @floatFromInt(server_tick_offset_event.client_hi_res.tick)) + server_tick_offset_event.client_hi_res.float + @as(f64, @floatFromInt(tick)) + stable) / 2.0;
-            // const server_tick = @as(f64, @floatFromInt(server_tick_offset_event.server_hi_res.tick)) + server_tick_offset_event.server_hi_res.float;
-            // const clock_offset = server_tick - avg_client_tick;
-
-            const tick_offset = server_tick_offset_event.server_hi_res.tick - @divTrunc((server_tick_offset_event.client_hi_res.tick + synced_tick), 2);
-
-            synced_tick_diff = tick_offset;
-
-            if (@abs(tick_offset) > 30) {
+            if (@abs(time_offset) > 0.7) {
                 std.debug.print("time jump\n", .{});
-                // clock += clock_offset;
-                synced_tick += tick_offset;
+                synced_time += time_offset;
             } else {
-                const seconds = @as(f64, @floatFromInt(tick_offset)) * fixed_delta;
-                synced_timescale = 1.0 + (seconds / 50.0);
+                timescale = 1.0 + (time_offset / 50.0);
             }
             warm = true;
         }
         server_tick_offset_events.clear();
         for (client_tick_events.array.items, client_tick_events.addresses.?.items) |client_tick_event, sockaddr| {
-            var stable = accum;
-            while (stable >= fixed_delta) stable -= fixed_delta;
-            commands.remote_event(main_socket, sockaddr, rpc.server_tick_offset{ .client_hi_res = client_tick_event.hi_res, .server_hi_res = hi_res_tick{ .tick = synced_tick, .float = accum } });
+            commands.remote_event(main_socket, sockaddr, rpc.server_tick_offset{ .server_time = @as(f64, @floatFromInt(tick)) * fixed_delta + accum, .client_time = client_tick_event.time });
         }
         client_tick_events.clear();
 
         if (warm) {
-            const desired_input_tick = synced_tick + synced_tick_buffer;
-            if (@abs(input_tick - desired_input_tick) > 20) {
-                input_tick = desired_input_tick;
+            const desired_time = synced_time + buffer_time;
+            const my_time = @as(f64, @floatFromInt(tick)) * fixed_delta + accum;
+            const offset = desired_time - my_time;
+            draw_local_alignment = offset;
+            if (@abs(offset) > 0.5) {
+                // input_tick = desired_input_tick;
+                tick += @intFromFloat(offset * 60.0);
+                std.debug.print("skipping time\n", .{});
             } else {
-                const offset = desired_input_tick - input_tick;
-                const offset_seconds = @as(f64, @floatFromInt(offset)) * fixed_delta;
-                sim_timescale = 1.0 + offset_seconds / 5.0;
+                sim_timescale = zeng.lerp(sim_timescale, 1.0 + offset / 5.0, 0.2);
             }
         }
 
-        while (synced_accum >= fixed_delta) {
-            synced_accum -= fixed_delta;
-            synced_tick += 1;
-        }
+        synced_time += res.get(time_res).delta_time * timescale;
+        accum += res.get(time_res).delta_time * sim_timescale;
         while (accum >= fixed_delta) {
             accum -= fixed_delta;
-            defer input_tick += 1;
+            defer tick += 1;
             res.insert(debug_res{ .vao = triangle_vao, .vbo = triangle_vbo, .debug_shader = debug_shader, .projection_matrix = res.get(main_camera_res).camera.projection_matrix, .inv_camera_matrix = zeng.mat_invert(res.get(main_camera_res).matrix.*) });
             fet.run_system(fly_system);
             fet.run_system(ray_system);
@@ -508,25 +484,27 @@ pub fn main() !void {
             if (is_server) {
                 var a = clients2.iterator();
                 while (a.next()) |_c| {
-                    const cool = _c.value_ptr.input_buffer.get(synced_tick);
-                    if (cool.tick == synced_tick) {
+                    const cool = _c.value_ptr.input_buffer.get(tick);
+                    if (cool.tick == tick) {
                         const ent = _c.value_ptr.player;
                         const im = world.get(ent, rpc.input_message).?;
                         im.* = cool;
                     } else {
-                        std.debug.print("missed input {}\n", .{synced_tick});
+                        std.debug.print("missed input {}\n", .{tick});
+                    }
+                    if (_c.value_ptr.input_buffer.get(tick + 5).tick != tick + 5) {
                         commands.remote_event(main_socket, _c.key_ptr.*, rpc.missed_input{});
                     }
                 }
             }
-            world.get(model_root, rpc.input_message).?.* = rpc.input_message{ .tick = input_tick, .jump = input_implement.default_jump(&ctx), .move_vect = input_implement.default_move_fn(&ctx), .dx = dx, .dy = dy };
+            world.get(model_root, rpc.input_message).?.* = rpc.input_message{ .tick = tick, .jump = input_implement.default_jump(&ctx), .move_vect = input_implement.default_move_fn(&ctx), .dx = dx, .dy = dy };
             if (!is_server) {
-                input_buffer.set(input_tick, world.get(model_root, rpc.input_message).?.*);
+                input_buffer.set(tick, world.get(model_root, rpc.input_message).?.*);
                 var snd: rpc.input_chunck = undefined;
                 var curr: usize = 0;
                 while (curr < snd.arr.len) {
                     defer curr += 1;
-                    snd.arr[curr] = input_buffer.get(input_tick - @as(isize, @intCast(curr)));
+                    snd.arr[curr] = input_buffer.get(tick - @as(isize, @intCast(curr)));
                 }
                 commands.remote_event(main_socket, server_address, snd);
             }
@@ -574,10 +552,10 @@ pub fn main() !void {
                     const info = clients2.getPtr(sockaddr).?;
 
                     for (input_event.arr) |_input_event| {
-                        if (_input_event.tick >= synced_tick) {
+                        if (_input_event.tick >= tick) {
                             info.input_buffer.set(_input_event.tick, _input_event);
                         } else {
-                            std.debug.print("late input tick\n", .{});
+                            // std.debug.print("late input tick\n", .{});
                         }
                     }
                 }
@@ -587,13 +565,11 @@ pub fn main() !void {
                 while (it.next()) |thing| {
                     const P = world.get(thing.value_ptr.*, player).?.*;
                     const M = world.get(thing.value_ptr.*, zeng.world_matrix).?.*;
-                    if (@as(usize, @intCast(synced_tick)) % 10 == 0) commands.remote_event(main_socket, thing.key_ptr.*, rpc.state_correction{ .tick = synced_tick, .state = P, .world_matrix = M });
+                    if (@as(usize, @intCast(tick)) % 4 == 0) commands.remote_event(main_socket, thing.key_ptr.*, rpc.state_correction{ .tick = tick, .state = P, .world_matrix = M });
                 }
             } else {
-                if (@as(usize, @intCast(synced_tick)) % 200 == 0) {
-                    var stable = accum;
-                    while (stable >= fixed_delta) stable -= fixed_delta;
-                    commands.remote_event(main_socket, server_address, rpc.client_tick{ .hi_res = hi_res_tick{ .tick = synced_tick, .float = stable } });
+                if (@as(usize, @intCast(tick)) % 200 == 0) {
+                    commands.remote_event(main_socket, server_address, rpc.client_tick{ .time = synced_time });
                 }
                 for (snap_events.array.items, snap_events.addresses.?.items) |snap_event, _| {
                     const P = world.get(model_root, player).?;
@@ -607,12 +583,12 @@ pub fn main() !void {
                     world.get(model_root, zeng.world_matrix).?.* = snap_event.world_matrix;
 
                     var _tick = snap_event.tick + 1;
-                    while (_tick <= input_tick) {
+                    while (_tick <= tick) {
                         defer _tick += 1;
 
                         var im = input_buffer.get(_tick);
                         if (im.tick != _tick) {
-                            std.debug.print("missing buffered input for tick: {} {} {}\n", .{ im.tick, _tick, input_tick });
+                            std.debug.print("missing buffered input for tick: {} {} {}\n", .{ im.tick, _tick, tick });
                             break;
                         }
                         simulate_collision(world.get(model_root, player).?, world.get(model_root, zeng.world_matrix).?, &ctx, &spatial_hash_grid, &tri_events, res.get(debug_res));
@@ -627,11 +603,10 @@ pub fn main() !void {
                 for (missed_input_events.array.items, missed_input_events.addresses.?.items) |missed_input_event, _| {
                     _ = missed_input_event; // autofix
 
-                    if (warm and CLIENT_cooldown <= 0.0) {
-                        CLIENT_clock_buffer_adjustment = 0.005;
+                    if (warm and buffer_cooldown <= 0.0) {
+                        buffer_velocity = 0.04;
                         std.debug.print("increasing buffer\n", .{});
-                        CLIENT_cooldown = 1.0;
-                        synced_tick_buffer += 1;
+                        buffer_cooldown = 0.3;
                     }
                 }
                 missed_input_events.clear();
@@ -654,20 +629,21 @@ pub fn main() !void {
 
         var buffer: [64]u8 = undefined;
         zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{d:.4}", .{1.0 / res.get(time_res).delta_time}) catch unreachable, res.get(text_render_res), -0.9, 0.8);
-        zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{}", .{synced_tick}) catch unreachable, res.get(text_render_res), -0.9, 0.7);
         if (!is_server) {
-            zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{}", .{synced_tick}) catch unreachable, res.get(text_render_res), -0.9, 0.6);
-            zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{}", .{synced_tick_diff}) catch unreachable, res.get(text_render_res), -0.9, 0.5);
-            zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{d:.6}", .{sim_timescale}) catch unreachable, res.get(text_render_res), -0.9, 0.4);
-            zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{}", .{synced_tick_buffer}) catch unreachable, res.get(text_render_res), -0.9, 0.3);
-            zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{d:.6}", .{CLIENT_clock_buffer_adjustment}) catch unreachable, res.get(text_render_res), -0.9, 0.2);
+            zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{d:.6}", .{synced_time}) catch unreachable, res.get(text_render_res), -0.9, 0.7);
+            zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{d:.6}", .{buffer_time}) catch unreachable, res.get(text_render_res), -0.9, 0.6);
+            zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{d:.6}", .{sim_timescale}) catch unreachable, res.get(text_render_res), -0.9, 0.5);
+            zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{d:.6}", .{buffer_velocity}) catch unreachable, res.get(text_render_res), -0.9, 0.4);
 
-            zeng.draw_rect(ctx, res.get(rect_render_res), 0, 400, 2 * 10 * 5, 2, zeng.color_f32.WHITE);
+            zeng.draw_rect(ctx, res.get(rect_render_res), 0, 400, 100, 2, zeng.color_f32.WHITE);
             zeng.draw_rect(ctx, res.get(rect_render_res), 0, 400, 2, 60, zeng.color_f32.WHITE);
+            zeng.draw_rect(ctx, res.get(rect_render_res), @as(f32, @floatCast(draw_time_alignment * 100.0)), 400, 4, 30, zeng.color_f32.LIME);
 
-            // zeng.draw_rect(ctx, res.get(rect_render_res), @as(f32, @floatCast(CLIENT_clock_offset * 1000.0)), 400, 4, 30, zeng.color_f32.LIME);
+            zeng.draw_rect(ctx, res.get(rect_render_res), 500, 400, 100, 2, zeng.color_f32.WHITE);
+            zeng.draw_rect(ctx, res.get(rect_render_res), 500, 400, 2, 60, zeng.color_f32.WHITE);
+            zeng.draw_rect(ctx, res.get(rect_render_res), 500 + @as(f32, @floatCast(draw_local_alignment * 100.0)), 400, 4, 30, zeng.color_f32.LIME);
         } else {
-            zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{d:.6}", .{synced_tick}) catch unreachable, res.get(text_render_res), -0.9, 0.6);
+            zeng.draw_text(std.fmt.bufPrint(buffer[0..], "{d:.6}", .{@as(f64, @floatFromInt(tick)) * fixed_delta + accum}) catch unreachable, res.get(text_render_res), -0.9, 0.7);
         }
 
         commands.process_commands(&world);

@@ -862,6 +862,8 @@ pub const commands = struct {
     remote_messages: [4000]remote_message,
     remote_messages_len: u16,
 
+    curr_id: usize = 1,
+
     time: f64 = 0.0,
 
     random: std.Random,
@@ -934,25 +936,39 @@ pub const commands = struct {
     }
 
     pub fn remote_event(self: *commands, socket: net.socket_t, address: net.Address_t, event: anytype) void {
-        if (self.random.float(f32) < 0.7) return;
-        const payload_array = self.allocator.alloc(u8, 4 + @sizeOf(@TypeOf(event))) catch unreachable;
+        if (self.random.float(f32) < 0.5) return;
+        const payload_array = self.allocator.alloc(u8, @sizeOf(usize) + @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
         var curr_byte: u32 = 0;
+        zeng.serialize_to_bytes(@as(usize, 0), payload_array, &curr_byte);
         zeng.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
         zeng.serialize_to_bytes(event, payload_array, &curr_byte);
 
-        const jittered_delay = self.random.float(f32) * 0.2 + 1.0; // 60ms + 150ms
+        const jittered_delay = self.random.float(f32) * 0.1 + 0.5; // 60ms + 150ms
 
         self.remote_messages[self.remote_messages_len] = remote_message{ .payload = self.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = socket, .target_address = address, .time_to_send = self.time + jittered_delay };
         self.remote_messages_len += 1;
     }
 
+    // pub fn remote_event_reliable(self: *commands, socket: net.socket_t, address: net.Address_t, event: anytype) void {
+    //     _ = socket; // autofix
+    //     _ = address; // autofix
+    //     const payload_array = self.allocator.alloc(u8, @sizeOf(usize) + @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
+    //     var curr_byte: u32 = 0;
+    //     zeng.serialize_to_bytes(self.curr_id, payload_array, &curr_byte);
+    //     zeng.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
+    //     zeng.serialize_to_bytes(event, payload_array, &curr_byte);
+    // }
+
     pub fn remote_event_(self: *commands, socket: net.socket_t, address: net.Address_t, event: anytype) void {
-        const payload_array = self.allocator.alloc(u8, 4 + @sizeOf(@TypeOf(event))) catch unreachable;
+        const payload_array = self.allocator.alloc(u8, @sizeOf(usize) + @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
         var curr_byte: u32 = 0;
+        zeng.serialize_to_bytes(@as(usize, 0), payload_array, &curr_byte);
         zeng.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
         zeng.serialize_to_bytes(event, payload_array, &curr_byte);
 
-        self.remote_messages[self.remote_messages_len] = remote_message{ .payload = self.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = socket, .target_address = address, .time_to_send = self.time };
+        const jittered_delay = 0.0; // 60ms + 150ms
+
+        self.remote_messages[self.remote_messages_len] = remote_message{ .payload = self.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = socket, .target_address = address, .time_to_send = self.time + jittered_delay };
         self.remote_messages_len += 1;
     }
 
