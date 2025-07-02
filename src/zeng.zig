@@ -14,6 +14,7 @@ pub const c = @cImport({
     @cInclude("audiopolicy.h");
     @cInclude("mmdeviceapi.h");
     @cInclude("stb_image.h");
+    @cInclude("clay.h");
 });
 pub usingnamespace @import("loader.zig");
 pub usingnamespace @import("render.zig");
@@ -663,7 +664,7 @@ pub const engine_context = struct {
 pub fn window_resize_handler(window: zeng.glfw.Window, width: u32, height: u32) void {
     zeng.gl.viewport(0, 0, @intCast(width), @intCast(height));
     if (window.getUserPointer(zeng.resources_t)) |res| {
-        res.get(main.main_camera_res).camera.projection_matrix = zeng.mat_perspective_projection(1.2, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
+        res.get(main.main_camera_res).camera.projection_matrix = zeng.mat_perspective_projection(1.5, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
     }
 }
 pub fn engine_start(gd: *zeng.engine_context, res: *resources_t, world: *ecs.world, dep: *resource_fetcher) !void {
@@ -862,7 +863,7 @@ pub const commands = struct {
     remote_messages: [4000]remote_message,
     remote_messages_len: u16,
 
-    curr_id: usize = 1,
+    curr_seq: usize = 1,
 
     time: f64 = 0.0,
 
@@ -936,14 +937,14 @@ pub const commands = struct {
     }
 
     pub fn remote_event(self: *commands, socket: net.socket_t, address: net.Address_t, event: anytype) void {
-        if (self.random.float(f32) < 0.5) return;
+        if (self.random.float(f32) < 0.7) return;
         const payload_array = self.allocator.alloc(u8, @sizeOf(usize) + @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
         var curr_byte: u32 = 0;
-        zeng.serialize_to_bytes(@as(usize, 0), payload_array, &curr_byte);
+        zeng.serialize_to_bytes(self.curr_seq, payload_array, &curr_byte);
         zeng.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
         zeng.serialize_to_bytes(event, payload_array, &curr_byte);
 
-        const jittered_delay = self.random.float(f32) * 0.1 + 0.5; // 60ms + 150ms
+        const jittered_delay = self.random.float(f32) * 0.1 + 0.9; // 60ms + 150ms
 
         self.remote_messages[self.remote_messages_len] = remote_message{ .payload = self.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = socket, .target_address = address, .time_to_send = self.time + jittered_delay };
         self.remote_messages_len += 1;

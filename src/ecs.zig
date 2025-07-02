@@ -32,7 +32,7 @@ fn GENERATE_TYPE_INFOS(comptime _COMPONENT_TYPES: anytype) [_COMPONENT_TYPES.len
         var curr = 0;
         for (_COMPONENT_TYPES) |type_| {
             ret[curr] = comp_rtti{ .hash = COMP_TYPE_TO_HASH(type_), .type_size = @sizeOf(type_), .type_alignment = std.math.log2(@alignOf(type_)), .component_id = curr };
-            if (ret[curr].type_size != @sizeOf(type_) or (ret[curr].type_size > 1024)) @compileError("blubber!: " ++ std.fmt.comptimePrint("{} {}", .{ @sizeOf(type_), ret[curr].type_size }));
+            if (ret[curr].type_size != @sizeOf(type_) or (ret[curr].type_size > 20000)) @compileError("blubber!: " ++ std.fmt.comptimePrint("{} {}", .{ @sizeOf(type_), ret[curr].type_size }));
             curr += 1;
         }
         return ret;

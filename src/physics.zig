@@ -69,6 +69,9 @@ pub fn triangle(dir: vec3, coll: collider_info) vec3 {
 
     return max_pos;
 }
+pub fn player_capsule(dir: vec3, coll: collider_info) vec3 {
+    return dual_point(dir, coll).add(dir.normalized().mult(0.35));
+}
 
 pub fn mesh_triangle(dir: vec3, coll: collider_info) vec3 {
     const tri_data = @as(*const mesh_triangle_data, @alignCast(@ptrCast(coll.data)));
@@ -141,6 +144,7 @@ const w_lambda = struct {
 };
 
 pub fn shape_cast(a_coll: collider_info, b_coll: collider_info, ray_direction: vec3, enter_t: *f32, exit_t: *f32, _error: *bool) bool {
+    _error.* = false;
     var tri2d: [3]vec2 = undefined;
     var tri3d: [3]vec3 = undefined;
 

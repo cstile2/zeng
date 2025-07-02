@@ -42,7 +42,7 @@ pub fn assign_addr_to_sock(socket: socket_t, my_address: address_t) !void {
     try std.os.bind(socket, &my_address.any, my_address.getOsSockLen());
 }
 
-pub fn SEND_NET_MESSAGES(commands: *zeng.commands) void {
+pub fn send_net_messages(commands: *zeng.commands) void {
     var curr: usize = 0;
     while (curr < commands.remote_messages_len) {
         const rem_message = commands.remote_messages[curr];
@@ -55,41 +55,13 @@ pub fn SEND_NET_MESSAGES(commands: *zeng.commands) void {
         } else curr += 1;
     }
 }
-pub fn SERVER_recieve_all(socket: std.os.socket_t, res: *zeng.resources_t) void {
-    _ = res; // autofix
-    var client_addr: std.os.sockaddr = undefined;
-    var client_addr_len: std.os.socklen_t = @sizeOf(std.os.sockaddr);
+pub fn recieve_net_messages(socket: std.os.socket_t, res: *zeng.resources_t) void {
+    var sender_addr: std.os.sockaddr = undefined;
+    var sender_addr_len: std.os.socklen_t = @sizeOf(std.os.sockaddr);
 
     var recv_read_buf: [4096]u8 = undefined;
     get_messages_loop: while (true) {
-        const recv_result = std.os.recvfrom(socket, &recv_read_buf, 0, &client_addr, &client_addr_len);
-        if (recv_result) |_| {
-            var procedure_code: u32 = undefined;
-            @memcpy(@as([*]u8, @ptrCast(&procedure_code)), recv_read_buf[0..4]);
-
-            inline for (rpc.REMOTE_PROCEDURES) |proc| {
-                if (procedure_code == comptime zeng.GET_PROC_CODE(proc)) {
-                    var args: std.meta.ArgsTuple(@TypeOf(proc)) = undefined;
-                    var curr: u32 = 4;
-                    zeng.deserialize_from_bytes(std.meta.ArgsTuple(@TypeOf(proc)), @as([*]u8, @ptrCast(&args)), recv_read_buf[0..], &curr, 0);
-
-                    @call(.auto, proc, args);
-                }
-            }
-        } else |err| {
-            if (err != error.WouldBlock) // no more messages to read
-                std.debug.print("recv error: '{}'\n", .{err});
-            break :get_messages_loop;
-        }
-    }
-}
-pub fn RECIEVE_NET_MESSAGES(socket: std.os.socket_t, res: *zeng.resources_t) void {
-    var client_addr: std.os.sockaddr = undefined;
-    var client_addr_len: std.os.socklen_t = @sizeOf(std.os.sockaddr);
-
-    var recv_read_buf: [4096]u8 = undefined;
-    get_messages_loop: while (true) {
-        const recv_result = std.os.recvfrom(socket, &recv_read_buf, 0, &client_addr, &client_addr_len);
+        const recv_result = std.os.recvfrom(socket, &recv_read_buf, 0, &sender_addr, &sender_addr_len);
 
         if (recv_result) |_| {
             var redundancy_code: usize = undefined;
@@ -105,7 +77,7 @@ pub fn RECIEVE_NET_MESSAGES(socket: std.os.socket_t, res: *zeng.resources_t) voi
                     zeng.deserialize_from_bytes(msg_type, @as([*]u8, @ptrCast(&payload)), recv_read_buf[0..], &curr, 0);
 
                     if (res.get(main.events(msg_type)).addresses != null) {
-                        const address = net.Address_t{ .sockaddr = client_addr, .socklen = client_addr_len };
+                        const address = net.Address_t{ .sockaddr = sender_addr, .socklen = sender_addr_len };
                         res.get(main.events(msg_type)).send_with_address(payload, address);
                     } else {
                         // res.get(main.events(msg_type)).send(payload);

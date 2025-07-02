@@ -29,6 +29,9 @@ pub fn build(b: *std.Build) !void {
             .path = "c_libs/stb_image.c",
         },
     });
+    exe.root_module.addCSourceFile(.{
+        .file = .{ .path = "c_libs/clay.c" },
+    });
 
     // include C header files
     exe.root_module.addIncludePath(.{

@@ -44,6 +44,22 @@ pub const missed_input = struct {};
 pub const input_chunck = struct {
     arr: [30]input_message,
 };
+pub const variable_input_message = struct {
+    input_messages: []input_message,
+
+    pub fn serialize(self: @This(), buf: []u8) void {
+        var curr_byte: u32 = 0;
+        for (self.input_messages) |_input_message| {
+            zeng.serialize_to_bytes(_input_message, buf, &curr_byte);
+        }
+    }
+};
+
+pub const world_update = struct {
+    tick: isize,
+    server_player_matrix: zeng.world_matrix,
+    cube_pos: zeng.vec3,
+};
 // client send sync to server
 // server send sync to client
 
@@ -56,4 +72,5 @@ pub const REMOTE_MESSAGE_TYPES = .{
     server_tick_offset,
     missed_input,
     input_chunck,
+    world_update,
 };
