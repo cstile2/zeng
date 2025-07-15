@@ -25,8 +25,8 @@ pub const input_message = struct {
     tick: isize,
     jump: bool,
     move_vect: zeng.vec2,
-    dx: f64,
-    dy: f64,
+    rot_x: f64,
+    rot_y: f64,
 };
 pub const state_correction = struct {
     tick: isize,

@@ -53,8 +53,8 @@ pub const player = struct {
     animation_controller: ecs.entity_id,
     tilt: zeng.vec3 = zeng.vec3.ZERO,
     camera: ecs.entity_id,
-    rot_x: f64 = 0.0,
-    rot_y: f64 = 0.0,
+    // rot_x: f64 = 0.0,
+    // rot_y: f64 = 0.0,
 };
 pub const animation_component = struct {
     time: f32,
@@ -137,7 +137,7 @@ pub const RESOURCE_TYPES = [_]type{
 pub const time_res = struct {
     delta_time: f64,
     dt: f32,
-    elapsed_time: f64,
+    fixed_delta_time: f64,
     fixed_dt: f32,
 };
 pub const input_res = struct {
@@ -229,6 +229,113 @@ pub const hi_res_tick = struct {
     float: f64,
 };
 
+pub fn get_key(kc: key_code) bool {
+    return key_down[@intFromEnum(kc)];
+}
+pub const key_code = enum(u8) {
+    // Letters
+    A = 0x41,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+
+    // Numbers (Top row)
+    Num0 = 0x30,
+    Num1,
+    Num2,
+    Num3,
+    Num4,
+    Num5,
+    Num6,
+    Num7,
+    Num8,
+    Num9,
+
+    // Function keys
+    F1 = 0x70,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+
+    // Control keys
+    Escape = 0x1B,
+    Tab = 0x09,
+    CapsLock = 0x14,
+    Shift = 0x10,
+    Control = 0x11,
+    Alt = 0x12,
+    Space = 0x20,
+    Enter = 0x0D,
+    Backspace = 0x08,
+
+    // Arrow keys
+    Left = 0x25,
+    Up = 0x26,
+    Right = 0x27,
+    Down = 0x28,
+
+    // Special keys
+    Insert = 0x2D,
+    Delete = 0x2E,
+    Home = 0x24,
+    End = 0x23,
+    PageUp = 0x21,
+    PageDown = 0x22,
+
+    // Numpad
+    Numpad0 = 0x60,
+    Numpad1,
+    Numpad2,
+    Numpad3,
+    Numpad4,
+    Numpad5,
+    Numpad6,
+    Numpad7,
+    Numpad8,
+    Numpad9,
+    Multiply = 0x6A,
+    Add = 0x6B,
+    Subtract = 0x6D,
+    Decimal = 0x6E,
+    Divide = 0x6F,
+
+    // Symbols and misc
+    PrintScreen = 0x2C,
+    ScrollLock = 0x91,
+    Pause = 0x13,
+};
+var key_down = [_]bool{false} ** 256;
+
 pub fn main() !void {
     var ctx: zeng.engine_context = undefined;
     var res: zeng.resources_t = undefined;
@@ -250,7 +357,7 @@ pub fn main() !void {
             is_server = false;
         }
     }
-    const main_socket, const _server_address = zeng.net.do_setup("192.168.1.104", 12345, is_server) catch unreachable;
+    const main_socket, const _server_address = zeng.net.do_setup("127.0.0.1", 12345, is_server) catch unreachable;
     const server_address = net.Address_t{ .sockaddr = _server_address.any, .socklen = _server_address.getOsSockLen() };
     defer zeng.net.undo_setup(main_socket);
 
@@ -269,11 +376,9 @@ pub fn main() !void {
     var animations = animation_res.init(ctx.arena_allocator);
     res.insert_ptr(&animations);
 
-    // const land_root = zeng.auto_import(&ctx, &world, &res, "assets/gltf/", "land", skin_shader, static_shader, uv_checker_tex);
-
     const model_root = zeng.auto_import(&ctx, &world, &res, "assets/gltf/", "static_test", skin_shader, static_shader, uv_checker_tex);
     world.add(player{ .velocity = zeng.vec3.ZERO, .ground_normal = zeng.vec3.UP, .grounded = false, .animation_controller = undefined, .camera = undefined }, model_root);
-    world.add(rpc.input_message{ .tick = 0, .jump = false, .move_vect = zeng.vec2.ZERO, .dx = 0.0, .dy = 0.0 }, model_root);
+    world.add(rpc.input_message{ .tick = 0, .jump = false, .move_vect = zeng.vec2.ZERO, .rot_x = 0.0, .rot_y = 0.0 }, model_root);
     const E = find_component_of_type(&world, model_root, zeng.skinned_mesh, fet.fresh_query(.{children})).?;
     world.add(animation_component{ .time = 0.0, .current_animation = 0 }, world.get(E, zeng.skinned_mesh).?.skeleton);
     world.get(model_root, player).?.animation_controller = world.get(E, zeng.skinned_mesh).?.skeleton;
@@ -295,8 +400,6 @@ pub fn main() !void {
         world.add(snapshot_interpolator{ .buffer = undefined }, model_root2);
     }
 
-    // const castle_root = zeng.auto_import(&ctx, &world, &res, "assets/gltf/", "medieval", skin_shader, static_shader, uv_checker_tex);
-    // world.get(castle_root, zeng.world_matrix).?.* = zeng.mat_tran(zeng.mat_scal(zeng.mat_identity, zeng.vec3.ONE.mult(3.5)), zeng.vec3{ .x = -10.0, .z = -6.0, .y = -2.0 });
     const pistol_root = zeng.auto_import(&ctx, &world, &res, "assets/gltf/", "pistol", skin_shader, static_shader, black_tex);
     const map_root = zeng.auto_import(&ctx, &world, &res, "assets/gltf/", "outdoor_map_6_8_25", skin_shader, static_shader, uv_checker_tex);
 
@@ -308,10 +411,9 @@ pub fn main() !void {
     const square_vao, const square_indices_length = zeng.create_square_mesh();
     res.insert(text_render_res{ .shader_program = zeng.load_shader(ctx.allocator, "assets/shaders/screen.shader", "assets/shaders/screenfrag.shader"), .texture = zeng.load_texture("assets/images/sdf_font.png", false, true), .vao = square_vao, .indices_len = square_indices_length });
     res.insert(std.Random.DefaultPrng.init(123));
-    var commands = zeng.commands{ .random = res.get(std.Random.Xoshiro256).random(), .remote_messages = undefined, .remote_messages_len = 0, .allocator = ctx.allocator };
+    var commands = zeng.commands{ .reliable_messages = undefined, .reliable_message_seqs = std.AutoHashMap(usize, void).init(ctx.allocator), .random = res.get(std.Random.Xoshiro256).random(), .remote_messages = undefined, .remote_messages_len = 0, .allocator = ctx.allocator };
     defer commands.destroy();
     res.insert_ptr(&commands);
-    res.insert(time_res{ .delta_time = 0.0001, .elapsed_time = 0.0, .dt = 0.006944, .fixed_dt = 1.0 / 60.0 }); // 0.006944
     res.insert(input_res{ .t_down_last_frame = false });
     res.insert(@as(main_camera_res, undefined));
     res.insert_ptr(&ctx);
@@ -410,17 +512,14 @@ pub fn main() !void {
 
     var top_children = std.ArrayList(ecs.entity_id).init(ctx.allocator);
     top_children.append(model_root) catch unreachable;
-    // top_children.append(model_root2) catch unreachable;
     top_children.append(pistol_root) catch unreachable;
-    // top_children.append(castle_root) catch unreachable;
-    // top_children.append(land_root) catch unreachable;
     top_children.append(map_root) catch unreachable;
     if (!is_server) top_children.append(model_root2) catch unreachable;
     defer top_children.deinit();
 
     if (!is_server) {
-        commands.remote_event_(main_socket, server_address, rpc.player_spawn_message{});
-        zeng.net.send_net_messages(&commands);
+        commands.remote_event(main_socket, server_address, rpc.player_spawn_message{}, .reliable);
+        // zeng.net.send_net_messages(&commands, 0.0);
     }
 
     var input_buffer: ring_buffer(rpc.input_message) = undefined;
@@ -440,6 +539,7 @@ pub fn main() !void {
     var warm = false;
     const fixed_rate: f64 = 60.0;
     const fixed_delta: f64 = 1.0 / fixed_rate;
+    res.insert(time_res{ .delta_time = 0.006944, .dt = 0.006944, .fixed_delta_time = fixed_delta, .fixed_dt = @floatCast(fixed_delta) });
     res.get(time_res).fixed_dt = @floatCast(fixed_delta);
     var accum: f64 = 0.0;
     var tick: isize = 0;
@@ -455,14 +555,13 @@ pub fn main() !void {
         zeng.start_of_frame();
         defer zeng.end_of_frame(&res);
         commands.time += res.get(time_res).delta_time;
-        res.get(time_res).elapsed_time += res.get(time_res).delta_time;
 
-        zeng.net.recieve_net_messages(main_socket, &res);
+        zeng.net.recieve_net_messages(main_socket, &res, &commands);
 
         pos = ctx.active_window.getCursorPos();
         if (!first) {
-            dx += pos.xpos - last_x;
-            dy += pos.ypos - last_y;
+            dx = pos.xpos - last_x;
+            dy = pos.ypos - last_y;
         } else {
             first = false;
         }
@@ -472,6 +571,11 @@ pub fn main() !void {
         const world_matrix_q = fet.fresh_query(.{zeng.world_matrix});
         const children_q = fet.fresh_query(.{children});
         const local_matrix_q = fet.fresh_query(.{local_matrix});
+
+        const _input = world.get(model_root, rpc.input_message).?;
+        _input.rot_x += dx;
+        _input.rot_y += dy;
+        rotate_from_rotations(world.get(main_camera, zeng.world_matrix).?, _input.rot_x, _input.rot_y);
 
         // SERVER SIDE
         for (server_tick_offset_events.array.items, server_tick_offset_events.addresses.?.items) |server_tick_offset_event, _| {
@@ -494,7 +598,7 @@ pub fn main() !void {
         }
         server_tick_offset_events.clear();
         for (input_events.array.items, input_events.addresses.?.items) |input_event, sockaddr| {
-            const info = clients2.getPtr(sockaddr).?;
+            const info = clients2.getPtr(sockaddr) orelse break;
 
             for (input_event.arr) |_input_event| {
                 if (_input_event.tick >= tick) {
@@ -510,7 +614,7 @@ pub fn main() !void {
 
             const _model_root = zeng.auto_import(&ctx, &world, &res, "assets/gltf/", "static_test", skin_shader, static_shader, uv_checker_tex);
             world.add(player{ .velocity = zeng.vec3.ZERO, .ground_normal = zeng.vec3.UP, .grounded = false, .animation_controller = undefined, .camera = undefined }, _model_root);
-            world.add(rpc.input_message{ .tick = 0, .jump = false, .move_vect = zeng.vec2{}, .dx = 0.0, .dy = 0.0 }, _model_root);
+            world.add(rpc.input_message{ .tick = 0, .jump = false, .move_vect = zeng.vec2{}, .rot_x = 0.0, .rot_y = 0.0 }, _model_root);
             const _E = find_component_of_type(&world, _model_root, zeng.skinned_mesh, fet.fresh_query(.{children})).?;
             world.add(animation_component{ .time = 0.0, .current_animation = 0 }, world.get(_E, zeng.skinned_mesh).?.skeleton);
             world.get(_model_root, player).?.animation_controller = world.get(_E, zeng.skinned_mesh).?.skeleton;
@@ -524,12 +628,11 @@ pub fn main() !void {
         }
         player_join_events.clear();
         for (client_tick_events.array.items, client_tick_events.addresses.?.items) |client_tick_event, sockaddr| {
-            commands.remote_event(main_socket, sockaddr, rpc.server_tick_offset{ .server_time = @as(f64, @floatFromInt(tick)) * fixed_delta + accum, .client_time = client_tick_event.time });
+            commands.remote_event(main_socket, sockaddr, rpc.server_tick_offset{ .server_time = @as(f64, @floatFromInt(tick)) * fixed_delta + accum, .client_time = client_tick_event.time }, .unreliable);
         }
         client_tick_events.clear();
 
         // CLIENT SIDE
-
         for (snap_events.array.items, snap_events.addresses.?.items) |snap_event, _| {
             const P = world.get(model_root, player).?;
             const temp = P.animation_controller;
@@ -549,7 +652,7 @@ pub fn main() !void {
                     break;
                 }
                 simulate_collision(world.get(model_root, player).?, world.get(model_root, zeng.world_matrix).?, &ctx, &spatial_hash_grid, &tri_events, res.get(debug_res));
-                simulate_player(world.get(model_root, player).?, &im, world.get(model_root, zeng.world_matrix).?, res.get(time_res), fet.fresh_query(.{zeng.world_matrix}));
+                simulate_player(world.get(model_root, player).?, &im, world.get(model_root, zeng.world_matrix).?, res.get(time_res));
             }
             draw_resims = @intCast(@max(tick - snap_event.tick, 0));
 
@@ -626,7 +729,7 @@ pub fn main() !void {
                 buffer_velocity = 0.0;
             }
             buffer_time += res.get(time_res).delta_time * buffer_velocity;
-            
+
             const desired_time = synced_time + buffer_time;
             const my_time = @as(f64, @floatFromInt(tick)) * fixed_delta + accum;
             const offset = desired_time - my_time;
@@ -661,19 +764,18 @@ pub fn main() !void {
                     const cool = _c.value_ptr.input_buffer.get(tick);
                     if (cool.tick == tick) {
                         const ent = _c.value_ptr.player;
-                        const im = world.get(ent, rpc.input_message).?;
-                        im.* = cool;
+                        const input = world.get(ent, rpc.input_message).?;
+                        input.* = cool;
                     } else {
                         std.debug.print("missed input {}\n", .{tick});
                     }
                     if (_c.value_ptr.input_buffer.get(tick + 10).tick != tick + 10) {
-                        commands.remote_event(main_socket, _c.key_ptr.*, rpc.missed_input{});
+                        commands.remote_event(main_socket, _c.key_ptr.*, rpc.missed_input{}, .unreliable);
                     }
                 }
             }
-            world.get(model_root, rpc.input_message).?.* = rpc.input_message{ .tick = tick, .jump = input_implement.default_jump(&ctx), .move_vect = input_implement.default_move_fn(&ctx), .dx = dx, .dy = dy };
-            dx = 0;
-            dy = 0;
+            const __input = world.get(model_root, rpc.input_message).?;
+            __input.* = rpc.input_message{ .tick = tick, .jump = input_implement.default_jump(&ctx), .move_vect = input_implement.default_move_fn(&ctx), .rot_x = __input.rot_x, .rot_y = __input.rot_y };
             if (!is_server) {
                 input_buffer.set(tick, world.get(model_root, rpc.input_message).?.*);
                 var snd: rpc.input_chunck = undefined;
@@ -682,7 +784,7 @@ pub fn main() !void {
                     defer curr += 1;
                     snd.arr[curr] = input_buffer.get(tick - @as(isize, @intCast(curr)));
                 }
-                commands.remote_event(main_socket, server_address, snd);
+                commands.remote_event(main_socket, server_address, snd, .unreliable);
             }
 
             if (is_server) {
@@ -690,7 +792,6 @@ pub fn main() !void {
                 var floater_it = floater_q.iterator();
                 while (floater_it.next()) |curr| {
                     _, const M = curr;
-                    // zeng.mat_position_set(M, .{ .x = -7.0, .y = 2.0, .z = @sin(@as(f32, @floatFromInt(tick)) * 0.04) * 10.0 });
                     zeng.mat_position_set(M, .{ .x = -7.0, .y = 2.0, .z = @mod(@as(f32, @floatFromInt(tick)) * 0.01, 1.0) * 20.0 - 5.0 });
                 }
             }
@@ -698,15 +799,10 @@ pub fn main() !void {
             // SIMULATE PLAYER
             fet.run_system(player_logic_system);
             fet.run_system(follower_system);
-            world.get(pistol_root, zeng.world_matrix).?.* = zeng.mat_tran(world.get(main_camera, zeng.world_matrix).?.*, zeng.mat_mult_vec4(world.get(main_camera, zeng.world_matrix).?.*, zeng.vec4{ .x = 0.15, .y = -0.15, .z = -0.2 }).to_vec3());
-            for (top_children.items) |ch| {
-                sync_transforms_children(ch, world_matrix_q, children_q, local_matrix_q);
-            }
-
             fet.run_system(animation_system);
 
             // for (str_events.array.items) |str| {
-            //     zeng.draw_text(str, res.get(text_render_res));
+            //     zeng.draw_text(str, res.get(text_render_res), 0, 0);
             // }
             str_events.clear();
 
@@ -721,18 +817,18 @@ pub fn main() !void {
                 while (it.next()) |thing| {
                     const P = world.get(thing.value_ptr.*, player).?.*;
                     const M = world.get(thing.value_ptr.*, zeng.world_matrix).?.*;
-                    if (@as(usize, @intCast(tick)) % 4 == 0) commands.remote_event(main_socket, thing.key_ptr.*, rpc.state_correction{ .tick = tick, .state = P, .world_matrix = M });
+                    if (@as(usize, @intCast(tick)) % 4 == 0) commands.remote_event(main_socket, thing.key_ptr.*, rpc.state_correction{ .tick = tick, .state = P, .world_matrix = M }, .unreliable);
                 }
 
                 it = clients.iterator();
                 while (it.next()) |thing| {
                     if (@as(usize, @intCast(tick)) % 1 == 0) {
-                        commands.remote_event(main_socket, thing.key_ptr.*, rpc.world_update{ .cube_pos = zeng.mat_position(world.get(cube_root, zeng.world_matrix).?.*), .server_player_matrix = world.get(model_root, zeng.world_matrix).?.*, .tick = tick });
+                        commands.remote_event(main_socket, thing.key_ptr.*, rpc.world_update{ .cube_pos = zeng.mat_position(world.get(cube_root, zeng.world_matrix).?.*), .server_player_matrix = world.get(model_root, zeng.world_matrix).?.*, .tick = tick }, .unreliable);
                     }
                 }
             } else {
                 if (@as(usize, @intCast(tick)) % 60 == 0) {
-                    commands.remote_event(main_socket, server_address, rpc.client_tick{ .time = synced_time });
+                    commands.remote_event(main_socket, server_address, rpc.client_tick{ .time = synced_time }, .unreliable);
                 }
             }
 
@@ -753,6 +849,11 @@ pub fn main() !void {
                     if (result) aud.play_sound(bell, .one_shot);
                 }
             }
+        }
+
+        world.get(pistol_root, zeng.world_matrix).?.* = zeng.mat_tran(world.get(main_camera, zeng.world_matrix).?.*, zeng.mat_mult_vec4(world.get(main_camera, zeng.world_matrix).?.*, zeng.vec4{ .x = 0.15, .y = -0.15, .z = -0.2 }).to_vec3());
+        for (top_children.items) |ch| {
+            sync_transforms_children(ch, world_matrix_q, children_q, local_matrix_q);
         }
 
         res.get(main_camera_res).matrix = world.get(main_camera, zeng.world_matrix).?;
@@ -802,7 +903,7 @@ pub fn main() !void {
         zeng.draw_rect(ctx, res.get(rect_render_res), 0, 0, 4, 4, zeng.color_f32.WHITE);
 
         commands.process_commands(&world);
-        zeng.net.send_net_messages(&commands);
+        zeng.net.send_net_messages(&commands, res.get(time_res).delta_time);
         ctx.active_window.swapBuffers();
     }
 }
@@ -893,10 +994,16 @@ pub fn mouse_look_system(ctx: *zeng.engine_context, q: *ecs.query(.{ zeng.world_
     }
 }
 
-pub fn camera_rotation(matrix: *zeng.world_matrix, x: f64, y: f64) void {
+pub fn rotate_from_rotations(matrix: *zeng.world_matrix, x: f64, y: f64) void {
     const rot_mat_hor = zeng.mat_axis_angle(zeng.vec3.UP, @floatCast(x * -0.003));
     const rot_mat_vert = zeng.mat_axis_angle(zeng.vec3.RIGHT, @floatCast(y * -0.003));
     matrix.* = zeng.mat_tran(zeng.mat_mult(rot_mat_hor, rot_mat_vert), zeng.mat_position(matrix.*));
+}
+
+pub fn create_matrix_from_rotations(x: f64, y: f64) zeng.world_matrix {
+    const rot_mat_hor = zeng.mat_axis_angle(zeng.vec3.UP, @floatCast(x * -0.003));
+    const rot_mat_vert = zeng.mat_axis_angle(zeng.vec3.RIGHT, @floatCast(y * -0.003));
+    return zeng.mat_mult(rot_mat_hor, rot_mat_vert);
 }
 
 /// Render all entities with a transform and a mesh
@@ -1032,78 +1139,73 @@ pub fn player_collision_system(ctx: *zeng.engine_context, player_q: *ecs.query(.
     }
 }
 
-pub fn simulate_player(p: *player, im: *const rpc.input_message, m: *zeng.world_matrix, T: *time_res, camera_q: *ecs.query(.{zeng.world_matrix})) void {
-    p.rot_x += im.dx;
-    p.rot_y += im.dy;
+pub fn simulate_player(_player: *player, input: *const rpc.input_message, matrix: *zeng.world_matrix, time: *time_res) void {
+    const rotated_matrix = create_matrix_from_rotations(input.rot_x, input.rot_y);
 
-    const cam_matrix = camera_q.get(p.camera, zeng.world_matrix).?;
-
-    camera_rotation(cam_matrix, p.rot_x, p.rot_y);
-
-    if (im.jump and p.grounded) {
-        p.velocity = p.velocity.add(zeng.vec3{ .y = 6 });
-        p.grounded = false;
-        p.ground_normal = zeng.vec3.UP;
+    if (input.jump and _player.grounded) {
+        _player.velocity = _player.velocity.add(zeng.vec3{ .y = 6 });
+        _player.grounded = false;
+        _player.ground_normal = zeng.vec3.UP;
     }
 
     const acc: f32 = 60.0;
-    const basis_right = zeng.mat_right(cam_matrix.*).slide(p.ground_normal).normalized();
-    const basis_forward = basis_right.cross(p.ground_normal);
-    var move_vect = basis_right.mult(im.move_vect.x).add(basis_forward.mult(im.move_vect.y));
+    const basis_right = zeng.mat_right(rotated_matrix).slide(_player.ground_normal).normalized();
+    const basis_forward = basis_right.cross(_player.ground_normal);
+    var move_vect = basis_right.mult(input.move_vect.x).add(basis_forward.mult(input.move_vect.y));
 
     var tilt = zeng.vec3.ZERO;
-    if (p.grounded) {
-        if (im.move_vect.length() > 0.1) {
-            if (p.velocity.length_sq() > 0.01) {
-                const g = move_vect.sub(p.velocity.normalized()).clamp(1.0);
+    if (_player.grounded) {
+        if (input.move_vect.length() > 0.1) {
+            if (_player.velocity.length_sq() > 0.01) {
+                const g = move_vect.sub(_player.velocity.normalized()).clamp(1.0);
                 const h = g.mult(2.0).add(move_vect).normalized();
-                var h_v = h.project(p.velocity);
+                var h_v = h.project(_player.velocity);
                 const h_h = h.sub(h_v);
-                if (p.velocity.length() > 3.8 and h_v.dot(p.velocity) > 0.0) h_v = zeng.vec3.ZERO;
+                if (_player.velocity.length() > 3.8 and h_v.dot(_player.velocity) > 0.0) h_v = zeng.vec3.ZERO;
                 tilt = h_v.add(h_h);
-                p.velocity = p.velocity.add(h_v.add(h_h).mult(acc * T.fixed_dt));
+                _player.velocity = _player.velocity.add(h_v.add(h_h).mult(acc * time.fixed_dt));
             } else {
-                p.velocity = p.velocity.add(move_vect.mult(acc * T.fixed_dt));
+                _player.velocity = _player.velocity.add(move_vect.mult(acc * time.fixed_dt));
             }
         } else {
-            tilt = p.velocity.neg().clamp(1.0);
-            p.velocity = p.velocity.add(p.velocity.neg().clamp(acc * T.fixed_dt));
+            tilt = _player.velocity.neg().clamp(1.0);
+            _player.velocity = _player.velocity.add(_player.velocity.neg().clamp(acc * time.fixed_dt));
         }
     } else {
-        p.velocity = p.velocity.add(zeng.vec3.UP.mult(-9.8 * T.fixed_dt));
-        p.ground_normal = zeng.vec3.UP;
-        p.velocity = p.velocity.add(move_vect.mult(acc * 0.1 * T.fixed_dt));
-        p.velocity = p.velocity.slide(zeng.vec3.UP).add(p.velocity.project(zeng.vec3.UP));
+        _player.velocity = _player.velocity.add(zeng.vec3.UP.mult(-9.8 * time.fixed_dt));
+        _player.ground_normal = zeng.vec3.UP;
+        _player.velocity = _player.velocity.add(move_vect.mult(acc * 0.1 * time.fixed_dt));
+        _player.velocity = _player.velocity.slide(zeng.vec3.UP).add(_player.velocity.project(zeng.vec3.UP));
     }
-    p.tilt = p.tilt.lerp(tilt, 8.0 * T.fixed_dt);
-    m.* = zeng.mat_tran(m.*, p.velocity.mult(T.fixed_dt));
+    _player.tilt = _player.tilt.lerp(tilt, 8.0 * time.fixed_dt);
+    matrix.* = zeng.mat_tran(matrix.*, _player.velocity.mult(time.fixed_dt));
 
-    if (p.velocity.slide(zeng.vec3.UP).length() > 0.05) {
-        p.old_velocity = p.old_velocity.slerp(p.velocity.slide(zeng.vec3.UP).normalized(), 8 * T.fixed_dt);
+    if (_player.velocity.slide(zeng.vec3.UP).length() > 0.05) {
+        _player.old_velocity = _player.old_velocity.slerp(_player.velocity.slide(zeng.vec3.UP).normalized(), 8 * time.fixed_dt);
     }
-    if (p.old_velocity.slide(zeng.vec3.UP).length() > 0.05) {
-        const _up = (zeng.vec3.UP.add(p.tilt.mult(0.3))).normalized();
-        m.* = zeng.mat_rebasis(m.*, _up.cross(p.old_velocity.slide(_up)).normalized(), _up, p.old_velocity.slide(_up).normalized());
+    if (_player.old_velocity.slide(zeng.vec3.UP).length() > 0.05) {
+        const _up = (zeng.vec3.UP.add(_player.tilt.mult(0.3))).normalized();
+        matrix.* = zeng.mat_rebasis(matrix.*, _up.cross(_player.old_velocity.slide(_up)).normalized(), _up, _player.old_velocity.slide(_up).normalized());
     }
 
-    if (zeng.mat_position(m.*).y < -30.0) {
-        zeng.mat_position_set(m, .{ .y = 20.0, .x = -5.0 });
-        p.velocity = zeng.vec3.ZERO;
+    if (zeng.mat_position(matrix.*).y < -30.0) {
+        zeng.mat_position_set(matrix, .{ .y = 20.0, .x = -5.0 });
+        _player.velocity = zeng.vec3.ZERO;
     }
 }
 
-pub fn player_logic_system(T: *time_res, player_q: *ecs.query(.{ player, rpc.input_message, zeng.world_matrix }), animator_q: *ecs.query(.{ zeng.skeleton, animation_component }), ctx: *zeng.engine_context, animations: *animation_res, camera_q: *ecs.query(.{zeng.world_matrix})) !void {
+pub fn player_logic_system(time: *time_res, player_q: *ecs.query(.{ player, rpc.input_message, zeng.world_matrix }), animator_q: *ecs.query(.{ zeng.skeleton, animation_component }), ctx: *zeng.engine_context, animations: *animation_res) !void {
     var player_it = player_q.iterator();
     while (player_it.next()) |player_curr| {
-        const p, const im: *rpc.input_message, const m = player_curr;
+        const _player, const input: *rpc.input_message, const matrix = player_curr;
 
-        simulate_player(p, im, m, T, camera_q);
+        simulate_player(_player, input, matrix, time);
 
-        const anim = animator_q.get(p.animation_controller, animation_component).?;
-        const skel = animator_q.get(p.animation_controller, zeng.skeleton).?;
-        const blend = p.velocity.div(3.0).clamp(1.0).length();
+        const anim = animator_q.get(_player.animation_controller, animation_component).?;
+        const skel = animator_q.get(_player.animation_controller, zeng.skeleton).?;
+        const blend = _player.velocity.div(3.0).clamp(1.0).length();
 
-        anim.time += T.fixed_dt / zeng.lerp(animations.items[1].duration, animations.items[4].duration, blend);
+        anim.time += time.fixed_dt / zeng.lerp(animations.items[1].duration, animations.items[4].duration, blend);
         while (anim.time > 1.0) {
             anim.time -= 1.0;
         }
@@ -1327,10 +1429,7 @@ pub fn apply_pose(skeleton: *zeng.skeleton, pose: zeng.skeleton_pose) void {
 // add more flexible custom serialization functions to allow for dynamic data
 // use dynamic data to send variable input messages
 // use dynamic data to send snapshots for every replicated entity
+// implement reliable messages
 
 // overhaul ecs and resources to use enums for names
 // redo events, especially net events - add functionality to make them not so boiler-platey if possible
-
-pub fn rpc_add_player(res: *zeng.resource_fetcher) void {
-    _ = res.get(ecs.world).spawn(.{zeng.world_matrix});
-}

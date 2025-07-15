@@ -10,11 +10,14 @@ const FIONBIO: u32 = 0x8004667e;
 pub const connection_id = u32; // represents the connection
 pub const network_id = u32; // gloablly unique identifier of an object that is synced between computers
 pub const remote_message = struct {
+    seq: usize,
     time_to_send: f64,
     payload: []u8,
     sender_socket: net.socket_t,
     target_address: net.Address_t,
+    resend_timer: f64,
 };
+pub const resend_interval_sec = 1.0;
 
 /// this holds the information given by recvfrom representing the address of the sender
 pub const Address_t = struct {
@@ -42,12 +45,30 @@ pub fn assign_addr_to_sock(socket: socket_t, my_address: address_t) !void {
     try std.os.bind(socket, &my_address.any, my_address.getOsSockLen());
 }
 
-pub fn send_net_messages(commands: *zeng.commands) void {
+pub fn send_net_messages(commands: *zeng.commands, delta_time: f64) void {
+    // var list = std.ArrayList(usize).init(allocator);
+    // defer list.deinit();
+    var it = commands.reliable_message_seqs.iterator();
+    while (it.next()) |curr| {
+        const _msg = curr.key_ptr.*;
+        const msg = &commands.remote_messages[_msg];
+
+        if (msg.resend_timer <= 0.0) {
+            commands.remote_messages[commands.remote_messages_len] = msg.*;
+            commands.remote_messages_len += 1;
+            // list.append(i) catch unreachable;
+            msg.resend_timer = resend_interval_sec;
+        }
+        msg.resend_timer -= delta_time;
+    }
+
     var curr: usize = 0;
     while (curr < commands.remote_messages_len) {
         const rem_message = commands.remote_messages[curr];
         if (rem_message.time_to_send <= commands.time) {
-            _ = std.os.sendto(rem_message.sender_socket, rem_message.payload, 0, &rem_message.target_address.sockaddr, rem_message.target_address.socklen) catch unreachable;
+            if (commands.random.float(f32) < 0.7) {
+                _ = std.os.sendto(rem_message.sender_socket, rem_message.payload, 0, &rem_message.target_address.sockaddr, rem_message.target_address.socklen) catch unreachable;
+            }
             commands.allocator.free(rem_message.payload);
 
             commands.remote_messages[curr] = commands.remote_messages[commands.remote_messages_len - 1];
@@ -55,7 +76,7 @@ pub fn send_net_messages(commands: *zeng.commands) void {
         } else curr += 1;
     }
 }
-pub fn recieve_net_messages(socket: std.os.socket_t, res: *zeng.resources_t) void {
+pub fn recieve_net_messages(socket: std.os.socket_t, res: *zeng.resources_t, commands: *zeng.commands) void {
     var sender_addr: std.os.sockaddr = undefined;
     var sender_addr_len: std.os.socklen_t = @sizeOf(std.os.sockaddr);
 
@@ -64,8 +85,20 @@ pub fn recieve_net_messages(socket: std.os.socket_t, res: *zeng.resources_t) voi
         const recv_result = std.os.recvfrom(socket, &recv_read_buf, 0, &sender_addr, &sender_addr_len);
 
         if (recv_result) |_| {
-            var redundancy_code: usize = undefined;
-            @memcpy(@as([*]u8, @ptrCast(&redundancy_code)), recv_read_buf[0..@sizeOf(usize)]);
+            var sequence_number: usize = undefined;
+            @memcpy(@as([*]u8, @ptrCast(&sequence_number)), recv_read_buf[0..@sizeOf(usize)]);
+            if (sequence_number > commands.last_recieved_seq) {
+                commands.ack_bits = commands.ack_bits << 1;
+                commands.ack_bits = commands.ack_bits & 1;
+                commands.ack_bits = commands.ack_bits << @intCast(@min(31, sequence_number - commands.last_recieved_seq - 1));
+                commands.last_recieved_seq = sequence_number;
+            } else {
+                // handle the acknowledgement of packets that are out of order
+            }
+            if (commands.reliable_messages[sequence_number].seq == sequence_number) {
+                _ = commands.reliable_message_seqs.remove(sequence_number);
+            }
+
             var event_code: u32 = undefined;
             @memcpy(@as([*]u8, @ptrCast(&event_code)), recv_read_buf[@sizeOf(usize) .. @sizeOf(usize) + @sizeOf(u32)]);
 

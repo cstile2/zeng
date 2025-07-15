@@ -1251,7 +1251,7 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                         const _i: u32 = @intCast(i);
                         collider_indices[curr_ind / 2] = _i;
                     }
-                    std.debug.print("TRIS: {}\n", .{collider_indices.len / 3});
+                    // std.debug.print("TRIS: {}\n", .{collider_indices.len / 3});
 
                     const collider_mesh = zeng.cpu_mesh{ .indices = collider_indices, .positions = collider_positions };
 
