@@ -26,12 +26,12 @@ pub const loop_mode = enum {
 
 fn check_error(ERROR: c.HRESULT) !void {
     // std.debug.print("error: {x}\n", .{@as(u32, @bitCast(ERROR))});
-    if (ERROR != c.S_OK) return std.os.UnexpectedError.Unexpected;
+    if (ERROR != c.S_OK) return error.Overflow;
 }
 fn convert_sample_to_output_format(T: type, in: T) f32 {
     const info = @typeInfo(T);
     const max: f32 = std.math.maxInt(T);
-    if (info.Int.signedness == .signed) {
+    if (info.int.signedness == .signed) {
         const sample_float: f32 = @as(f32, @floatFromInt(in)) / max;
         return sample_float;
     } else {
@@ -124,9 +124,9 @@ pub fn get_audio_file_data(wav_bytes: []const u8) !audio_sample_info {
 }
 pub fn play_sound(sample_info: audio_sample_info, mode: loop_mode) void {
     const D = sound_play_state{ .wav_file = sample_info, .mode = mode };
-    const atomically_requested_message_spot = @atomicRmw(usize, &message_queue_count_WRITERS, std.builtin.AtomicRmwOp.Add, 1, std.builtin.AtomicOrder.Monotonic);
+    const atomically_requested_message_spot = @atomicRmw(usize, &message_queue_count_WRITERS, std.builtin.AtomicRmwOp.Add, 1, std.builtin.AtomicOrder.monotonic);
     get_message(atomically_requested_message_spot).* = D;
-    _ = @atomicRmw(usize, &message_queue_count_READER, std.builtin.AtomicRmwOp.Add, 1, std.builtin.AtomicOrder.Monotonic);
+    _ = @atomicRmw(usize, &message_queue_count_READER, std.builtin.AtomicRmwOp.Add, 1, std.builtin.AtomicOrder.monotonic);
 }
 
 var play_states: [200]sound_play_state = undefined;
@@ -216,7 +216,7 @@ pub fn audio_engine_run() !void {
         }
 
         // enact all recieved messages by updating playstates list
-        const atomically_requested_message_spot = @atomicLoad(usize, &message_queue_count_READER, std.builtin.AtomicOrder.Monotonic);
+        const atomically_requested_message_spot = @atomicLoad(usize, &message_queue_count_READER, std.builtin.AtomicOrder.monotonic);
         var curr: usize = message_queue_start;
         while (curr < atomically_requested_message_spot) {
             play_states[play_states_count] = get_message(curr).*;
@@ -253,5 +253,3 @@ pub fn audio_engine_run() !void {
 pub fn audio_engine_cleanup() void {
     c.CoUninitialize();
 }
-
-test "hello" {}

@@ -639,30 +639,39 @@ pub fn ray_cast_triangle(ro: vec3, rd: vec3, v0: vec3, v1: vec3, v2: vec3, resul
 }
 
 pub fn ray_cast(ro: vec3, rd: vec3, physics_data: []collider_info, result: *raycast_result) bool {
-    result.t = std.math.floatMax(f32);
-    var hit = false;
-    for (physics_data) |coll| {
-        if (coll.tag == .mesh) {
-            const mesh_data = @as(*const mesh_collider_data, @alignCast(@ptrCast(coll.data))).*;
+    _ = ro;
+    _ = rd;
+    _ = physics_data;
+    _ = result;
+    // result.t = std.math.floatMax(f32);
+    // var hit = false;
+    // for (physics_data) |coll| {
+    //     if (coll.tag == .mesh) {
+    //         const mesh_data = @as(*const mesh_collider_data, @alignCast(@ptrCast(coll.data))).*;
 
-            var curr_tri: usize = 0;
-            while (curr_tri < mesh_data.indices.len) {
-                defer curr_tri += 3;
+    //         var curr_tri: usize = 0;
+    //         while (curr_tri < mesh_data.indices.len) {
+    //             defer curr_tri += 3;
 
-                const a = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 0]].to_vec4(1.0)).to_vec3();
-                const b = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 1]].to_vec4(1.0)).to_vec3();
-                const c = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 2]].to_vec4(1.0)).to_vec3();
+    //             const a = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 0]].to_vec4(1.0)).to_vec3();
+    //             const b = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 1]].to_vec4(1.0)).to_vec3();
+    //             const c = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 2]].to_vec4(1.0)).to_vec3();
 
-                var res: raycast_result = undefined;
-                const is_hitting = ray_cast_triangle(ro, rd, a, b, c, &res);
-                if (is_hitting) {
-                    if (res.t < result.t) result.* = res;
-                    hit = true;
-                }
-            }
-        }
-    }
-    return hit;
+    //             var res: raycast_result = undefined;
+    //             const is_hitting = ray_cast_triangle(ro, rd, a, b, c, &res);
+    //             if (is_hitting) {
+    //                 if (res.t < result.t) result.* = res;
+    //                 hit = true;
+    //             }
+    //         }
+    //     }
+    //     if (coll.tag == .support_based and coll.support == &@import("physics.zig").mesh_triangle) {
+    //         std.debug.print("hello\n", .{});
+    //     }
+    // }
+    // return hit;
+
+    return false; // this function needs to be reworked to use some kind of spatial acceleration structure, probably spatial hash grid that we already have
 }
 
 pub const GRID_SIZE = 0.5;

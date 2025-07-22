@@ -1,9 +1,12 @@
 zig-cache/
 zig-out/
+.zig-cache/
 /release/
 /debug/
 /build/
 /build-*/
 /docgen_tmp/
+
+.vscode/
 
 assets/extras/command_input.txt

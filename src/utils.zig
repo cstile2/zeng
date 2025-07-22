@@ -2,28 +2,27 @@ const std = @import("std");
 const zeng = @import("zeng.zig");
 
 /// returns an array of types - each type corresponds to a function parameter
-pub fn fn_parameter_type_array(comptime t: std.builtin.Type) [t.Fn.params.len]type {
-    var types: [t.Fn.params.len]type = undefined;
+pub fn fn_parameter_type_array(comptime t: std.builtin.Type) [t.@"fn".params.len]type {
+    var types: [t.@"fn".params.len]type = undefined;
     for (0..types.len) |i| {
-        types[i] = t.Fn.params[i].type.?;
+        types[i] = t.@"fn".params[i].type.?;
     }
     return types;
 }
-
 pub fn type_array_to_tuple_type(comptime types: anytype) type {
     var struct_fields: [types.len]std.builtin.Type.StructField = undefined;
     for (types, 0..) |_type, i| {
         struct_fields[i] = .{
             .type = _type,
             .name = std.fmt.comptimePrint("{d}", .{i}),
-            .default_value = null,
+            .default_value_ptr = null,
             .is_comptime = false,
             .alignment = @alignOf(_type),
         };
     }
     const payload_type = @Type(.{
-        .Struct = .{
-            .layout = .Auto,
+        .@"struct" = .{
+            .layout = .auto,
             .fields = &struct_fields,
             .decls = &.{},
             .is_tuple = true,
@@ -31,7 +30,6 @@ pub fn type_array_to_tuple_type(comptime types: anytype) type {
     });
     return payload_type;
 }
-
 pub fn tuple_of_ptrs(comptime types: anytype) type {
     comptime var struct_fields: [types.len]std.builtin.Type.StructField = undefined;
     comptime for (types, 0..) |_type, i| {
@@ -53,7 +51,6 @@ pub fn tuple_of_ptrs(comptime types: anytype) type {
     });
     return payload_type;
 }
-
 pub fn type_id(comptime T: type) usize {
     return @intFromPtr(&@typeName(T));
 }

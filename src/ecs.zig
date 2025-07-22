@@ -1,6 +1,7 @@
 const std = @import("std");
 const utils = @import("utils.zig");
-const COMPONENT_TYPES = @import("main.zig").COMPONENT_TYPES;
+const main = @import("main.zig");
+const COMPONENT_TYPES = main.COMPONENT_TYPES;
 
 pub const comp_rtti = struct {
     hash: u64,
@@ -159,13 +160,13 @@ pub fn query_iterator(comptime types: anytype) type {
         tuple_fields[i] = .{
             .type = *_type,
             .name = std.fmt.comptimePrint("{d}", .{i}),
-            .default_value = null,
+            .default_value_ptr = null,
             .is_comptime = false,
-            .alignment = @alignOf(_type),
+            .alignment = @alignOf(*_type),
         };
     };
-    const ptrs_to_components = @Type(.{ .Struct = .{
-        .layout = .Auto,
+    const ptrs_to_components = @Type(.{ .@"struct" = .{
+        .layout = .auto,
         .fields = &tuple_fields,
         .decls = &.{},
         .is_tuple = true,
@@ -294,6 +295,22 @@ pub const world = struct {
         @memcpy(new_table.get_slice(t.component_id, new_table.count - 1), ptr[0..t.type_size]);
     }
     /// retrieve references to components of an entity
+    // pub fn get(self: *const world, id: entity_id, T: type) ?*T {
+    //     const unstable = self.locations.get(id).?;
+    //     return (self.tables.getPtr(unstable.archetype_hash) orelse return null).get(T, unstable.row);
+    // }
+    pub fn id_get(self: *const world, id: entity_id, comptime name: @import("main.zig").component_name) ?*main.COMPONENT_TYPES[@intFromEnum(name)] {
+        const unstable = self.locations.get(id).?;
+        const ptr = (self.tables.getPtr(unstable.archetype_hash) orelse return null).get_(name, unstable.row);
+
+        return @alignCast(@ptrCast(ptr));
+    }
+    pub fn runtime_get(self: *const world, id: entity_id, name: @import("main.zig").component_name) ?*anyopaque {
+        const unstable = self.locations.get(id).?;
+        const ptr = (self.tables.getPtr(unstable.archetype_hash) orelse return null).get_(name, unstable.row);
+
+        return ptr;
+    }
     pub fn get(self: *const world, id: entity_id, T: type) ?*T {
         const unstable = self.locations.get(id) orelse unreachable;
         return (self.tables.getPtr(unstable.archetype_hash) orelse return null).get(T, unstable.row);
@@ -346,8 +363,8 @@ pub const world = struct {
         var index: usize = 0;
         while (curr_bit_field != 0 and index < __runtime_type_information.len) {
             if (curr_bit_field & arch_id != 0) {
-                try table.construct_column((&__runtime_type_information[index]).*); // TODO: if ecs breaks check this (make a pointer and pointlessly dereference it)
-                // try table.construct_column(__runtime_type_information[index]); // TODO: if ecs breaks check this (make a pointer and pointlessly dereference it)
+                // try table.construct_column((&__runtime_type_information[index]).*); // TODO: if ecs breaks check this (make a pointer and pointlessly dereference it)
+                try table.construct_column(__runtime_type_information[index]); // TODO: if ecs breaks check this (make a pointer and pointlessly dereference it)
 
             }
             curr_bit_field = curr_bit_field << 1;
@@ -432,6 +449,10 @@ pub const archetype_table = struct {
         if (row >= self.count) unreachable;
         return (self.storages.getPtr(comptime COMP_TYPE_TO_ID(T)) orelse return null).get(row, T);
     }
+    pub fn get_(self: *archetype_table, name: main.component_name, row: u64) ?*anyopaque {
+        if (row >= self.count) unreachable;
+        return (self.storages.getPtr(@intFromEnum(name)) orelse return null).get_(row);
+    }
     pub fn get_slice(self: *archetype_table, id: component_id, row: u64) []u8 {
         if (row >= self.count) unreachable;
         return self.storages.getPtr(id).?.get_slice(row);
@@ -447,26 +468,30 @@ pub const component_column = struct {
         self.capacity = capacity;
         self.type_info = T_run;
         if (self.type_info.type_size == 0) return;
-        self.array = (allocator.rawAlloc(T_run.type_size * capacity, T_run.type_alignment, @returnAddress()) orelse return ECSError.RequestFailed)[0 .. capacity * T_run.type_size];
+        self.array = (allocator.rawAlloc(T_run.type_size * capacity, @enumFromInt(self.type_info.type_alignment), @returnAddress()) orelse return ECSError.RequestFailed)[0 .. capacity * T_run.type_size];
         // self.array = (allocator.vtable.alloc(allocator.ptr, T_run.type_size * capacity, T_run.type_alignment, @returnAddress()) orelse return ECSError.RequestFailed)[0 .. T_run.type_size * capacity];
     }
     pub fn deinit(self: *component_column, allocator: std.mem.Allocator) !void {
         if (self.type_info.type_size == 0) return;
         // allocator.vtable.free(allocator.ptr, self.array, self.type_info.type_alignment, @returnAddress());
-        allocator.rawFree(self.array, self.type_info.type_alignment, @returnAddress());
+        allocator.rawFree(self.array, @enumFromInt(self.type_info.type_alignment), @returnAddress());
     }
 
     pub fn double_capacity(self: *component_column, allocator: std.mem.Allocator) !void {
         self.capacity *= 2;
         if (self.type_info.type_size == 0) return;
-        const temp = (allocator.vtable.alloc(allocator.ptr, self.type_info.type_size * self.capacity * 2, self.type_info.type_alignment, @returnAddress()) orelse return ECSError.RequestFailed)[0 .. self.type_info.type_size * self.capacity * 2];
+        const temp = (allocator.vtable.alloc(allocator.ptr, self.type_info.type_size * self.capacity * 2, @enumFromInt(self.type_info.type_alignment), @returnAddress()) orelse return ECSError.RequestFailed)[0 .. self.type_info.type_size * self.capacity * 2];
         @memcpy(temp[0..self.array.len], self.array);
-        allocator.vtable.free(allocator.ptr, self.array, self.type_info.type_alignment, @returnAddress());
+        allocator.vtable.free(allocator.ptr, self.array, @enumFromInt(self.type_info.type_alignment), @returnAddress());
         self.array = temp;
     }
     pub fn get(self: *component_column, row: usize, T: type) *T {
         if (row >= self.capacity) unreachable;
         return @as(*T, @ptrFromInt(@intFromPtr(self.array.ptr) + row * self.type_info.type_size));
+    }
+    pub fn get_(self: *component_column, row: usize) *anyopaque {
+        if (row >= self.capacity) unreachable;
+        return @as(*anyopaque, @ptrFromInt(@intFromPtr(self.array.ptr) + row * self.type_info.type_size));
     }
     pub fn get_slice(self: *component_column, row: usize) []u8 {
         if (row >= self.capacity) unreachable;

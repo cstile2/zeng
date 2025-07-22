@@ -50,7 +50,7 @@ pub const variable_input_message = struct {
     pub fn serialize(self: @This(), buf: []u8) void {
         var curr_byte: u32 = 0;
         for (self.input_messages) |_input_message| {
-            zeng.serialize_to_bytes(_input_message, buf, &curr_byte);
+            zeng.loader.serialize_to_bytes(_input_message, buf, &curr_byte);
         }
     }
 };

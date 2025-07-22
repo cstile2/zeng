@@ -5,7 +5,7 @@ const ecs = @import("ecs.zig");
 const rpc = @import("rpc.zig");
 const main = @import("main.zig");
 pub const net = @import("networking.zig");
-pub const glfw = @import("mach-glfw");
+// pub const glfw = @import("mach-glfw");
 pub const gl = @import("gl");
 pub const c = @cImport({
     @cInclude("initguid.h");
@@ -15,9 +15,10 @@ pub const c = @cImport({
     @cInclude("mmdeviceapi.h");
     @cInclude("stb_image.h");
     @cInclude("clay.h");
+    @cInclude("winsock2.h");
 });
-pub usingnamespace @import("loader.zig");
-pub usingnamespace @import("render.zig");
+pub const loader = @import("loader.zig");
+pub const render = @import("render.zig");
 
 // Engine structs
 pub const vec2 = struct {
@@ -629,7 +630,7 @@ pub fn glfw_get_proc_address(p: zeng.glfw.GLProc, proc: [:0]const u8) ?zeng.gl.F
 pub fn error_callback(error_code: zeng.glfw.ErrorCode, description: [:0]const u8) void {
     std.log.err("glfw error - code: {}\n{s}\n", .{ error_code, description });
 }
-pub fn opengl_log_error() !void {
+pub fn gl_log_errors() !void {
     var err: zeng.gl.GLenum = zeng.gl.getError();
     while (err != zeng.gl.NO_ERROR) {
         const errorString = switch (err) {
@@ -641,7 +642,7 @@ pub fn opengl_log_error() !void {
             else => "unknown error",
         };
 
-        std.log.err("Found OpenGL error: {s}", .{errorString});
+        std.log.err("gl_log_errors() found: {s}", .{errorString});
 
         err = zeng.gl.getError();
     }
@@ -649,7 +650,12 @@ pub fn opengl_log_error() !void {
 
 // Application
 pub const engine_context = struct {
-    active_window: zeng.glfw.Window,
+    // active_window: zeng.glfw.Window,
+    width: u16 = 0,
+    height: u16 = 0,
+
+    hwnd: [*c]c.struct_HWND__,
+    hdc: [*c]c.struct_HDC__,
 
     gpa: std.heap.GeneralPurposeAllocator(.{}),
     allocator: std.mem.Allocator,
@@ -657,40 +663,67 @@ pub const engine_context = struct {
     arena: std.heap.ArenaAllocator,
     arena_allocator: std.mem.Allocator,
 };
-pub fn window_resize_handler(window: zeng.glfw.Window, width: u32, height: u32) void {
-    zeng.gl.viewport(0, 0, @intCast(width), @intCast(height));
-    if (window.getUserPointer(zeng.resources_t)) |res| {
-        res.get(main.main_camera_res).camera.projection_matrix = zeng.mat_perspective_projection(1.5, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
-    }
+pub fn window_resize_handler(res: *resources_t, width: u32, height: u32) void {
+    zeng.gl.viewport(0, 0, @bitCast(width), @bitCast(height));
+    const cam_id = res.get(main.main_camera_res).id;
+    const world = res.get(ecs.world);
+    const cam = world.id_get(cam_id, .camera).?;
+    cam.projection_matrix = zeng.mat_perspective_projection(1.5, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
 }
-pub fn engine_start(gd: *zeng.engine_context, res: *resources_t, world: *ecs.world, dep: *resource_fetcher) !void {
-    // set glfw error callback
-    zeng.glfw.setErrorCallback(error_callback);
-    if (!zeng.glfw.init(.{})) {
-        std.log.err("failed to initialize GLFW: {?s}", .{zeng.glfw.getErrorString()});
-        std.process.exit(1);
+pub fn engine_start(ctx: *zeng.engine_context, res: *resources_t, world: *ecs.world, dep: *resource_fetcher) !void {
+    { // windows setup
+        const hInstance = zeng.c.GetModuleHandleW(null);
+
+        var wc: zeng.c.WNDCLASSW = std.mem.zeroes(zeng.c.WNDCLASSW);
+        wc.lpfnWndProc = windows_message_handler;
+        wc.hInstance = hInstance;
+        wc.lpszClassName = L("MyZigWindowClass");
+
+        if (zeng.c.RegisterClassW(&wc) == 0) unreachable; // failed to register window class
+
+        const hwnd = zeng.c.CreateWindowExW(0, wc.lpszClassName, L("window title"), zeng.c.WS_OVERLAPPEDWINDOW | zeng.c.WS_VISIBLE, zeng.c.CW_USEDEFAULT, zeng.c.CW_USEDEFAULT, 800, 450, null, null, hInstance, null);
+        if (hwnd == null) unreachable; // failed to create window
+        ctx.hwnd = hwnd;
+        ctx.width = 800;
+        ctx.height = 450;
+
+        // raw input setup
+        var rid: zeng.c.RAWINPUTDEVICE = .{
+            .usUsagePage = 0x01,
+            .usUsage = 0x02,
+            .dwFlags = 0,
+            .hwndTarget = hwnd,
+        };
+        if (zeng.c.RegisterRawInputDevices(&rid, 1, @sizeOf(zeng.c.RAWINPUTDEVICE)) == 0) unreachable; // failed to register for raw input
+        // end raw input setup
+
+        // opengl setup
+        const hdc = zeng.c.GetDC(hwnd);
+        ctx.hdc = hdc;
+        var pfd: zeng.c.PIXELFORMATDESCRIPTOR = std.mem.zeroes(zeng.c.PIXELFORMATDESCRIPTOR);
+        pfd.nSize = @sizeOf(zeng.c.PIXELFORMATDESCRIPTOR);
+        pfd.nVersion = 1;
+        pfd.dwFlags = zeng.c.PFD_DRAW_TO_WINDOW | zeng.c.PFD_SUPPORT_OPENGL | zeng.c.PFD_DOUBLEBUFFER;
+        pfd.iPixelType = zeng.c.PFD_TYPE_RGBA;
+        pfd.cColorBits = 32;
+        pfd.cDepthBits = 24;
+        pfd.cStencilBits = 8;
+        pfd.iLayerType = zeng.c.PFD_MAIN_PLANE;
+
+        const pf = zeng.c.ChoosePixelFormat(hdc, &pfd);
+        if (pf == 0 or zeng.c.SetPixelFormat(hdc, pf, &pfd) == 0) unreachable; // failed to set pixel format
+
+        const hglrc = zeng.c.wglCreateContext(hdc);
+        if (hglrc == null or zeng.c.wglMakeCurrent(hdc, hglrc) == 0) unreachable; // failed to create opengl context
+        // end opengl setup
+
+        const user32 = zeng.c.LoadLibraryA("opengl32.dll");
+        if (user32 == null) unreachable; // failed to load opengl32.dll
+
+        try gl.load(user32, get_proc_address);
+
+        _ = c.SetWindowLongPtrW(ctx.hwnd, c.GWLP_USERDATA, @intCast(@intFromPtr(res)));
     }
-
-    // create our window
-    gd.active_window = zeng.glfw.Window.create(800, 450, "the amazing game!", null, null, .{
-        .opengl_profile = .opengl_core_profile,
-        .context_version_major = 4,
-        .context_version_minor = 0,
-    }) orelse {
-        std.log.err("failed to create GLFW window: {?s}", .{zeng.glfw.getErrorString()});
-        std.process.exit(1);
-    };
-    // necessary for window resizing
-    gd.active_window.setFramebufferSizeCallback(window_resize_handler);
-    gd.active_window.setUserPointer(res);
-    gd.active_window.setKeyCallback(key_callback);
-    gd.active_window.setInputModeRawMouseMotion(true);
-
-    zeng.glfw.makeContextCurrent(gd.active_window);
-    const proc: zeng.glfw.GLProc = undefined;
-    try zeng.gl.load(proc, glfw_get_proc_address);
-
-    // zeng.glfw.swapInterval(0); // turn vsync off
 
     zeng.gl.enable(zeng.gl.DEPTH_TEST);
     zeng.gl.enable(zeng.gl.CULL_FACE);
@@ -701,24 +734,22 @@ pub fn engine_start(gd: *zeng.engine_context, res: *resources_t, world: *ecs.wor
     timer_warmup();
     old_time = timer_get();
 
-    gd.gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    gd.allocator = gd.gpa.allocator();
+    ctx.gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    ctx.allocator = ctx.gpa.allocator();
 
-    gd.arena = std.heap.ArenaAllocator.init(gd.allocator);
-    gd.arena_allocator = gd.arena.allocator();
+    ctx.arena = std.heap.ArenaAllocator.init(ctx.allocator);
+    ctx.arena_allocator = ctx.arena.allocator();
 
-    res.* = zeng.resources_t.init(gd.arena_allocator);
+    res.* = zeng.resources_t.init(ctx.arena_allocator);
 
-    world.* = ecs.world.init(gd.allocator);
-    dep.* = .{ .world = world, .res = res, .allocator = gd.arena_allocator };
+    world.* = ecs.world.init(ctx.allocator);
+    dep.* = .{ .world = world, .res = res, .allocator = ctx.arena_allocator };
 }
-pub fn engine_end(gd: *zeng.engine_context, res: *resources_t, world: *ecs.world) void {
-    gd.active_window.destroy();
-    zeng.glfw.terminate();
+pub fn engine_end(ctx: *zeng.engine_context, res: *resources_t, world: *ecs.world) void {
     world.deinit() catch void;
     res.deinit();
-    gd.arena.deinit();
-    _ = gd.gpa.deinit();
+    ctx.arena.deinit();
+    _ = ctx.gpa.deinit();
 }
 fn key_callback(window: zeng.glfw.Window, key: zeng.glfw.Key, scancode: i32, action: zeng.glfw.Action, mods: zeng.glfw.Mods) void {
     _ = key; // autofix
@@ -798,7 +829,7 @@ pub const resources_t = struct {
     }
     pub fn insert_ptr(self: *resources_t, p: anytype) void {
         const erased = @as(*anyopaque, @ptrCast(p));
-        const type_id = utils.type_id(@typeInfo(@TypeOf(p)).Pointer.child);
+        const type_id = utils.type_id(@typeInfo(@TypeOf(p)).pointer.child);
         self.map.put(type_id, erased) catch unreachable;
     }
     pub fn get(resources: *resources_t, p: type) *p {
@@ -919,7 +950,7 @@ pub const commands = struct {
 
     // networking
     /// queues a remote procedure call to be sent to destination at the end of the current frame.
-    pub fn remote_call(self: *commands, socket: net.socket_t, address: net.address_t, comptime procedure: anytype, _args: anytype) void {
+    pub fn remote_call(self: *commands, socket: net.socket_t, address: net.Address, comptime procedure: anytype, _args: anytype) void {
         const procedure_code: u32 = comptime GET_PROC_CODE(procedure);
 
         const args: blk: {
@@ -932,8 +963,8 @@ pub const commands = struct {
 
         var payload_array = self.allocator.alloc(u8, 4 + @sizeOf(@TypeOf(args))) catch unreachable;
         var payload_curr: u32 = 0;
-        zeng.serialize_to_bytes(procedure_code, payload_array, &payload_curr);
-        zeng.serialize_to_bytes(args, payload_array, &payload_curr);
+        zeng.loader.serialize_to_bytes(procedure_code, payload_array, &payload_curr);
+        zeng.loader.serialize_to_bytes(args, payload_array, &payload_curr);
 
         self.remote_messages[self.remote_messages_len] = remote_message{ .payload = payload_array[0..payload_curr], .sender_socket = socket, .target_address = address };
         self.remote_messages_len += 1;
@@ -944,13 +975,13 @@ pub const commands = struct {
         reliable,
     };
 
-    pub fn remote_event(self: *commands, socket: net.socket_t, address: net.Address_t, event: anytype, channel: reliability_channel) void {
+    pub fn remote_event(self: *commands, socket: net.socket_t, address: net.sockaddr_socklen_t, event: anytype, channel: reliability_channel) void {
         const payload_array = self.allocator.alloc(u8, @sizeOf(usize) + @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
         var curr_byte: u32 = 0;
         const seq: usize = if (channel == .unreliable) 0 else self.curr_seq;
-        zeng.serialize_to_bytes(seq, payload_array, &curr_byte);
-        zeng.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
-        zeng.serialize_to_bytes(event, payload_array, &curr_byte);
+        zeng.loader.serialize_to_bytes(seq, payload_array, &curr_byte);
+        zeng.loader.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
+        zeng.loader.serialize_to_bytes(event, payload_array, &curr_byte);
 
         const jittered_delay = self.random.float(f32) * 0.1 + 0.9; // 60ms + 150ms
         const msg = remote_message{ .seq = seq, .resend_timer = net.resend_interval_sec, .payload = self.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = socket, .target_address = address, .time_to_send = self.time + jittered_delay };
@@ -963,12 +994,12 @@ pub const commands = struct {
         self.remote_messages_len += 1;
     }
 
-    pub fn remote_event_(self: *commands, socket: net.socket_t, address: net.Address_t, event: anytype) void {
+    pub fn remote_event_(self: *commands, socket: net.socket_t, address: net.sockaddr_socklen_t, event: anytype) void {
         const payload_array = self.allocator.alloc(u8, @sizeOf(usize) + @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
         var curr_byte: u32 = 0;
-        zeng.serialize_to_bytes(@as(usize, 0), payload_array, &curr_byte);
-        zeng.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
-        zeng.serialize_to_bytes(event, payload_array, &curr_byte);
+        zeng.loader.serialize_to_bytes(@as(usize, 0), payload_array, &curr_byte);
+        zeng.loader.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
+        zeng.loader.serialize_to_bytes(event, payload_array, &curr_byte);
 
         const jittered_delay = 0.0; // 60ms + 150ms
 
@@ -1001,9 +1032,18 @@ pub inline fn timer_calc_delta(a: i64, b: i64) f64 {
 }
 
 // Engine Frame Housekeeping
+pub var quit = false;
 var old_time: i64 = 0;
 pub fn start_of_frame() void {
-    glfw.pollEvents();
+    var msg: c.MSG = undefined;
+    while (c.PeekMessageW(&msg, null, 0, 0, c.PM_REMOVE) != 0) {
+        if (msg.message == c.WM_QUIT) {
+            quit = true;
+            break;
+        }
+        _ = c.TranslateMessage(&msg);
+        _ = c.DispatchMessageW(&msg);
+    }
 }
 pub fn end_of_frame(res: *resources_t) void {
     const new_time = zeng.timer_get();
@@ -1013,6 +1053,232 @@ pub fn end_of_frame(res: *resources_t) void {
 }
 
 const remote_message = net.remote_message;
+
+// Input Information
+var key_down = [_]bool{false} ** 256;
+pub const key_code = enum(u8) {
+    a = 0x41,
+    b,
+    c,
+    d,
+    e,
+    f,
+    g,
+    h,
+    i,
+    j,
+    k,
+    l,
+    m,
+    n,
+    o,
+    p,
+    q,
+    r,
+    s,
+    t,
+    u,
+    v,
+    w,
+    x,
+    y,
+    z,
+
+    // Numbers (Top row)
+    num_0 = 0x30,
+    num_1,
+    num_2,
+    num_3,
+    num_4,
+    num_5,
+    num_6,
+    num_7,
+    num_8,
+    num_9,
+
+    // Function keys
+    F1 = 0x70,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+
+    // Control keys
+    escape = 0x1B,
+    tab = 0x09,
+    caps_lock = 0x14,
+    shift = 0x10,
+    control = 0x11,
+    alt = 0x12,
+    space = 0x20,
+    enter = 0x0D,
+    backspace = 0x08,
+
+    // Arrow keys
+    left = 0x25,
+    up = 0x26,
+    right = 0x27,
+    down = 0x28,
+
+    // Special keys
+    insert = 0x2D,
+    delete = 0x2E,
+    home = 0x24,
+    end = 0x23,
+    page_up = 0x21,
+    page_down = 0x22,
+
+    // Numpad
+    numpad_0 = 0x60,
+    numpad_1,
+    numpad_2,
+    numpad_3,
+    numpad_4,
+    numpad_5,
+    numpad_6,
+    numpad_7,
+    numpad_8,
+    numpad_9,
+    multiply = 0x6A,
+    add = 0x6B,
+    subtract = 0x6D,
+    decimal = 0x6E,
+    divide = 0x6F,
+
+    // Symbols and misc
+    print_screen = 0x2C,
+    scroll_lock = 0x91,
+    pause = 0x13,
+};
+pub fn get_key(kc: key_code) bool {
+    return key_down[@intFromEnum(kc)];
+}
+pub var mouse_button_down = [_]bool{false} ** 10;
+pub const mouse_button = enum {
+    left,
+    right,
+    middle,
+};
+pub fn get_mouse_button(b: mouse_button) bool {
+    return mouse_button_down[@intFromEnum(b)];
+}
+
+pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lParam: c.LPARAM) callconv(.c) c.LRESULT {
+    switch (msg) {
+        c.WM_DESTROY => {
+            c.PostQuitMessage(0);
+            return 0;
+        },
+        c.WM_MOUSEMOVE => {
+            // const x: i16 = @intCast(lParam & 0xFFFF);
+            // const y: i16 = @intCast((lParam >> 16) & 0xFFFF);
+            // std.debug.print("Mouse moved to: {d}, {d}\n", .{ x, y });
+            return 0;
+        },
+        c.WM_INPUT => {
+            var raw_input: [256]u8 = undefined;
+            var size: c.UINT = 256;
+            const handle: c.HRAWINPUT = @as(*const c.HRAWINPUT, @ptrCast(&lParam)).*;
+
+            _ = c.GetRawInputData(handle, c.RID_INPUT, &raw_input, &size, @sizeOf(c.RAWINPUTHEADER));
+            const raw: *const c.RAWINPUT = @alignCast(@ptrCast(&raw_input));
+            if (raw.data.mouse.usFlags == 0) { // Relative mouse movement
+                const _dx = raw.data.mouse.lLastX;
+                const _dy = raw.data.mouse.lLastY;
+
+                const _input = main.global_world_ptr.id_get(main.global_model_root, .input_data).?;
+                _input.rot_x += @as(f64, @floatFromInt(_dx)) * 1.0;
+                _input.rot_y += @as(f64, @floatFromInt(_dy)) * 1.0;
+            }
+
+            const flags = raw.data.mouse.unnamed_0.unnamed_0.usButtonFlags;
+            if ((flags & c.RI_MOUSE_LEFT_BUTTON_DOWN) != 0) {
+                mouse_button_down[@intFromEnum(mouse_button.left)] = true;
+            }
+            if ((flags & c.RI_MOUSE_LEFT_BUTTON_UP) != 0) {
+                mouse_button_down[@intFromEnum(mouse_button.left)] = false;
+            }
+            if ((flags & c.RI_MOUSE_RIGHT_BUTTON_DOWN) != 0) {
+                mouse_button_down[@intFromEnum(mouse_button.right)] = true;
+            }
+            if ((flags & c.RI_MOUSE_RIGHT_BUTTON_UP) != 0) {
+                mouse_button_down[@intFromEnum(mouse_button.right)] = false;
+            }
+            return 0;
+        },
+        c.WM_KEYDOWN => {
+            const vk: c.UINT = @intCast(wParam);
+            key_down[vk] = true;
+            if (vk == @intFromEnum(key_code.m)) {
+                unlock_cursor();
+                show_cursor();
+            }
+            return 0;
+        },
+        c.WM_KEYUP => {
+            const vk: c.UINT = @intCast(wParam);
+            key_down[vk] = false;
+            return 0;
+        },
+        c.WM_SIZE => {
+            const width: u64 = @bitCast(lParam & 0xFFFF);
+            const height: u64 = @bitCast((lParam >> 16) & 0xFFFF);
+            std.debug.print("{} {}\n", .{ width, height });
+
+            const guy = c.GetWindowLongPtrW(hwnd, c.GWLP_USERDATA);
+            if (guy > 0) {
+                var res = @as(*zeng.resources_t, @ptrFromInt(@as(usize, @bitCast(guy))));
+                res.get(zeng.engine_context).width = @intCast(width);
+                res.get(zeng.engine_context).height = @intCast(height);
+                zeng.window_resize_handler(res, @intCast(width), @intCast(height));
+            }
+            return 0;
+        },
+        c.WM_SETCURSOR => {
+            // LOWORD(lParam) = hit-test result
+            // HIWORD(lParam) = mouse-message identifier
+            if ((lParam & 0xFFFF) == c.HTCLIENT) {
+                _ = c.SetCursor(c.LoadCursorW(null, @ptrFromInt(32512))); // Set default arrow
+                return 1; // We handled it
+            }
+            return c.DefWindowProcW(hwnd, msg, wParam, lParam);
+        },
+        else => return c.DefWindowProcW(hwnd, msg, wParam, lParam),
+    }
+}
+
+pub const L = std.unicode.utf8ToUtf16LeStringLiteral;
+pub fn get_proc_address(user32: c.HMODULE, name: [:0]const u8) ?gl.FunctionPointer {
+    // Try wglGetProcAddress first
+    const addr = c.wglGetProcAddress(name.ptr);
+    if (addr != null) return @ptrCast(addr);
+
+    // Fallback to opengl32.dll exports
+    return @ptrCast(c.GetProcAddress(user32, name.ptr));
+}
+pub fn lock_cursor_to_window(hwnd: c.HWND) void {
+    var rect: c.RECT = undefined;
+    _ = c.GetClientRect(hwnd, &rect);
+    _ = c.ClientToScreen(hwnd, @ptrCast(&rect.left));
+    _ = c.ClientToScreen(hwnd, @ptrCast(&rect.right));
+    _ = c.ClipCursor(&rect);
+}
+pub fn hide_cursor() void {
+    while (c.ShowCursor(0) >= 0) {} // Keep hiding until display count < 0
+}
+pub fn show_cursor() void {
+    while (c.ShowCursor(1) < 0) {} // Keep showing until display count >= 0
+}
+pub fn unlock_cursor() void {
+    _ = c.ClipCursor(null);
+}
 
 // Misc + Unused Stuff
 pub fn custom_struct(comptime in: anytype) type {
@@ -1037,38 +1303,38 @@ pub fn custom_struct(comptime in: anytype) type {
         },
     });
 }
-pub fn execute_console_command(gd: *zeng.engine_context, input_read: []const u8) void {
+pub fn execute_console_command(ctx: *zeng.engine_context, input_read: []const u8) void {
     const separated: [][]u8 = zeng.separate_text(input_read, ';');
     defer {
         for (separated) |string| {
-            gd.allocator.free(string);
+            ctx.allocator.free(string);
         }
-        gd.allocator.free(separated);
+        ctx.allocator.free(separated);
     }
     for (separated) |sub_command| {
         const parsed: [][]u8 = zeng.separate_text(sub_command, ' ');
         defer {
             for (parsed) |string| {
-                gd.allocator.free(string);
+                ctx.allocator.free(string);
             }
-            gd.allocator.free(parsed);
+            ctx.allocator.free(parsed);
         }
         if (std.mem.eql(u8, parsed[0], "import")) {
             if (parsed.len >= 2) {
-                const ents = zeng.ImportModelAsset(parsed[1], gd.allocator, gd.shader_program_GPU, gd.texture_GPU, &gd.entity_slice);
-                defer gd.allocator.free(ents);
+                const ents = zeng.ImportModelAsset(parsed[1], ctx.allocator, ctx.shader_program_GPU, ctx.texture_GPU, &ctx.entity_slice);
+                defer ctx.allocator.free(ents);
             } else {
                 std.debug.print("No path specified", .{});
             }
         } else if (std.mem.eql(u8, parsed[0], "freeze") and parsed.len == 1) { // pauses everything in the game except a spectator camera
             std.debug.print("FREEZE!\n", .{});
-            gd.frozen = !gd.frozen;
+            ctx.frozen = !ctx.frozen;
         } else if (std.mem.eql(u8, parsed[0], "add")) { // adds a component to an entity
             if (parsed.len >= 3) {
                 if (std.fmt.parseInt(u32, parsed[1], 10)) |parsed_int| {
                     const index: u32 = parsed_int;
                     std.debug.print("modifying index: {any}\n", .{index});
-                    zeng.AddComponent(&gd.entity_slice[index], parsed[2]) catch {
+                    zeng.AddComponent(&ctx.entity_slice[index], parsed[2]) catch {
                         std.debug.print("Could not add component: '{s}'", .{parsed[2]});
                     };
                 } else |_| {
@@ -1082,7 +1348,7 @@ pub fn execute_console_command(gd: *zeng.engine_context, input_read: []const u8)
                 if (std.fmt.parseInt(u32, parsed[1], 10)) |parsed_int| {
                     const index: u32 = parsed_int;
                     std.debug.print("modifying index: {any}\n", .{index});
-                    zeng.remove_component(&gd.entity_slice[index], parsed[2]) catch {
+                    zeng.remove_component(&ctx.entity_slice[index], parsed[2]) catch {
                         std.debug.print("Could not remove component: '{s}'", .{parsed[2]});
                     };
                 } else |_| {

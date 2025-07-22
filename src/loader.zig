@@ -13,8 +13,10 @@ pub fn get_file_bytes(filepath: []const u8, allocator: std.mem.Allocator) []u8 {
     const stat = file.stat() catch unreachable;
 
     // read the file and store it into a dynamically allocated array of u8 > return as a slice
-    const result = file.reader().readAllAlloc(allocator, stat.size) catch unreachable;
-    return result[0..];
+    const buf = allocator.alloc(u8, stat.size) catch unreachable;
+    var reader = file.reader(buf);
+    const n = reader.read(buf) catch unreachable;
+    return buf[0..n];
 }
 pub fn separate_text(text: []const u8, comptime delimiter: u8, allocator: std.mem.Allocator) [][]u8 {
     var ret = allocator.alloc([]u8, 50) catch unreachable;
@@ -46,7 +48,7 @@ pub fn load_shader(allocator: std.mem.Allocator, vertex_path: anytype, fragment_
     var ret: u32 = undefined;
 
     // get code from vertex shader file as a string
-    const vert_shader_code = zeng.get_file_bytes(vertex_path, allocator);
+    const vert_shader_code = get_file_bytes(vertex_path, allocator);
     defer allocator.free(vert_shader_code);
 
     // take vertex shader code > send to GPU > compile
@@ -63,7 +65,7 @@ pub fn load_shader(allocator: std.mem.Allocator, vertex_path: anytype, fragment_
     }
 
     // get code from fragment shader file as a string
-    var frag_shader_code = zeng.get_file_bytes(fragment_path, allocator);
+    var frag_shader_code = zeng.loader.get_file_bytes(fragment_path, allocator);
     defer allocator.free(frag_shader_code);
 
     // take fragment shader code > send to GPU > compile
@@ -109,17 +111,17 @@ pub fn load_texture(path: anytype, srgb: bool, flip_y: bool) u32 {
     //Engine.gl.pixelStorei(Engine.gl.UNPACK_ALIGNMENT, 1);
     zeng.gl.texImage2D(zeng.gl.TEXTURE_2D, 0, if (srgb) zeng.gl.SRGB else zeng.gl.RGB, width, height, 0, zeng.gl.RGB, zeng.gl.UNSIGNED_BYTE, image_data);
     zeng.gl.generateMipmap(zeng.gl.TEXTURE_2D);
-    zeng.opengl_log_error() catch unreachable;
+    zeng.gl_log_errors() catch unreachable;
 
     return ret;
 }
 pub fn serialize_to_bytes(payload: anytype, dest_bytes: []u8, dest_curr_byte: *u32) void {
     switch (@typeInfo(@TypeOf(payload))) {
-        .Int, .Float, .Bool, .Pointer, .Array => {
+        .int, .float, .bool, .pointer, .array => {
             @memcpy(dest_bytes[dest_curr_byte.* .. dest_curr_byte.* + @sizeOf(@TypeOf(payload))], std.mem.toBytes(payload)[0..@sizeOf(@TypeOf(payload))]);
             dest_curr_byte.* += @sizeOf(@TypeOf(payload));
         },
-        .Struct => {
+        .@"struct" => {
             inline for (std.meta.fields(@TypeOf(payload))) |f| {
                 serialize_to_bytes(@field(payload, f.name), dest_bytes, dest_curr_byte);
             }
@@ -132,11 +134,11 @@ pub fn serialize_to_bytes(payload: anytype, dest_bytes: []u8, dest_curr_byte: *u
 }
 pub fn deserialize_from_bytes(T: type, dest_bytes: [*]u8, src_bytes: []u8, src_curr_byte: *u32, offset: u32) void {
     switch (@typeInfo(T)) {
-        .Int, .Float, .Bool, .Pointer, .Array => {
+        .int, .float, .bool, .pointer, .array => {
             @memcpy(dest_bytes[offset .. offset + @sizeOf(T)], src_bytes[src_curr_byte.* .. src_curr_byte.* + @sizeOf(T)]);
             src_curr_byte.* += @sizeOf(T);
         },
-        .Struct => {
+        .@"struct" => {
             inline for (std.meta.fields(T)) |f| {
                 deserialize_from_bytes(f.type, dest_bytes, src_bytes, src_curr_byte, offset + @offsetOf(T, f.name));
             }
@@ -146,11 +148,6 @@ pub fn deserialize_from_bytes(T: type, dest_bytes: [*]u8, src_bytes: []u8, src_c
         },
     }
 }
-// pub fn copy(src: anytype, allocator: std.mem.Allocator) @TypeOf(src) {
-//     _ = allocator; // autofix
-//     std.mem.copyForwards(@typeInfo(@TypeOf(src)), dest: []T, source: []const T)
-// }
-
 pub fn create_square_mesh() struct { u32, c_int } {
     const vertices = [20]f32{
         1.0, 1.0, 0.0, 1.0, 1.0, // top right
@@ -855,9 +852,6 @@ fn get_float_from_numeric(n: *Node, idx: comptime_int) f32 {
     return @floatFromInt(n.array.items[idx].integer);
 }
 
-// pub var global_mesh_verts: []zeng.vec3 = undefined;
-// pub var global_mesh_indices: []u32 = undefined;
-
 pub var global_colliders: ?std.ArrayList(zeng.cpu_mesh) = null;
 pub var global_matrices: ?std.ArrayList(zeng.world_matrix) = null;
 
@@ -1011,7 +1005,7 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                 const base_color_texture_index: usize = @intCast(material_n.object.get("pbrMetallicRoughness").?.object.get("baseColorTexture").?.object.get("index").?.integer);
                 const base_color_texture_image_index: usize = @intCast(_textures_n.?.array.items[base_color_texture_index].object.get("source").?.integer);
                 const base_color_texture_image_str = _images_n.?.array.items[base_color_texture_image_index].object.get("uri").?.string;
-                base_color_texture_gpu = zeng.load_texture(zeng.concat_as_null_terminated(dependencies_path, base_color_texture_image_str, allocator), true, false);
+                base_color_texture_gpu = zeng.loader.load_texture(zeng.loader.concat_as_null_terminated(dependencies_path, base_color_texture_image_str, allocator), true, false);
             }
             var translation: zeng.vec3 = zeng.vec3.ZERO;
             var scale: zeng.vec3 = zeng.vec3.ONE;
@@ -1210,7 +1204,7 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                         const base_color_texture_image_index: usize = @intCast(_textures_n.?.array.items[base_color_texture_index].object.get("source").?.integer);
                         const base_color_texture_image_str = _images_n.?.array.items[base_color_texture_image_index].object.get("uri").?.string;
                         // std.debug.print("image: {s}\n", .{base_color_texture_image_str});
-                        base_color_texture_gpu = zeng.load_texture(zeng.concat_as_null_terminated(dependencies_path, base_color_texture_image_str, allocator), true, false);
+                        base_color_texture_gpu = zeng.loader.load_texture(zeng.loader.concat_as_null_terminated(dependencies_path, base_color_texture_image_str, allocator), true, false);
                     }
                 }
 
@@ -1448,16 +1442,16 @@ pub fn auto_import(ctx: *zeng.engine_context, world: *ecs.world, res: *zeng.reso
     const buffer_1 = ctx.arena_allocator.alloc(u8, folder_name.len + file_name.len + 4) catch unreachable;
     const full_bin_path = std.fmt.bufPrint(buffer_1, "{s}{s}.bin", .{ folder_name, file_name }) catch unreachable;
 
-    const gltf_bytes = zeng.get_file_bytes(full_file_path, ctx.arena_allocator);
-    const bin_bytes = zeng.get_file_bytes(full_bin_path, ctx.arena_allocator);
+    const gltf_bytes = get_file_bytes(full_file_path, ctx.arena_allocator);
+    const bin_bytes = get_file_bytes(full_bin_path, ctx.arena_allocator);
 
-    const parsed_gltf = zeng.gltf_parse(gltf_bytes, ctx.arena_allocator);
+    const parsed_gltf = gltf_parse(gltf_bytes, ctx.arena_allocator);
 
-    const mesh_slice, const animation_slice, const skeleton_slice, const parent_child_map, const top_level, const skinned_mesh_to_skeleton = zeng.gltf_extract_resources(parsed_gltf, bin_bytes, folder_name, ctx.arena_allocator, skin_shader, static_shader, uv_checker_tex);
+    const mesh_slice, const animation_slice, const skeleton_slice, const parent_child_map, const top_level, const skinned_mesh_to_skeleton = gltf_extract_resources(parsed_gltf, bin_bytes, folder_name, ctx.arena_allocator, skin_shader, static_shader, uv_checker_tex);
 
     for (animation_slice) |A| {
         res.get(main.animation_res).append(A) catch unreachable;
     }
 
-    return zeng.instantiate_model_hierarchy(mesh_slice, parent_child_map, top_level, skeleton_slice, skinned_mesh_to_skeleton, world, ctx);
+    return zeng.loader.instantiate_model_hierarchy(mesh_slice, parent_child_map, top_level, skeleton_slice, skinned_mesh_to_skeleton, world, ctx);
 }
