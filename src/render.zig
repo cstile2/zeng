@@ -43,7 +43,7 @@ pub fn draw_animated_skinned_mesh(world: *ecs.world, entity_mesh: zeng.skinned_m
     var clip_matrix = zeng.mat_mult(projection_matrix, zeng.mat_mult(inv_camera_matrix, entity_transform));
 
     const bone_matrices_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "bone_matrices");
-    zeng.gl.uniformMatrix4fv(bone_matrices_location, 100, zeng.gl.FALSE, @ptrCast(world.id_get(entity_mesh.skeleton, .skeleton).?.model_bone_matrices));
+    zeng.gl.uniformMatrix4fv(bone_matrices_location, 100, zeng.gl.FALSE, @ptrCast(world.get(entity_mesh.skeleton, zeng.skeleton).?.model_bone_matrices));
 
     const world_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "world");
     const clip_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "clip");
@@ -51,6 +51,14 @@ pub fn draw_animated_skinned_mesh(world: *ecs.world, entity_mesh: zeng.skinned_m
     zeng.gl.uniformMatrix4fv(clip_location, 1, zeng.gl.FALSE, &clip_matrix);
 
     zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, entity_mesh.indices_type, null);
+}
+pub fn draw_sky(sky_shader: u32, square_vao: u32, square_indices_length: c_int, camera_matrix: zeng.world_matrix, camera: *zeng.camera) void {
+    zeng.gl.useProgram(sky_shader);
+    zeng.gl.bindVertexArray(square_vao);
+    zeng.gl.uniformMatrix4fv(zeng.gl.getUniformLocation(sky_shader, "camera_world_space"), 1, zeng.gl.FALSE, camera_matrix[0..].ptr);
+    zeng.gl.uniformMatrix4fv(zeng.gl.getUniformLocation(sky_shader, "camera_perspective"), 1, zeng.gl.FALSE, &camera.projection_matrix);
+    zeng.gl.drawElements(zeng.gl.TRIANGLES, square_indices_length, zeng.gl.UNSIGNED_INT, null);
+    zeng.gl.clear(zeng.gl.DEPTH_BUFFER_BIT);
 }
 
 pub const color = struct {

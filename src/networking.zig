@@ -120,9 +120,9 @@ pub fn recieve_net_messages(socket: socket_t, res: *zeng.resources_t, commands: 
                 var curr: u32 = @sizeOf(usize) + @sizeOf(u32);
                 zeng.loader.deserialize_from_bytes(msg_type, @as([*]u8, @ptrCast(&payload)), recv_read_buf[0..], &curr, 0);
 
-                if (res.get(main.events(msg_type)).addresses != null) {
+                if (res.get(zeng.events(msg_type)).addresses != null) {
                     const address = net.sockaddr_socklen_t{ .sockaddr = sender_addr, .socklen = sender_addr_len };
-                    res.get(main.events(msg_type)).send_with_address(payload, address);
+                    res.get(zeng.events(msg_type)).send_with_address(payload, address);
                 } else unreachable;
             }
         }
@@ -218,12 +218,3 @@ pub fn Client() !void {
         std.time.sleep(std.time.ns_per_s);
     }
 }
-
-// socket - kind of represents a file to read/write to? or a channel with which to communicate through
-
-// for clients using udp - sendto() - OS automatically assigns a port number to listen from
-// server_address is used to send data there
-
-// for servers - bind() is needed to associate the servers own address to a specific socket,
-// to listen on the socket.
-// server_address is used to bind, then it isn't needed

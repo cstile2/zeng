@@ -1388,7 +1388,7 @@ pub fn instantiate_model_hierarchy(mesh_slice: []gltf_node_w_matrix, parent_chil
         if (mesh_like.node == .skinned_mesh) {
             const entity_id = world.spawn(.{
                 zeng.mat_identity,
-                main.local_matrix{ .transform = mesh_like.matrix },
+                zeng.local_matrix{ .transform = mesh_like.matrix },
                 blk: {
                     var new = mesh_like.node.skinned_mesh;
                     new.skeleton = new_skeletons.items[skinmesh_to_skeleton.get(mesh_like.gltf_id).?];
@@ -1400,7 +1400,7 @@ pub fn instantiate_model_hierarchy(mesh_slice: []gltf_node_w_matrix, parent_chil
         } else if (mesh_like.node == .static_mesh) {
             const entity_id = world.spawn(.{
                 zeng.mat_identity,
-                main.local_matrix{ .transform = mesh_like.matrix },
+                zeng.local_matrix{ .transform = mesh_like.matrix },
                 mesh_like.node.static_mesh,
             });
             if (top_level.contains(mesh_like.gltf_id)) top_level_children.append(entity_id) catch unreachable;
@@ -1409,7 +1409,7 @@ pub fn instantiate_model_hierarchy(mesh_slice: []gltf_node_w_matrix, parent_chil
             std.debug.print("empty node spawned!\n", .{});
             const entity_id = world.spawn(.{
                 zeng.mat_identity,
-                main.local_matrix{ .transform = mesh_like.matrix },
+                zeng.local_matrix{ .transform = mesh_like.matrix },
             });
             if (top_level.contains(mesh_like.gltf_id)) top_level_children.append(entity_id) catch unreachable;
             node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
@@ -1425,13 +1425,13 @@ pub fn instantiate_model_hierarchy(mesh_slice: []gltf_node_w_matrix, parent_chil
                 children_slice_component[idx] = child_e_id;
             }
 
-            world.add(main.children{ .items = children_slice_component }, parent_e_id);
+            world.add(zeng.children{ .items = children_slice_component }, parent_e_id);
         }
     }
 
     const model_root = world.spawn(.{
         zeng.mat_identity,
-        main.children{ .items = top_level_children.items },
+        zeng.children{ .items = top_level_children.items },
     });
 
     return model_root;

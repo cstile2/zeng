@@ -294,25 +294,15 @@ pub const world = struct {
         transfer_entity(self, old_table, new_table, old_edl);
         @memcpy(new_table.get_slice(t.component_id, new_table.count - 1), ptr[0..t.type_size]);
     }
-    /// retrieve references to components of an entity
-    // pub fn get(self: *const world, id: entity_id, T: type) ?*T {
-    //     const unstable = self.locations.get(id).?;
-    //     return (self.tables.getPtr(unstable.archetype_hash) orelse return null).get(T, unstable.row);
-    // }
-    pub fn id_get(self: *const world, id: entity_id, comptime name: @import("main.zig").component_name) ?*main.COMPONENT_TYPES[@intFromEnum(name)] {
-        const unstable = self.locations.get(id).?;
-        const ptr = (self.tables.getPtr(unstable.archetype_hash) orelse return null).get_(name, unstable.row);
-
-        return @alignCast(@ptrCast(ptr));
-    }
     pub fn runtime_get(self: *const world, id: entity_id, name: @import("main.zig").component_name) ?*anyopaque {
         const unstable = self.locations.get(id).?;
         const ptr = (self.tables.getPtr(unstable.archetype_hash) orelse return null).get_(name, unstable.row);
 
         return ptr;
     }
+    /// retrieve references to components of an entity
     pub fn get(self: *const world, id: entity_id, T: type) ?*T {
-        const unstable = self.locations.get(id) orelse unreachable;
+        const unstable = self.locations.get(id).?;
         return (self.tables.getPtr(unstable.archetype_hash) orelse return null).get(T, unstable.row);
     }
     /// removes a component if that component type is on the specified entity

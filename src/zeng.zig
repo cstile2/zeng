@@ -5,7 +5,6 @@ const ecs = @import("ecs.zig");
 const rpc = @import("rpc.zig");
 const main = @import("main.zig");
 pub const net = @import("networking.zig");
-// pub const glfw = @import("mach-glfw");
 pub const gl = @import("gl");
 pub const c = @cImport({
     @cInclude("initguid.h");
@@ -621,15 +620,50 @@ pub fn mat_rebasis(mat: [16]f32, right: vec3, up: vec3, forward: vec3) [16]f32 {
         mat[12],   mat[13],   mat[14],   1.0,
     };
 }
+pub fn mat_to_quat(mat: [16]f32) quat {
+    const m00 = mat[0];
+    const m01 = mat[4];
+    const m02 = mat[8];
+    const m10 = mat[1];
+    const m11 = mat[5];
+    const m12 = mat[9];
+    const m20 = mat[2];
+    const m21 = mat[6];
+    const m22 = mat[10];
 
-// GLFW + GL
-pub fn glfw_get_proc_address(p: zeng.glfw.GLProc, proc: [:0]const u8) ?zeng.gl.FunctionPointer {
-    _ = p;
-    return zeng.glfw.getProcAddress(proc);
+    const trace = m00 + m11 + m22;
+    var q: quat = undefined;
+
+    if (trace > 0.0) {
+        const s = @sqrt(trace + 1.0) * 2.0; // S = 4 * qw
+        q.w = 0.25 * s;
+        q.x = (m21 - m12) / s;
+        q.y = (m02 - m20) / s;
+        q.z = (m10 - m01) / s;
+    } else if (m00 > m11 and m00 > m22) {
+        const s = @sqrt(1.0 + m00 - m11 - m22) * 2.0; // S = 4 * qx
+        q.w = (m21 - m12) / s;
+        q.x = 0.25 * s;
+        q.y = (m01 + m10) / s;
+        q.z = (m02 + m20) / s;
+    } else if (m11 > m22) {
+        const s = @sqrt(1.0 + m11 - m00 - m22) * 2.0; // S = 4 * qy
+        q.w = (m02 - m20) / s;
+        q.x = (m01 + m10) / s;
+        q.y = 0.25 * s;
+        q.z = (m12 + m21) / s;
+    } else {
+        const s = @sqrt(1.0 + m22 - m00 - m11) * 2.0; // S = 4 * qz
+        q.w = (m10 - m01) / s;
+        q.x = (m02 + m20) / s;
+        q.y = (m12 + m21) / s;
+        q.z = 0.25 * s;
+    }
+
+    return q;
 }
-pub fn error_callback(error_code: zeng.glfw.ErrorCode, description: [:0]const u8) void {
-    std.log.err("glfw error - code: {}\n{s}\n", .{ error_code, description });
-}
+
+// OpenGl
 pub fn gl_log_errors() !void {
     var err: zeng.gl.GLenum = zeng.gl.getError();
     while (err != zeng.gl.NO_ERROR) {
@@ -663,11 +697,10 @@ pub const engine_context = struct {
     arena: std.heap.ArenaAllocator,
     arena_allocator: std.mem.Allocator,
 };
-pub fn window_resize_handler(res: *resources_t, width: u32, height: u32) void {
+pub fn window_resize_handler(width: u32, height: u32) void {
     zeng.gl.viewport(0, 0, @bitCast(width), @bitCast(height));
-    const cam_id = res.get(main.main_camera_res).id;
-    const world = res.get(ecs.world);
-    const cam = world.id_get(cam_id, .camera).?;
+
+    const cam = main.global_world_ptr.get(main.global_camera_entity, zeng.camera).?;
     cam.projection_matrix = zeng.mat_perspective_projection(1.5, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
 }
 pub fn engine_start(ctx: *zeng.engine_context, res: *resources_t, world: *ecs.world, dep: *resource_fetcher) !void {
@@ -941,7 +974,6 @@ pub const commands = struct {
             }
             if (self.queued_commands[curr].kind == .empty) {
                 current_ent = undefined;
-                // break;
             }
         }
 
@@ -1054,7 +1086,7 @@ pub fn end_of_frame(res: *resources_t) void {
 
 const remote_message = net.remote_message;
 
-// Input Information
+// User Input
 var key_down = [_]bool{false} ** 256;
 pub const key_code = enum(u8) {
     a = 0x41,
@@ -1169,7 +1201,6 @@ pub const mouse_button = enum {
 pub fn get_mouse_button(b: mouse_button) bool {
     return mouse_button_down[@intFromEnum(b)];
 }
-
 pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lParam: c.LPARAM) callconv(.c) c.LRESULT {
     switch (msg) {
         c.WM_DESTROY => {
@@ -1177,9 +1208,10 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
             return 0;
         },
         c.WM_MOUSEMOVE => {
-            // const x: i16 = @intCast(lParam & 0xFFFF);
-            // const y: i16 = @intCast((lParam >> 16) & 0xFFFF);
-            // std.debug.print("Mouse moved to: {d}, {d}\n", .{ x, y });
+            const x: i16 = @intCast(lParam & 0xFFFF);
+            const y: i16 = @intCast((lParam >> 16) & 0xFFFF);
+            _ = x;
+            _ = y;
             return 0;
         },
         c.WM_INPUT => {
@@ -1193,7 +1225,7 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
                 const _dx = raw.data.mouse.lLastX;
                 const _dy = raw.data.mouse.lLastY;
 
-                const _input = main.global_world_ptr.id_get(main.global_model_root, .input_data).?;
+                const _input = main.global_world_ptr.get(main.global_player_entity, rpc.input_message).?;
                 _input.rot_x += @as(f64, @floatFromInt(_dx)) * 1.0;
                 _input.rot_y += @as(f64, @floatFromInt(_dy)) * 1.0;
             }
@@ -1201,6 +1233,7 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
             const flags = raw.data.mouse.unnamed_0.unnamed_0.usButtonFlags;
             if ((flags & c.RI_MOUSE_LEFT_BUTTON_DOWN) != 0) {
                 mouse_button_down[@intFromEnum(mouse_button.left)] = true;
+                main.global_mouse_pressed = true;
             }
             if ((flags & c.RI_MOUSE_LEFT_BUTTON_UP) != 0) {
                 mouse_button_down[@intFromEnum(mouse_button.left)] = false;
@@ -1216,10 +1249,6 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
         c.WM_KEYDOWN => {
             const vk: c.UINT = @intCast(wParam);
             key_down[vk] = true;
-            if (vk == @intFromEnum(key_code.m)) {
-                unlock_cursor();
-                show_cursor();
-            }
             return 0;
         },
         c.WM_KEYUP => {
@@ -1230,30 +1259,27 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
         c.WM_SIZE => {
             const width: u64 = @bitCast(lParam & 0xFFFF);
             const height: u64 = @bitCast((lParam >> 16) & 0xFFFF);
-            std.debug.print("{} {}\n", .{ width, height });
-
-            const guy = c.GetWindowLongPtrW(hwnd, c.GWLP_USERDATA);
-            if (guy > 0) {
-                var res = @as(*zeng.resources_t, @ptrFromInt(@as(usize, @bitCast(guy))));
+            const long_ptr = c.GetWindowLongPtrW(hwnd, c.GWLP_USERDATA);
+            if (long_ptr > 0) {
+                var res = @as(*zeng.resources_t, @ptrFromInt(@as(usize, @bitCast(long_ptr))));
                 res.get(zeng.engine_context).width = @intCast(width);
                 res.get(zeng.engine_context).height = @intCast(height);
-                zeng.window_resize_handler(res, @intCast(width), @intCast(height));
+                zeng.window_resize_handler(@intCast(width), @intCast(height));
             }
             return 0;
         },
-        c.WM_SETCURSOR => {
-            // LOWORD(lParam) = hit-test result
-            // HIWORD(lParam) = mouse-message identifier
-            if ((lParam & 0xFFFF) == c.HTCLIENT) {
-                _ = c.SetCursor(c.LoadCursorW(null, @ptrFromInt(32512))); // Set default arrow
-                return 1; // We handled it
-            }
-            return c.DefWindowProcW(hwnd, msg, wParam, lParam);
-        },
+        // c.WM_SETCURSOR => {
+        //     // LOWORD(lParam) = hit-test result
+        //     // HIWORD(lParam) = mouse-message identifier
+        //     if ((lParam & 0xFFFF) == c.HTCLIENT) {
+        //         _ = c.SetCursor(c.LoadCursorW(null, @ptrFromInt(32512))); // Set default arrow
+        //         return 1; // We handled it
+        //     }
+        //     return c.DefWindowProcW(hwnd, msg, wParam, lParam);
+        // },
         else => return c.DefWindowProcW(hwnd, msg, wParam, lParam),
     }
 }
-
 pub const L = std.unicode.utf8ToUtf16LeStringLiteral;
 pub fn get_proc_address(user32: c.HMODULE, name: [:0]const u8) ?gl.FunctionPointer {
     // Try wglGetProcAddress first
@@ -1280,135 +1306,77 @@ pub fn unlock_cursor() void {
     _ = c.ClipCursor(null);
 }
 
-// Misc + Unused Stuff
-pub fn custom_struct(comptime in: anytype) type {
-    var fields: [in.len]std.builtin.Type.StructField = undefined;
-    for (in, 0..) |t, i| {
-        const fieldType: type = t;
-        const fieldName = @typeName(fieldType); //[:0]const u8 = t[0][0..];
-        fields[i] = .{
-            .name = fieldName,
-            .type = fieldType,
-            .default_value = null,
-            .is_comptime = false,
-            .alignment = 0,
-        };
-    }
-    return @Type(.{
-        .Struct = .{
-            .layout = .Auto,
-            .fields = fields[0..],
-            .decls = &[_]std.builtin.Type.Declaration{},
-            .is_tuple = false,
-        },
-    });
+// Communication Data Structures
+pub fn events(T: type) type {
+    return struct {
+        array: std.ArrayList(T),
+        addresses: ?std.ArrayList(net.sockaddr_socklen_t) = null,
+
+        pub fn init(allocator: std.mem.Allocator, networked: bool) @This() {
+            var ret = @This(){ .array = std.ArrayList(T).init(allocator) };
+            if (networked) ret.addresses = std.ArrayList(net.sockaddr_socklen_t).init(allocator);
+            return ret;
+        }
+        pub fn deinit(self: *@This()) void {
+            self.array.deinit();
+        }
+        pub fn send(this: *@This(), event: T) void {
+            this.array.append(event) catch unreachable;
+        }
+        pub fn send_with_address(this: *@This(), event: T, address: net.sockaddr_socklen_t) void {
+            this.array.append(event) catch unreachable;
+            this.addresses.?.append(address) catch unreachable;
+        }
+        pub fn items(this: *@This()) []T {
+            return this.array.items;
+        }
+        pub fn clear(this: *@This()) void {
+            this.array.clearAndFree();
+            if (this.addresses != null) this.addresses.?.clearAndFree();
+        }
+    };
 }
-pub fn execute_console_command(ctx: *zeng.engine_context, input_read: []const u8) void {
-    const separated: [][]u8 = zeng.separate_text(input_read, ';');
-    defer {
-        for (separated) |string| {
-            ctx.allocator.free(string);
+pub fn ring_buffer(T: type) type {
+    return struct {
+        arr: [800]T,
+
+        pub fn set(self: *@This(), i: isize, x: T) void {
+            const _i = if (i >= 0) i else 0;
+            self.arr[@as(usize, @intCast(_i)) % self.arr.len] = x;
         }
-        ctx.allocator.free(separated);
-    }
-    for (separated) |sub_command| {
-        const parsed: [][]u8 = zeng.separate_text(sub_command, ' ');
-        defer {
-            for (parsed) |string| {
-                ctx.allocator.free(string);
-            }
-            ctx.allocator.free(parsed);
+        pub fn get(self: *@This(), i: isize) T {
+            const _i = if (i >= 0) i else 0;
+            return self.arr[@as(usize, @intCast(_i)) % self.arr.len];
         }
-        if (std.mem.eql(u8, parsed[0], "import")) {
-            if (parsed.len >= 2) {
-                const ents = zeng.ImportModelAsset(parsed[1], ctx.allocator, ctx.shader_program_GPU, ctx.texture_GPU, &ctx.entity_slice);
-                defer ctx.allocator.free(ents);
-            } else {
-                std.debug.print("No path specified", .{});
-            }
-        } else if (std.mem.eql(u8, parsed[0], "freeze") and parsed.len == 1) { // pauses everything in the game except a spectator camera
-            std.debug.print("FREEZE!\n", .{});
-            ctx.frozen = !ctx.frozen;
-        } else if (std.mem.eql(u8, parsed[0], "add")) { // adds a component to an entity
-            if (parsed.len >= 3) {
-                if (std.fmt.parseInt(u32, parsed[1], 10)) |parsed_int| {
-                    const index: u32 = parsed_int;
-                    std.debug.print("modifying index: {any}\n", .{index});
-                    zeng.AddComponent(&ctx.entity_slice[index], parsed[2]) catch {
-                        std.debug.print("Could not add component: '{s}'", .{parsed[2]});
-                    };
-                } else |_| {
-                    std.debug.print("Invalid numerical field in command\n", .{});
-                }
-            } else {
-                std.debug.print("Too few arguments for 'add' command\n", .{});
-            }
-        } else if (std.mem.eql(u8, parsed[0], "remove")) { // removes a component from an entity
-            if (parsed.len >= 3) {
-                if (std.fmt.parseInt(u32, parsed[1], 10)) |parsed_int| {
-                    const index: u32 = parsed_int;
-                    std.debug.print("modifying index: {any}\n", .{index});
-                    zeng.remove_component(&ctx.entity_slice[index], parsed[2]) catch {
-                        std.debug.print("Could not remove component: '{s}'", .{parsed[2]});
-                    };
-                } else |_| {
-                    std.debug.print("Invalid numerical field in command\n", .{});
-                }
-            } else {
-                std.debug.print("Too few arguments for 'remove' command\n", .{});
-            }
-        } else { // unrecognized command
-            std.debug.print("Command not recognized: '{s}'\n", .{sub_command});
-        }
-    }
+    };
 }
 
-const box_vertices = [_]f32{
-    // positions
-    -1.0, 1.0,  -1.0,
-    -1.0, -1.0, -1.0,
-    1.0,  -1.0, -1.0,
-    1.0,  -1.0, -1.0,
-    1.0,  1.0,  -1.0,
-    -1.0, 1.0,  -1.0,
-
-    -1.0, -1.0, 1.0,
-    -1.0, -1.0, -1.0,
-    -1.0, 1.0,  -1.0,
-    -1.0, 1.0,  -1.0,
-    -1.0, 1.0,  1.0,
-    -1.0, -1.0, 1.0,
-
-    1.0,  -1.0, -1.0,
-    1.0,  -1.0, 1.0,
-    1.0,  1.0,  1.0,
-    1.0,  1.0,  1.0,
-    1.0,  1.0,  -1.0,
-    1.0,  -1.0, -1.0,
-
-    -1.0, -1.0, 1.0,
-    -1.0, 1.0,  1.0,
-    1.0,  1.0,  1.0,
-    1.0,  1.0,  1.0,
-    1.0,  -1.0, 1.0,
-    -1.0, -1.0, 1.0,
-
-    -1.0, 1.0,  -1.0,
-    1.0,  1.0,  -1.0,
-    1.0,  1.0,  1.0,
-    1.0,  1.0,  1.0,
-    -1.0, 1.0,  1.0,
-    -1.0, 1.0,  -1.0,
-
-    -1.0, -1.0, -1.0,
-    -1.0, -1.0, 1.0,
-    1.0,  -1.0, -1.0,
-    1.0,  -1.0, -1.0,
-    -1.0, -1.0, 1.0,
-    1.0,  -1.0, 1.0,
+// Parent-Child Hierarchy
+pub const children = struct {
+    items: []ecs.entity_id,
 };
+pub const local_matrix = struct {
+    transform: zeng.world_matrix = zeng.mat_identity,
+};
+pub fn sync_transforms_children(id: ecs.entity_id, q_transform: *ecs.query(.{zeng.world_matrix}), q_children: *ecs.query(.{children}), q_local_transform: *ecs.query(.{local_matrix})) void {
+    const global = q_transform.get(id, zeng.world_matrix) orelse return;
+    const childrens = q_transform.get(id, children) orelse return;
+    for (childrens.items) |_c| {
+        sync_transforms_recursive(global.*, _c, q_transform, q_children, q_local_transform);
+    }
+}
+pub fn sync_transforms_recursive(parent_global: zeng.world_matrix, id: ecs.entity_id, q_transform: *ecs.query(.{zeng.world_matrix}), q_children: *ecs.query(.{children}), q_local_transform: *ecs.query(.{local_matrix})) void {
+    const local = q_local_transform.get(id, local_matrix) orelse return;
+    const global = q_transform.get(id, zeng.world_matrix) orelse return;
+    global.* = zeng.mat_mult(parent_global, local.transform);
 
-// Maybe Useful Someday
+    const childrens = q_transform.get(id, children) orelse return;
+    for (childrens.items) |_c| {
+        sync_transforms_recursive(global.*, _c, q_transform, q_children, q_local_transform);
+    }
+}
+
+// Comptime Utilities
 fn SubTuple(comptime T: type, comptime low: usize, comptime high: usize) type {
     const info = @typeInfo(T);
     const old_fields = std.meta.fields(T)[low..high];
@@ -1454,4 +1422,27 @@ pub fn extract(tuple: anytype, comptime low: usize, comptime high: usize) SubTup
         out[o] = tuple[i];
     }
     return out;
+}
+
+pub fn custom_struct(comptime in: anytype) type {
+    var fields: [in.len]std.builtin.Type.StructField = undefined;
+    for (in, 0..) |t, i| {
+        const fieldType: type = t;
+        const fieldName = @typeName(fieldType); //[:0]const u8 = t[0][0..];
+        fields[i] = .{
+            .name = fieldName,
+            .type = fieldType,
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = 0,
+        };
+    }
+    return @Type(.{
+        .Struct = .{
+            .layout = .Auto,
+            .fields = fields[0..],
+            .decls = &[_]std.builtin.Type.Declaration{},
+            .is_tuple = false,
+        },
+    });
 }
