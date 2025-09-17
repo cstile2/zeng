@@ -14,6 +14,7 @@ pub const remote_message = struct {
     sender_socket: net.socket_t,
     target_address: net.sockaddr_socklen_t,
     resend_timer: f64,
+    channel: zeng.commands.reliability_channel = .unreliable,
 };
 pub const resend_interval_sec = 1.0;
 
@@ -35,59 +36,71 @@ fn WINDOWS_set_socket_non_blocking(sock: socket_t) !void {
     if (err != 0) unreachable;
 }
 
-pub fn make_socket_and_address(address: anytype, port: u16, nonblocking: bool) !struct { socket_t, Address } {
-    const addr = try std.net.Address.parseIp(address, port);
-    const sock = std.os.windows.ws2_32.socket(std.os.windows.ws2_32.AF.INET, std.os.windows.ws2_32.SOCK.DGRAM, std.os.windows.ws2_32.IPPROTO.UDP);
-    if (nonblocking) try WINDOWS_set_socket_non_blocking(sock);
-    return .{ sock, addr };
-}
 pub fn assign_addr_to_sock(socket: socket_t, my_address: Address) !void {
     const err = std.os.windows.ws2_32.bind(socket, &my_address.any, @intCast(my_address.getOsSockLen()));
     if (err != 0) unreachable;
 }
 
-pub fn send_net_messages(commands: *zeng.commands, delta_time: f64) void {
-    var it = commands.reliable_message_seqs.iterator();
-    while (it.next()) |curr| {
-        const _msg = curr.key_ptr.*;
-        const msg = &commands.remote_messages[_msg];
+pub fn remote_event(commands: *zeng.commands, socket: net.socket_t, address: net.sockaddr_socklen_t, event: anytype, channel: zeng.commands.reliability_channel) void {
+    const payload_array = commands.allocator.alloc(u8, @sizeOf(usize) + @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
+    var curr_byte: u32 = 0;
+    const seq: usize = if (channel == .unreliable) 0 else commands.curr_seq;
+    zeng.loader.serialize_to_bytes(seq, payload_array, &curr_byte);
+    zeng.loader.serialize_to_bytes(comptime zeng.GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
+    zeng.loader.serialize_to_bytes(event, payload_array, &curr_byte);
 
-        if (msg.resend_timer <= 0.0) {
-            commands.remote_messages[commands.remote_messages_len] = msg.*;
-            commands.remote_messages_len += 1;
-            msg.resend_timer = resend_interval_sec;
-        }
-        msg.resend_timer -= delta_time;
+    const msg = remote_message{ .seq = seq, .resend_timer = net.resend_interval_sec, .payload = commands.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = socket, .target_address = address, .time_to_send = commands.get_sim_send_time(), .channel = channel };
+    if (channel == .reliable) {
+        commands.reliable_message_seqs.put(seq, msg) catch unreachable;
+        commands.curr_seq += 1;
     }
 
+    commands.remote_messages_send_queue[commands.remote_messages_send_queue_len] = msg;
+    commands.remote_messages_send_queue_len += 1;
+}
+pub fn send_net_messages(commands: *zeng.commands, delta_time: f64) void {
+    _ = delta_time;
+
     var curr: usize = 0;
-    while (curr < commands.remote_messages_len) {
-        const rem_message = commands.remote_messages[curr];
+    while (curr < commands.remote_messages_send_queue_len) {
+        const rem_message = commands.remote_messages_send_queue[curr];
         if (rem_message.time_to_send <= commands.time) {
-            if (commands.random.float(f32) < 0.7) {
+            if (commands.random.float(f32) < 0.7 or rem_message.channel == .reliable) {
                 const err = std.os.windows.ws2_32.sendto(rem_message.sender_socket, rem_message.payload.ptr, @intCast(rem_message.payload.len), 0, &rem_message.target_address.sockaddr, rem_message.target_address.socklen);
-                if (err == -1) unreachable;
+                if (err == -1) {
+                    const last_error = zeng.c.WSAGetLastError();
+                    if (last_error == 10054) {
+                        std.debug.print("Win32Error: WSAECONNRESET - connection reset (?)\n", .{});
+                    } else if (last_error == 10022) {
+                        std.debug.print("Win32Error: WSAEINVAL - invalid argument\n", .{});
+                    } else if (last_error == zeng.c.WSAEWOULDBLOCK) {} else {
+                        std.debug.print("Win32Error: {}\n", .{last_error});
+                        unreachable;
+                    }
+                }
             }
             commands.allocator.free(rem_message.payload);
 
-            commands.remote_messages[curr] = commands.remote_messages[commands.remote_messages_len - 1];
-            commands.remote_messages_len -= 1;
+            commands.remote_messages_send_queue[curr] = commands.remote_messages_send_queue[commands.remote_messages_send_queue_len - 1];
+            commands.remote_messages_send_queue_len -= 1;
         } else curr += 1;
     }
 }
-pub fn recieve_net_messages(socket: socket_t, res: *zeng.resources_t, commands: *zeng.commands) void {
+pub fn recieve_net_messages(socket: socket_t, res: *zeng.resources_t, commands: *zeng.commands, allocator: std.mem.Allocator) void {
     var sender_addr: sockaddr_t = undefined;
     var sender_addr_len: socklen_t = @sizeOf(sockaddr_t);
 
     var recv_read_buf: [4096]u8 = undefined;
     get_messages_loop: while (true) {
         const recv_result = zeng.c.recvfrom(@intFromPtr(socket), &recv_read_buf, recv_read_buf.len, 0, @ptrCast(&sender_addr), &sender_addr_len);
+        // const recv_result = std.os.windows.ws2_32.recvfrom(socket, &recv_read_buf, recv_read_buf.len, 0, &sender_addr, &sender_addr_len);
         if (recv_result == -1) {
             const last_error = zeng.c.WSAGetLastError();
             if (last_error == 10054) {
                 std.debug.print("Win32Error: WSAECONNRESET - connection reset (?)\n", .{});
             } else if (last_error == 10022) {
                 std.debug.print("Win32Error: WSAEINVAL - invalid argument\n", .{});
+                break :get_messages_loop;
             } else if (last_error == zeng.c.WSAEWOULDBLOCK) {
                 break :get_messages_loop;
             } else {
@@ -106,7 +119,7 @@ pub fn recieve_net_messages(socket: socket_t, res: *zeng.resources_t, commands: 
         } else {
             // handle the acknowledgement of packets that are out of order
         }
-        if (commands.reliable_messages[sequence_number].seq == sequence_number) {
+        if (commands.reliable_message_seqs.get(sequence_number)) |_| {
             _ = commands.reliable_message_seqs.remove(sequence_number);
         }
 
@@ -122,7 +135,7 @@ pub fn recieve_net_messages(socket: socket_t, res: *zeng.resources_t, commands: 
 
                 if (res.get(zeng.events(msg_type)).addresses != null) {
                     const address = net.sockaddr_socklen_t{ .sockaddr = sender_addr, .socklen = sender_addr_len };
-                    res.get(zeng.events(msg_type)).send_with_address(payload, address);
+                    res.get(zeng.events(msg_type)).send_with_address(allocator, payload, address);
                 } else unreachable;
             }
         }
@@ -133,15 +146,18 @@ pub fn do_setup(address_string: []const u8, port: u16, is_server: bool) !struct 
     var wsa_data: zeng.c.WSADATA = undefined;
     _ = zeng.c.WSAStartup(zeng.c.MAKEWORD(2, 2), &wsa_data);
 
-    var socket: socket_t = undefined;
-    var address: Address = undefined;
     if (is_server) {
-        socket, address = try zeng.net.make_socket_and_address(address_string, port, true);
-        try assign_addr_to_sock(socket, address);
+        const my_socket: socket_t = std.os.windows.ws2_32.socket(std.os.windows.ws2_32.AF.INET, std.os.windows.ws2_32.SOCK.DGRAM, std.os.windows.ws2_32.IPPROTO.UDP);
+        try WINDOWS_set_socket_non_blocking(my_socket);
+        const my_address: Address = try std.net.Address.parseIp(address_string, port);
+        try assign_addr_to_sock(my_socket, my_address);
+        return .{ my_socket, my_address };
     } else {
-        socket, address = try zeng.net.make_socket_and_address(address_string, port, true);
+        const my_socket: socket_t = std.os.windows.ws2_32.socket(std.os.windows.ws2_32.AF.INET, std.os.windows.ws2_32.SOCK.DGRAM, std.os.windows.ws2_32.IPPROTO.UDP);
+        try WINDOWS_set_socket_non_blocking(my_socket);
+        const server_address: Address = try std.net.Address.parseIp(address_string, port);
+        return .{ my_socket, server_address };
     }
-    return .{ socket, address };
 }
 pub fn undo_setup(socket: socket_t) void {
     _ = std.os.windows.ws2_32.closesocket(socket);

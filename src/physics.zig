@@ -56,7 +56,7 @@ pub fn cube(dir: vec3, coll: collider_info) vec3 {
     };
 }
 pub fn triangle(dir: vec3, coll: collider_info) vec3 {
-    const tri_data = @as(*const [3]vec3, @alignCast(@ptrCast(coll.data)));
+    const tri_data = @as(*const [3]vec3, @ptrCast(@alignCast(coll.data)));
 
     var max_float = tri_data[0].dot(dir);
     var max_pos: vec3 = tri_data[0];
@@ -74,7 +74,7 @@ pub fn player_capsule(dir: vec3, coll: collider_info) vec3 {
 }
 
 pub fn mesh_triangle(dir: vec3, coll: collider_info) vec3 {
-    const tri_data = @as(*const mesh_triangle_data, @alignCast(@ptrCast(coll.data)));
+    const tri_data = @as(*const mesh_triangle_data, @ptrCast(@alignCast(coll.data)));
 
     var max_float = tri_data.positions[tri_data.indices[0]].dot(dir);
     var max_pos: vec3 = tri_data.positions[tri_data.indices[0]];
@@ -697,10 +697,10 @@ pub fn construct_spatial_hash_grid(colliders: std.ArrayList(collider_info), spat
                 while (k <= forward) {
                     defer k += 1;
 
-                    const guy = spatial_hash_grid.getOrPut(.{ i, j, k }) catch unreachable;
-                    if (!guy.found_existing) guy.value_ptr.* = std.ArrayList(*collider_info).init(allocator);
+                    const get_or_put_result = spatial_hash_grid.getOrPut(.{ i, j, k }) catch unreachable;
+                    if (!get_or_put_result.found_existing) get_or_put_result.value_ptr.* = std.ArrayList(*collider_info).initCapacity(allocator, 0) catch unreachable;
 
-                    guy.value_ptr.append(collider) catch unreachable;
+                    get_or_put_result.value_ptr.append(allocator, collider) catch unreachable;
                 }
             }
         }

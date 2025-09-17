@@ -24,6 +24,9 @@ pub const vec2 = struct {
     x: f32 = 0,
     y: f32 = 0,
 
+    pub fn add(self: vec2, v: vec2) vec2 {
+        return .{ .x = self.x + v.x, .y = self.y + v.y };
+    }
     pub fn sub(self: vec2, v: vec2) vec2 {
         return .{ .x = self.x - v.x, .y = self.y - v.y };
     }
@@ -32,6 +35,9 @@ pub const vec2 = struct {
     }
     pub fn div(self: vec2, f: f32) vec2 {
         return .{ .x = self.x / f, .y = self.y / f };
+    }
+    pub fn lerp(a: vec2, b: vec2, t: f32) vec2 {
+        return a.mult(1.0 - t).add(b.mult(t));
     }
 
     pub fn dot(a: vec2, b: vec2) f32 {
@@ -664,7 +670,7 @@ pub fn mat_to_quat(mat: [16]f32) quat {
 }
 
 // OpenGl
-pub fn gl_log_errors() !void {
+pub fn gl_log_errors() void {
     var err: zeng.gl.GLenum = zeng.gl.getError();
     while (err != zeng.gl.NO_ERROR) {
         const errorString = switch (err) {
@@ -683,32 +689,18 @@ pub fn gl_log_errors() !void {
 }
 
 // Application
-pub const engine_context = struct {
-    // active_window: zeng.glfw.Window,
+pub const __graphics_module = struct {
     width: u16 = 0,
     height: u16 = 0,
 
     hwnd: [*c]c.struct_HWND__,
     hdc: [*c]c.struct_HDC__,
 
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
-    allocator: std.mem.Allocator,
-
-    arena: std.heap.ArenaAllocator,
-    arena_allocator: std.mem.Allocator,
-};
-pub fn window_resize_handler(width: u32, height: u32) void {
-    zeng.gl.viewport(0, 0, @bitCast(width), @bitCast(height));
-
-    const cam = main.global_world_ptr.get(main.global_camera_entity, zeng.camera).?;
-    cam.projection_matrix = zeng.mat_perspective_projection(1.5, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
-}
-pub fn engine_start(ctx: *zeng.engine_context, res: *resources_t, world: *ecs.world, dep: *resource_fetcher) !void {
-    { // windows setup
+    pub fn init(this: *@This()) void {
         const hInstance = zeng.c.GetModuleHandleW(null);
 
         var wc: zeng.c.WNDCLASSW = std.mem.zeroes(zeng.c.WNDCLASSW);
-        wc.lpfnWndProc = windows_message_handler;
+        wc.lpfnWndProc = zeng.windows_message_handler;
         wc.hInstance = hInstance;
         wc.lpszClassName = L("MyZigWindowClass");
 
@@ -716,9 +708,11 @@ pub fn engine_start(ctx: *zeng.engine_context, res: *resources_t, world: *ecs.wo
 
         const hwnd = zeng.c.CreateWindowExW(0, wc.lpszClassName, L("window title"), zeng.c.WS_OVERLAPPEDWINDOW | zeng.c.WS_VISIBLE, zeng.c.CW_USEDEFAULT, zeng.c.CW_USEDEFAULT, 800, 450, null, null, hInstance, null);
         if (hwnd == null) unreachable; // failed to create window
-        ctx.hwnd = hwnd;
-        ctx.width = 800;
-        ctx.height = 450;
+        this.hwnd = hwnd;
+        var client_rect: c.RECT = undefined;
+        _ = c.GetClientRect(this.hwnd, &client_rect);
+        this.width = @intCast(client_rect.right - client_rect.left);
+        this.height = @intCast(client_rect.bottom - client_rect.top);
 
         // raw input setup
         var rid: zeng.c.RAWINPUTDEVICE = .{
@@ -732,7 +726,7 @@ pub fn engine_start(ctx: *zeng.engine_context, res: *resources_t, world: *ecs.wo
 
         // opengl setup
         const hdc = zeng.c.GetDC(hwnd);
-        ctx.hdc = hdc;
+        this.hdc = hdc;
         var pfd: zeng.c.PIXELFORMATDESCRIPTOR = std.mem.zeroes(zeng.c.PIXELFORMATDESCRIPTOR);
         pfd.nSize = @sizeOf(zeng.c.PIXELFORMATDESCRIPTOR);
         pfd.nVersion = 1;
@@ -753,36 +747,26 @@ pub fn engine_start(ctx: *zeng.engine_context, res: *resources_t, world: *ecs.wo
         const user32 = zeng.c.LoadLibraryA("opengl32.dll");
         if (user32 == null) unreachable; // failed to load opengl32.dll
 
-        try gl.load(user32, get_proc_address);
+        gl.load(user32, zeng.get_proc_address) catch unreachable;
 
-        _ = c.SetWindowLongPtrW(ctx.hwnd, c.GWLP_USERDATA, @intCast(@intFromPtr(res)));
+        gl.enable(gl.DEPTH_TEST);
+        gl.enable(gl.CULL_FACE);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.enable(gl.FRAMEBUFFER_SRGB);
+
+        zeng.timer_warmup();
+        zeng.old_time = zeng.timer_get();
     }
+    pub fn deinit(this: *@This()) void {
+        _ = this;
+    }
+};
+pub fn window_resize_handler(width: u32, height: u32) void {
+    zeng.gl.viewport(0, 0, @bitCast(width), @bitCast(height));
 
-    zeng.gl.enable(zeng.gl.DEPTH_TEST);
-    zeng.gl.enable(zeng.gl.CULL_FACE);
-    zeng.gl.enable(zeng.gl.BLEND);
-    zeng.gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    zeng.gl.enable(zeng.gl.FRAMEBUFFER_SRGB);
-
-    timer_warmup();
-    old_time = timer_get();
-
-    ctx.gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    ctx.allocator = ctx.gpa.allocator();
-
-    ctx.arena = std.heap.ArenaAllocator.init(ctx.allocator);
-    ctx.arena_allocator = ctx.arena.allocator();
-
-    res.* = zeng.resources_t.init(ctx.arena_allocator);
-
-    world.* = ecs.world.init(ctx.allocator);
-    dep.* = .{ .world = world, .res = res, .allocator = ctx.arena_allocator };
-}
-pub fn engine_end(ctx: *zeng.engine_context, res: *resources_t, world: *ecs.world) void {
-    world.deinit() catch void;
-    res.deinit();
-    ctx.arena.deinit();
-    _ = ctx.gpa.deinit();
+    const cam = main.global_world_ptr.get(main.global_camera_entity, zeng.camera).?;
+    cam.projection_matrix = zeng.mat_perspective_projection(1.5, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
 }
 fn key_callback(window: zeng.glfw.Window, key: zeng.glfw.Key, scancode: i32, action: zeng.glfw.Action, mods: zeng.glfw.Mods) void {
     _ = key; // autofix
@@ -805,18 +789,11 @@ pub const resource_fetcher = struct {
         var params: typ = undefined;
 
         inline for (&params) |*param| {
-            if (comptime blk: {
-                for (main.RESOURCE_TYPES) |type_| {
-                    if (@TypeOf(param.*) == *type_) {
-                        break :blk true;
-                    }
-                }
-                break :blk false;
-            }) { // valid registered resource type
-                param.* = self.res.get(@TypeOf(param.*.*));
-            } else { // assume query by default
+            if (@hasDecl(@TypeOf(param.*.*), "TYPES")) {
                 const component_list = comptime @TypeOf(param.*.*).TYPES;
                 param.* = self.fresh_query(component_list);
+            } else {
+                param.* = self.res.get(@TypeOf(param.*.*));
             }
         }
         @call(.auto, func, params) catch unreachable;
@@ -839,11 +816,11 @@ pub const resources_t = struct {
     map: std.AutoArrayHashMap(usize, *anyopaque),
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) @This() {
-        return .{
-            .map = std.AutoArrayHashMap(usize, *anyopaque).init(allocator),
-            .allocator = allocator,
-        };
+    pub fn init(this: *@This(), allocator: std.mem.Allocator, __graphics: *__graphics_module) void {
+        this.map = std.AutoArrayHashMap(usize, *anyopaque).init(allocator);
+        this.allocator = allocator;
+        _ = c.SetWindowLongPtrW(__graphics.hwnd, c.GWLP_USERDATA, @intCast(@intFromPtr(this)));
+        this.insert_ptr(__graphics);
     }
     pub fn deinit(self: *resources_t) void {
         self.map.deinit();
@@ -855,7 +832,7 @@ pub const resources_t = struct {
 
         const a = self.map.getOrPut(utils.type_id(@TypeOf(p))) catch unreachable;
         if (a.found_existing) {
-            const ref = @as(*@TypeOf(p), @alignCast(@ptrCast(a.value_ptr.*)));
+            const ref = @as(*@TypeOf(p), @ptrCast(@alignCast(a.value_ptr.*)));
             self.allocator.destroy(ref);
         }
         a.value_ptr.* = @ptrCast(new_guy);
@@ -866,13 +843,17 @@ pub const resources_t = struct {
         self.map.put(type_id, erased) catch unreachable;
     }
     pub fn get(resources: *resources_t, p: type) *p {
-        return @alignCast(@ptrCast(resources.map.getPtr(utils.type_id(p)).?.*));
+        if (!resources.map.contains(utils.type_id(p))) {
+            std.debug.print("TRIED TO FETCH A RESOURCE THAT DOESNT EXIST IN REGISTRY: {}\n", .{p});
+            unreachable;
+        }
+        return @ptrCast(@alignCast(resources.map.getPtr(utils.type_id(p)).?.*));
     }
     pub fn get_create(self: *resources_t, p: type) struct { *p, bool } {
         var gotten: *p = undefined;
         var undef = false;
         if (self.map.contains(utils.type_id(p))) {
-            gotten = @alignCast(@ptrCast(self.map.get(utils.type_id(p)).?));
+            gotten = @ptrCast(@alignCast(self.map.get(utils.type_id(p)).?));
         } else {
             undef = true;
             const new_guy = self.allocator.create(p) catch unreachable;
@@ -920,12 +901,12 @@ pub const commands = struct {
     queued_commands: [1024]Command = undefined,
     queued_commands_curr: u32 = 0,
 
-    remote_messages: [4000]remote_message,
-    remote_messages_len: u16,
+    remote_messages_send_queue: [4000]remote_message,
+    remote_messages_send_queue_len: u16,
 
-    // reliable_messages: std.ArrayList(remote_message),
-    reliable_message_seqs: std.AutoHashMap(usize, void),
-    reliable_messages: [100]remote_message,
+    // reliable_resend_queue: std.ArrayList(remote_message),
+    reliable_message_seqs: std.AutoHashMap(usize, remote_message),
+    // reliable_resend_queue: [100]remote_message,
 
     curr_seq: usize = 1,
 
@@ -998,8 +979,8 @@ pub const commands = struct {
         zeng.loader.serialize_to_bytes(procedure_code, payload_array, &payload_curr);
         zeng.loader.serialize_to_bytes(args, payload_array, &payload_curr);
 
-        self.remote_messages[self.remote_messages_len] = remote_message{ .payload = payload_array[0..payload_curr], .sender_socket = socket, .target_address = address };
-        self.remote_messages_len += 1;
+        self.remote_messages_send_queue[self.remote_messages_send_queue_len] = remote_message{ .payload = payload_array[0..payload_curr], .sender_socket = socket, .target_address = address };
+        self.remote_messages_send_queue_len += 1;
     }
 
     pub const reliability_channel = enum {
@@ -1007,40 +988,13 @@ pub const commands = struct {
         reliable,
     };
 
-    pub fn remote_event(self: *commands, socket: net.socket_t, address: net.sockaddr_socklen_t, event: anytype, channel: reliability_channel) void {
-        const payload_array = self.allocator.alloc(u8, @sizeOf(usize) + @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
-        var curr_byte: u32 = 0;
-        const seq: usize = if (channel == .unreliable) 0 else self.curr_seq;
-        zeng.loader.serialize_to_bytes(seq, payload_array, &curr_byte);
-        zeng.loader.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
-        zeng.loader.serialize_to_bytes(event, payload_array, &curr_byte);
-
+    pub fn get_sim_send_time(self: *commands) f64 {
         const jittered_delay = self.random.float(f32) * 0.1 + 0.9; // 60ms + 150ms
-        const msg = remote_message{ .seq = seq, .resend_timer = net.resend_interval_sec, .payload = self.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = socket, .target_address = address, .time_to_send = self.time + jittered_delay };
-        if (channel == .reliable) {
-            // self.reliable_messages.append(msg) catch unreachable;
-            // self.curr_seq += 1;
-        }
-
-        self.remote_messages[self.remote_messages_len] = msg;
-        self.remote_messages_len += 1;
-    }
-
-    pub fn remote_event_(self: *commands, socket: net.socket_t, address: net.sockaddr_socklen_t, event: anytype) void {
-        const payload_array = self.allocator.alloc(u8, @sizeOf(usize) + @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
-        var curr_byte: u32 = 0;
-        zeng.loader.serialize_to_bytes(@as(usize, 0), payload_array, &curr_byte);
-        zeng.loader.serialize_to_bytes(comptime GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
-        zeng.loader.serialize_to_bytes(event, payload_array, &curr_byte);
-
-        const jittered_delay = 0.0; // 60ms + 150ms
-
-        self.remote_messages[self.remote_messages_len] = remote_message{ .resend_timer = net.resend_interval_sec, .payload = self.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = socket, .target_address = address, .time_to_send = self.time + jittered_delay };
-        self.remote_messages_len += 1;
+        return self.time + jittered_delay;
     }
 
     pub fn destroy(self: *commands) void {
-        for (self.remote_messages[0..self.remote_messages_len]) |mes| {
+        for (self.remote_messages_send_queue[0..self.remote_messages_send_queue_len]) |mes| {
             self.allocator.free(mes.payload);
         }
         self.reliable_message_seqs.deinit();
@@ -1201,6 +1155,20 @@ pub const mouse_button = enum {
 pub fn get_mouse_button(b: mouse_button) bool {
     return mouse_button_down[@intFromEnum(b)];
 }
+
+pub const cursor_type_enum = enum(usize) {
+    arrow = 32512,
+    pointer = 32649,
+    other = 32644,
+};
+pub fn set_cursor(cursor_type: cursor_type_enum) void {
+    const p: usize = @intFromEnum(cursor_type);
+    const op: *const anyopaque = @ptrCast(&p);
+    const cop: *const [*c]const c_ushort = @ptrCast(@alignCast(op));
+    _ = c.SetCursor(c.LoadCursorW(null, cop.*));
+}
+
+pub var global_mouse_pos: [2]i16 = .{ 0, 0 };
 pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lParam: c.LPARAM) callconv(.c) c.LRESULT {
     switch (msg) {
         c.WM_DESTROY => {
@@ -1210,8 +1178,7 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
         c.WM_MOUSEMOVE => {
             const x: i16 = @intCast(lParam & 0xFFFF);
             const y: i16 = @intCast((lParam >> 16) & 0xFFFF);
-            _ = x;
-            _ = y;
+            global_mouse_pos = .{ x, y };
             return 0;
         },
         c.WM_INPUT => {
@@ -1220,14 +1187,14 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
             const handle: c.HRAWINPUT = @as(*const c.HRAWINPUT, @ptrCast(&lParam)).*;
 
             _ = c.GetRawInputData(handle, c.RID_INPUT, &raw_input, &size, @sizeOf(c.RAWINPUTHEADER));
-            const raw: *const c.RAWINPUT = @alignCast(@ptrCast(&raw_input));
+            const raw: *const c.RAWINPUT = @ptrCast(@alignCast(&raw_input));
             if (raw.data.mouse.usFlags == 0) { // Relative mouse movement
                 const _dx = raw.data.mouse.lLastX;
                 const _dy = raw.data.mouse.lLastY;
 
                 const _input = main.global_world_ptr.get(main.global_player_entity, rpc.input_message).?;
-                _input.rot_x += @as(f64, @floatFromInt(_dx)) * 1.0;
-                _input.rot_y += @as(f64, @floatFromInt(_dy)) * 1.0;
+                _input.rot_x += @as(f64, @floatFromInt(_dx)) * 0.7;
+                _input.rot_y += @as(f64, @floatFromInt(_dy)) * 0.7;
             }
 
             const flags = raw.data.mouse.unnamed_0.unnamed_0.usButtonFlags;
@@ -1262,8 +1229,8 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
             const long_ptr = c.GetWindowLongPtrW(hwnd, c.GWLP_USERDATA);
             if (long_ptr > 0) {
                 var res = @as(*zeng.resources_t, @ptrFromInt(@as(usize, @bitCast(long_ptr))));
-                res.get(zeng.engine_context).width = @intCast(width);
-                res.get(zeng.engine_context).height = @intCast(height);
+                res.get(zeng.__graphics_module).width = @intCast(width);
+                res.get(zeng.__graphics_module).height = @intCast(height);
                 zeng.window_resize_handler(@intCast(width), @intCast(height));
             }
             return 0;
@@ -1309,30 +1276,32 @@ pub fn unlock_cursor() void {
 // Communication Data Structures
 pub fn events(T: type) type {
     return struct {
+        const is_events = void{};
+
         array: std.ArrayList(T),
         addresses: ?std.ArrayList(net.sockaddr_socklen_t) = null,
 
         pub fn init(allocator: std.mem.Allocator, networked: bool) @This() {
-            var ret = @This(){ .array = std.ArrayList(T).init(allocator) };
-            if (networked) ret.addresses = std.ArrayList(net.sockaddr_socklen_t).init(allocator);
+            var ret = @This(){ .array = std.ArrayList(T).initCapacity(allocator, 0) catch unreachable };
+            if (networked) ret.addresses = std.ArrayList(net.sockaddr_socklen_t).initCapacity(allocator, 0) catch unreachable;
             return ret;
         }
-        pub fn deinit(self: *@This()) void {
-            self.array.deinit();
+        pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            self.array.deinit(allocator);
         }
         pub fn send(this: *@This(), event: T) void {
             this.array.append(event) catch unreachable;
         }
-        pub fn send_with_address(this: *@This(), event: T, address: net.sockaddr_socklen_t) void {
-            this.array.append(event) catch unreachable;
-            this.addresses.?.append(address) catch unreachable;
+        pub fn send_with_address(this: *@This(), allocator: std.mem.Allocator, event: T, address: net.sockaddr_socklen_t) void {
+            this.array.append(allocator, event) catch unreachable;
+            this.addresses.?.append(allocator, address) catch unreachable;
         }
         pub fn items(this: *@This()) []T {
             return this.array.items;
         }
-        pub fn clear(this: *@This()) void {
-            this.array.clearAndFree();
-            if (this.addresses != null) this.addresses.?.clearAndFree();
+        pub fn clear(this: *@This(), allocator: std.mem.Allocator) void {
+            this.array.clearAndFree(allocator);
+            if (this.addresses != null) this.addresses.?.clearAndFree(allocator);
         }
     };
 }
@@ -1374,75 +1343,4 @@ pub fn sync_transforms_recursive(parent_global: zeng.world_matrix, id: ecs.entit
     for (childrens.items) |_c| {
         sync_transforms_recursive(global.*, _c, q_transform, q_children, q_local_transform);
     }
-}
-
-// Comptime Utilities
-fn SubTuple(comptime T: type, comptime low: usize, comptime high: usize) type {
-    const info = @typeInfo(T);
-    const old_fields = std.meta.fields(T)[low..high];
-    var new_fields: [old_fields.len]std.builtin.Type.StructField = undefined;
-    for (old_fields, 0..) |old, i| {
-        new_fields[i] = .{
-            .name = std.fmt.comptimePrint("{d}", .{i}),
-            .type = old.type,
-            .default_value = old.default_value,
-            .alignment = old.alignment,
-            .is_comptime = old.is_comptime,
-        };
-    }
-    return @Type(.{
-        .Struct = .{
-            .layout = info.Struct.layout,
-            .fields = &new_fields,
-            .decls = &.{},
-            .is_tuple = true,
-        },
-    });
-}
-
-fn Split(comptime T: type, comptime pivot: usize) type {
-    const fields = std.meta.fields(T);
-    return std.meta.Tuple(&[_]type{
-        SubTuple(T, 0, pivot),
-        SubTuple(T, pivot, fields.len),
-    });
-}
-
-fn split(tuple: anytype, comptime pivot: usize) Split(@TypeOf(tuple), pivot) {
-    const fields = std.meta.fields(@TypeOf(tuple));
-    return .{
-        extract(tuple, 0, pivot),
-        extract(tuple, pivot, fields.len),
-    };
-}
-
-pub fn extract(tuple: anytype, comptime low: usize, comptime high: usize) SubTuple(@TypeOf(tuple), low, high) {
-    var out: SubTuple(@TypeOf(tuple), low, high) = undefined;
-    inline for (low..high, 0..) |i, o| {
-        out[o] = tuple[i];
-    }
-    return out;
-}
-
-pub fn custom_struct(comptime in: anytype) type {
-    var fields: [in.len]std.builtin.Type.StructField = undefined;
-    for (in, 0..) |t, i| {
-        const fieldType: type = t;
-        const fieldName = @typeName(fieldType); //[:0]const u8 = t[0][0..];
-        fields[i] = .{
-            .name = fieldName,
-            .type = fieldType,
-            .default_value = null,
-            .is_comptime = false,
-            .alignment = 0,
-        };
-    }
-    return @Type(.{
-        .Struct = .{
-            .layout = .Auto,
-            .fields = fields[0..],
-            .decls = &[_]std.builtin.Type.Declaration{},
-            .is_tuple = false,
-        },
-    });
 }

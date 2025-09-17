@@ -133,7 +133,7 @@ pub fn query(comptime component_list: anytype) type {
             for (w.tables.values()) |*table| {
                 if (table.archetype_hash & minimum_set_hash == minimum_set_hash) {
                     ret.relevant_tables.put(table.archetype_hash, table) catch unreachable;
-                    ret.ordered_component_columns.append(undefined) catch unreachable;
+                    ret.ordered_component_columns.append(allocator, undefined) catch unreachable;
                     inline for (comptime 0..component_list.len) |i| {
                         ret.ordered_component_columns.items[ret.ordered_component_columns.items.len - 1][i] = table.storages.get(comptime COMP_TYPE_TO_ID(component_list[i])).?;
                     }

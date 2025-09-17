@@ -165,7 +165,7 @@ pub fn audio_engine_run() !void {
     var min_period: c.REFERENCE_TIME = undefined;
     ERROR = audio_client.lpVtbl.*.GetDevicePeriod.?(audio_client, &default_period, &min_period);
     try check_error(ERROR);
-    std.debug.print("{}, {}\n", .{ default_period, min_period });
+    // std.debug.print("{}, {}\n", .{ default_period, min_period });
 
     ERROR = audio_client.lpVtbl.*.Initialize.?(audio_client, c.AUDCLNT_SHAREMODE_SHARED, c.AUDCLNT_STREAMFLAGS_EVENTCALLBACK, min_period, 0, @ptrCast(pwfx), null);
     try check_error(ERROR);

@@ -111,7 +111,8 @@ pub fn load_texture(path: anytype, srgb: bool, flip_y: bool) u32 {
     //Engine.gl.pixelStorei(Engine.gl.UNPACK_ALIGNMENT, 1);
     zeng.gl.texImage2D(zeng.gl.TEXTURE_2D, 0, if (srgb) zeng.gl.SRGB else zeng.gl.RGB, width, height, 0, zeng.gl.RGB, zeng.gl.UNSIGNED_BYTE, image_data);
     zeng.gl.generateMipmap(zeng.gl.TEXTURE_2D);
-    zeng.gl_log_errors() catch unreachable;
+
+    zeng.gl_log_errors();
 
     return ret;
 }
@@ -158,6 +159,44 @@ pub fn create_square_mesh() struct { u32, c_int } {
     const indices = [6]c_uint{
         3, 1, 0, // first triangle
         3, 2, 1, // second triangle
+    };
+
+    var VBO: c_uint = undefined;
+    var VAO: c_uint = undefined;
+    var EBO: c_uint = undefined;
+
+    zeng.gl.genVertexArrays(1, &VAO);
+    zeng.gl.genBuffers(1, &VBO);
+    zeng.gl.genBuffers(1, &EBO);
+
+    // bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
+    zeng.gl.bindVertexArray(VAO);
+    zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, VBO);
+    // Fill our buffer with the vertex data
+    zeng.gl.bufferData(zeng.gl.ARRAY_BUFFER, @sizeOf(f32) * vertices.len, &vertices, zeng.gl.STATIC_DRAW);
+    // copy our index array in an element buffer for OpenGL to use
+    zeng.gl.bindBuffer(zeng.gl.ELEMENT_ARRAY_BUFFER, EBO);
+    zeng.gl.bufferData(zeng.gl.ELEMENT_ARRAY_BUFFER, 6 * @sizeOf(c_uint), &indices, zeng.gl.STATIC_DRAW);
+
+    // Specify and link our vertext attribute description
+    zeng.gl.vertexAttribPointer(0, 3, zeng.gl.FLOAT, zeng.gl.FALSE, 5 * @sizeOf(f32), null);
+    zeng.gl.vertexAttribPointer(1, 2, zeng.gl.FLOAT, zeng.gl.FALSE, 5 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32)));
+
+    zeng.gl.enableVertexAttribArray(0);
+    zeng.gl.enableVertexAttribArray(1);
+
+    return .{ VAO, indices.len };
+}
+pub fn create_square_mesh2() struct { u32, c_int } {
+    const vertices = [20]f32{
+        1.0, -1.0, 0.0, 1.0, 1.0, // top right
+        1.0, 0.0, 0.0, 1.0, 0.0, // bottom right
+        0.0, 0.0, 0.0, 0.0, 0.0, // bottom left
+        0.0, -1.0, 0.0, 0.0, 1.0, // top left
+    };
+    const indices = [6]c_uint{
+        1, 3, 0, // first triangle
+        2, 3, 1, // second triangle
     };
 
     var VBO: c_uint = undefined;
@@ -451,70 +490,71 @@ pub fn create_triangle_mesh() struct { u32, u32 } {
     return .{ VAO, VBO };
 }
 
-const StringLiteral = struct {
-    string: []const u8,
+pub const gltf = struct {
+    pub const string_literal_tok = struct {
+        string: []const u8,
+    };
+    pub const int_literal_tok = struct {
+        value: i128,
+    };
+    pub const float_literal_tok = struct {
+        value: f64,
+    };
+    pub const token_tag = enum {
+        l_paren,
+        r_paren,
+        l_brace,
+        r_brace,
+        l_square,
+        r_square,
+
+        string_literal,
+        int_constant,
+        float_constant,
+        semicolon,
+
+        colon,
+        comma,
+
+        _true,
+    };
+    pub const token = union(gltf.token_tag) {
+        // misc
+        l_paren: void,
+        r_paren: void,
+        l_brace: void,
+        r_brace: void,
+        l_square: void,
+        r_square: void,
+
+        string_literal: string_literal_tok,
+        int_constant: int_literal_tok,
+        float_constant: float_literal_tok,
+
+        semicolon: void,
+        colon: void,
+        comma: void,
+
+        _true,
+    };
+    pub const node_tag = enum {
+        string,
+        integer,
+        float,
+        boolean,
+        object,
+        array,
+    };
+    pub const node = union(node_tag) {
+        string: []const u8,
+        integer: i128,
+        float: f64,
+        boolean: bool,
+
+        object: std.StringHashMap(*gltf.node),
+        array: std.ArrayList(*gltf.node),
+    };
 };
-const IntConstant = struct {
-    value: i128,
-};
-const FloatConstant = struct {
-    value: f64,
-};
-const TokenTag = enum {
-    l_paren,
-    r_paren,
-    l_brace,
-    r_brace,
-    l_square,
-    r_square,
-
-    string_literal,
-    int_constant,
-    float_constant,
-    semicolon,
-
-    colon,
-    comma,
-
-    _true,
-};
-const Token = union(TokenTag) {
-    // misc
-    l_paren: void,
-    r_paren: void,
-    l_brace: void,
-    r_brace: void,
-    l_square: void,
-    r_square: void,
-
-    string_literal: StringLiteral,
-    int_constant: IntConstant,
-    float_constant: FloatConstant,
-
-    semicolon: void,
-    colon: void,
-    comma: void,
-
-    _true,
-};
-const NodeTag = enum {
-    string,
-    integer,
-    float,
-    boolean,
-    object,
-    array,
-};
-const Node = union(NodeTag) {
-    string: []const u8,
-    integer: i128,
-    float: f64,
-    boolean: bool,
-
-    object: std.StringHashMap(*Node),
-    array: std.ArrayList(*Node),
-};
-
 pub fn concat(a: []const u8, b: []const u8, allocator: std.mem.Allocator) []u8 {
     var result = allocator.alloc(u8, a.len + b.len) catch unreachable;
     @memcpy(result[0..a.len], a);
@@ -536,7 +576,7 @@ fn contains(char: u8, string: []const u8) bool {
     }
     return false;
 }
-pub fn lexer(bytes: []const u8, tokens: *std.ArrayList(Token)) !void {
+pub fn lexer(bytes: []const u8, tokens: *std.ArrayList(gltf.token), allocator: std.mem.Allocator) !void {
     var char_number: u32 = 0;
     var curr: u64 = 0;
     while (curr < bytes.len) {
@@ -546,30 +586,30 @@ pub fn lexer(bytes: []const u8, tokens: *std.ArrayList(Token)) !void {
         if (bytes[curr] == '\n') {
             char_number = 0;
         } else if (bytes[curr] == ';') {
-            try tokens.append(Token{ .semicolon = void{} });
+            try tokens.append(allocator, gltf.token{ .semicolon = void{} });
         } else if (bytes[curr] == ',') {
-            try tokens.append(Token{ .comma = void{} });
+            try tokens.append(allocator, gltf.token{ .comma = void{} });
         } else if (bytes[curr] == ':') {
-            try tokens.append(Token{ .colon = void{} });
+            try tokens.append(allocator, gltf.token{ .colon = void{} });
         } else if (bytes[curr] == '{') {
-            try tokens.append(Token{ .l_brace = void{} });
+            try tokens.append(allocator, gltf.token{ .l_brace = void{} });
         } else if (bytes[curr] == '}') {
-            try tokens.append(Token{ .r_brace = void{} });
+            try tokens.append(allocator, gltf.token{ .r_brace = void{} });
         } else if (bytes[curr] == '(') {
-            try tokens.append(Token{ .l_paren = void{} });
+            try tokens.append(allocator, gltf.token{ .l_paren = void{} });
         } else if (bytes[curr] == ')') {
-            try tokens.append(Token{ .r_paren = void{} });
+            try tokens.append(allocator, gltf.token{ .r_paren = void{} });
         } else if (bytes[curr] == '[') {
-            try tokens.append(Token{ .l_square = void{} });
+            try tokens.append(allocator, gltf.token{ .l_square = void{} });
         } else if (bytes[curr] == ']') {
-            try tokens.append(Token{ .r_square = void{} });
+            try tokens.append(allocator, gltf.token{ .r_square = void{} });
         } else if (bytes[curr] == '"') {
             const start = curr;
             curr += 1;
             while (curr < bytes.len and bytes[curr] != '"') {
                 curr += 1;
             }
-            try tokens.append(Token{ .string_literal = StringLiteral{ .string = bytes[start + 1 .. curr] } });
+            try tokens.append(allocator, gltf.token{ .string_literal = gltf.string_literal_tok{ .string = bytes[start + 1 .. curr] } });
         } else if (contains(bytes[curr], "-0123456789")) {
             if (bytes[curr] == '-') {}
             const start = curr;
@@ -600,13 +640,13 @@ pub fn lexer(bytes: []const u8, tokens: *std.ArrayList(Token)) !void {
 
             if (is_float) {
                 if (!is_scientific) {
-                    try tokens.append(Token{ .float_constant = FloatConstant{ .value = std.fmt.parseFloat(f64, bytes[start..curr]) catch unreachable } });
+                    try tokens.append(allocator, gltf.token{ .float_constant = gltf.float_literal_tok{ .value = std.fmt.parseFloat(f64, bytes[start..curr]) catch unreachable } });
                 } else {
-                    try tokens.append(Token{ .float_constant = FloatConstant{ .value = 0.0 } });
+                    try tokens.append(allocator, gltf.token{ .float_constant = gltf.float_literal_tok{ .value = 0.0 } });
                 }
                 // std.debug.print("float value: {}\n", .{tokens.getLast().float_constant.value});
             } else {
-                try tokens.append(Token{ .int_constant = IntConstant{ .value = std.fmt.parseInt(i128, bytes[start..curr], 10) catch unreachable } });
+                try tokens.append(allocator, gltf.token{ .int_constant = gltf.int_literal_tok{ .value = std.fmt.parseInt(i128, bytes[start..curr], 10) catch unreachable } });
                 // std.debug.print("int value: {}\n", .{tokens.getLast().int_constant.value});
             }
             curr -= 1;
@@ -617,7 +657,7 @@ pub fn lexer(bytes: []const u8, tokens: *std.ArrayList(Token)) !void {
                 curr += 1;
             }
             if (std.mem.eql(u8, bytes[start..curr], "true")) {
-                try tokens.append(Token{ ._true = void{} });
+                try tokens.append(allocator, gltf.token{ ._true = void{} });
             }
             curr -= 1;
         }
@@ -626,13 +666,13 @@ pub fn lexer(bytes: []const u8, tokens: *std.ArrayList(Token)) !void {
 
 const context = struct {
     allocator: std.mem.Allocator,
-    tokens: []Token,
+    tokens: []gltf.token,
     curr: u64,
     temp: u64,
 
     tabs: u32,
 };
-fn match(rec: *context, tag: TokenTag) bool {
+fn match(rec: *context, tag: gltf.token_tag) bool {
     if (rec.curr >= rec.tokens.len) {
         return false;
     }
@@ -642,9 +682,9 @@ fn match(rec: *context, tag: TokenTag) bool {
     }
     return false;
 }
-fn gltf_object(rec: *context) ?*Node {
-    const new = rec.allocator.create(Node) catch unreachable;
-    new.* = Node{ .object = undefined };
+fn gltf_object(rec: *context) ?*gltf.node {
+    const new = rec.allocator.create(gltf.node) catch unreachable;
+    new.* = gltf.node{ .object = undefined };
 
     if (!match(rec, .l_brace))
         return null;
@@ -659,9 +699,9 @@ fn gltf_object(rec: *context) ?*Node {
 
     return new;
 }
-fn gltf_array(rec: *context) ?*Node {
-    const new = rec.allocator.create(Node) catch unreachable;
-    new.* = Node{ .array = undefined };
+fn gltf_array(rec: *context) ?*gltf.node {
+    const new = rec.allocator.create(gltf.node) catch unreachable;
+    new.* = gltf.node{ .array = undefined };
 
     if (!match(rec, .l_square))
         return null;
@@ -676,7 +716,7 @@ fn gltf_array(rec: *context) ?*Node {
 
     return new;
 }
-fn gltf_thing(rec: *context) ?*Node {
+fn gltf_thing(rec: *context) ?*gltf.node {
     rec.temp = rec.curr;
 
     const object = gltf_object(rec);
@@ -693,8 +733,8 @@ fn gltf_thing(rec: *context) ?*Node {
 
     if (match(rec, .string_literal)) {
         // std.debug.print("string literal: \"{s}\"\n", .{rec.tokens[rec.curr - 1].string_literal.string});
-        const new = rec.allocator.create(Node) catch unreachable;
-        new.* = Node{ .string = rec.tokens[rec.curr - 1].string_literal.string };
+        const new = rec.allocator.create(gltf.node) catch unreachable;
+        new.* = gltf.node{ .string = rec.tokens[rec.curr - 1].string_literal.string };
         return new;
     }
 
@@ -702,8 +742,8 @@ fn gltf_thing(rec: *context) ?*Node {
 
     if (match(rec, .int_constant)) {
         // std.debug.print("int constant: \"{}\"\n", .{rec.tokens[rec.curr - 1].int_constant.value});
-        const new = rec.allocator.create(Node) catch unreachable;
-        new.* = Node{ .integer = rec.tokens[rec.curr - 1].int_constant.value };
+        const new = rec.allocator.create(gltf.node) catch unreachable;
+        new.* = gltf.node{ .integer = rec.tokens[rec.curr - 1].int_constant.value };
         return new;
     }
 
@@ -711,8 +751,8 @@ fn gltf_thing(rec: *context) ?*Node {
 
     if (match(rec, .float_constant)) {
         // std.debug.print("int constant: \"{}\"\n", .{rec.tokens[rec.curr - 1].float_constant.value});
-        const new = rec.allocator.create(Node) catch unreachable;
-        new.* = Node{ .float = rec.tokens[rec.curr - 1].float_constant.value };
+        const new = rec.allocator.create(gltf.node) catch unreachable;
+        new.* = gltf.node{ .float = rec.tokens[rec.curr - 1].float_constant.value };
         return new;
     }
 
@@ -720,16 +760,16 @@ fn gltf_thing(rec: *context) ?*Node {
 
     if (match(rec, ._true)) {
         // std.debug.print("boolean true\n", .{});
-        const new = rec.allocator.create(Node) catch unreachable;
-        new.* = Node{ .boolean = true };
+        const new = rec.allocator.create(gltf.node) catch unreachable;
+        new.* = gltf.node{ .boolean = true };
         return new;
     }
 
     // std.debug.print("OOF!\n", .{});
     return null;
 }
-fn gltf_name_list(rec: *context) ?std.StringHashMap(*Node) {
-    var new: std.StringHashMap(*Node) = std.StringHashMap(*Node).init(rec.allocator);
+fn gltf_name_list(rec: *context) ?std.StringHashMap(*gltf.node) {
+    var new: std.StringHashMap(*gltf.node) = std.StringHashMap(*gltf.node).init(rec.allocator);
 
     while (true) {
         if (!(match(rec, .string_literal) and match(rec, .colon)))
@@ -749,15 +789,15 @@ fn gltf_name_list(rec: *context) ?std.StringHashMap(*Node) {
         }
     }
 }
-fn gltf_nameless_list(rec: *context) ?std.ArrayList(*Node) {
-    var new: std.ArrayList(*Node) = std.ArrayList(*Node).init(rec.allocator);
+fn gltf_nameless_list(rec: *context) ?std.ArrayList(*gltf.node) {
+    var new: std.ArrayList(*gltf.node) = std.ArrayList(*gltf.node).initCapacity(rec.allocator, 0) catch unreachable;
 
     while (true) {
         const thing = gltf_thing(rec);
         if (thing == null) {
             return null;
         } else {
-            new.append(thing.?) catch unreachable;
+            new.append(rec.allocator, thing.?) catch unreachable;
             // new.put(void{}, thing.?) catch unreachable;
         }
 
@@ -767,52 +807,48 @@ fn gltf_nameless_list(rec: *context) ?std.ArrayList(*Node) {
         }
     }
 }
-pub fn gltf_parse(bytes: []u8, allocator: std.mem.Allocator) ?*Node {
-    var tokens = std.ArrayList(Token).init(allocator);
-    defer tokens.deinit();
-    lexer(bytes, &tokens) catch unreachable;
+pub fn gltf_parse(bytes: []u8, allocator: std.mem.Allocator) ?*gltf.node {
+    var tokens = std.ArrayList(gltf.token).initCapacity(allocator, 10) catch unreachable;
+    defer tokens.deinit(allocator);
+    lexer(bytes, &tokens, allocator) catch unreachable;
 
     var rec: context = .{ .allocator = allocator, .tokens = tokens.items, .curr = 0, .temp = undefined, .tabs = 0 };
 
     return gltf_object(&rec);
 }
 
-const gltf_node_type = enum {
-    static_mesh,
-    skinned_mesh,
-    empty,
-};
-const gltf_node = union(gltf_node_type) {
+const scene_node = union(enum) {
     static_mesh: zeng.mesh,
     skinned_mesh: zeng.skinned_mesh,
     empty: void,
 };
-const gltf_node_w_matrix = struct {
-    node: gltf_node,
+const scene_node_w_matrix = struct {
+    node: scene_node,
     matrix: [16]f32,
     gltf_id: usize = 0,
 };
-const ChannelOutputDataTag = enum {
-    rotation,
-    translation,
-    scale,
-};
-pub const ChannelOutputData = union(ChannelOutputDataTag) {
-    rotation: []zeng.quat,
-    translation: []zeng.vec3,
-    scale: []zeng.vec3,
-};
-const SamplerData = struct {
-    inputs: []f32,
-    output: ChannelOutputData,
-};
-pub const AnimationChannel = struct {
-    target: usize,
-    inputs: []f32,
-    outputs: ChannelOutputData,
-};
-pub const Animation = struct {
-    channels: []AnimationChannel,
+pub const animation = struct {
+    const channel_output_data_tag = enum {
+        rotation,
+        translation,
+        scale,
+    };
+    pub const channel_output_data = union(channel_output_data_tag) {
+        rotation: []zeng.quat,
+        translation: []zeng.vec3,
+        scale: []zeng.vec3,
+    };
+    const sampler_data = struct {
+        inputs: []f32,
+        output: channel_output_data,
+    };
+    pub const channel = struct {
+        target: usize,
+        inputs: []f32,
+        outputs: channel_output_data,
+    };
+
+    channels: []channel,
     duration: f32,
 };
 
@@ -838,14 +874,14 @@ fn get_component_type_enum(_type: usize) zeng.gl.GLenum {
         else => 1,
     };
 }
-fn get_offsest_and_length(accessor_index: usize, accessors: Node, bufferviews: Node) struct { usize, usize, usize } {
+fn get_offsest_and_length(accessor_index: usize, accessors: gltf.node, bufferviews: gltf.node) struct { usize, usize, usize } {
     const bv_index: usize = @intCast(accessors.array.items[accessor_index].object.get("bufferView").?.integer);
     const offset: usize = @intCast(bufferviews.array.items[bv_index].object.get("byteOffset").?.integer);
     const length: usize = @intCast(bufferviews.array.items[bv_index].object.get("byteLength").?.integer);
     const component_type: usize = @intCast(accessors.array.items[accessor_index].object.get("componentType").?.integer);
     return .{ offset, length, component_type };
 }
-fn get_float_from_numeric(n: *Node, idx: comptime_int) f32 {
+fn get_float_from_numeric(n: *gltf.node, idx: comptime_int) f32 {
     if (n.array.items[idx].* == .float)
         return @floatCast(n.array.items[idx].float);
 
@@ -854,8 +890,7 @@ fn get_float_from_numeric(n: *Node, idx: comptime_int) f32 {
 
 pub var global_colliders: ?std.ArrayList(zeng.cpu_mesh) = null;
 pub var global_matrices: ?std.ArrayList(zeng.world_matrix) = null;
-
-pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies_path: []const u8, allocator: std.mem.Allocator, skin_shader_program: u32, static_shader_program: u32, default_texture: u32) struct { []gltf_node_w_matrix, []Animation, []zeng.skeleton, std.AutoArrayHashMap(usize, std.ArrayList(usize)), std.AutoHashMap(usize, void), std.AutoHashMap(usize, usize) } {
+pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, dependencies_path: []const u8, allocator: std.mem.Allocator, skin_shader_program: u32, static_shader_program: u32, default_texture: u32) struct { []scene_node_w_matrix, []animation, [][]const u8, []zeng.skeleton, std.AutoArrayHashMap(usize, std.ArrayList(usize)), std.AutoHashMap(usize, void), std.AutoHashMap(usize, usize) } {
     var result_top_level_objects = std.AutoHashMap(usize, void).init(allocator);
     for (root_n.?.object.get("scenes").?.array.items) |scene_n| {
         for (scene_n.object.get("nodes").?.array.items) |node_n| {
@@ -864,12 +899,14 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
     }
     var joint_to_skin = std.AutoHashMap(usize, usize).init(allocator);
 
-    var skeleton_space_maps = std.ArrayList(std.AutoHashMap(usize, usize)).init(allocator);
-    var result_nodes = std.ArrayList(gltf_node_w_matrix).init(allocator);
-    var result_animations = std.ArrayList(Animation).init(allocator);
-    var result_skeletons = std.ArrayList(zeng.skeleton).init(allocator);
+    var skeleton_space_maps = std.ArrayList(std.AutoHashMap(usize, usize)).initCapacity(allocator, 0) catch unreachable;
+    var result_nodes = std.ArrayList(scene_node_w_matrix).initCapacity(allocator, 0) catch unreachable;
+    var result_animations = std.ArrayList(animation).initCapacity(allocator, 0) catch unreachable;
+    var result_animation_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    var result_skeletons = std.ArrayList(zeng.skeleton).initCapacity(allocator, 0) catch unreachable;
     var result_children_list = std.AutoArrayHashMap(usize, std.ArrayList(usize)).init(allocator);
     var result_skinmesh_to_skeleton = std.AutoHashMap(usize, usize).init(allocator);
+    // var result_collider_map = std.AutoHashMap(ecs.entity_id, usize).init(allocator);
 
     const nodes_n = root_n.?.object.get("nodes").?;
     const accessors_n = root_n.?.object.get("accessors").?;
@@ -901,13 +938,13 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
             const offset: usize, const length: usize, _ = get_offsest_and_length(@intCast(current_skin_n.object.get("inverseBindMatrices").?.integer), accessors_n.*, bufferviews_n.*);
             @memcpy(@as([*]u8, @ptrCast(temp_inverse_bind_matrices)), bin_data[offset .. offset + length]);
 
-            skeleton_space_maps.append(jointspace_to_nodespace) catch unreachable;
-            result_skeletons.append(.{ .inverse_bind_matrices = temp_inverse_bind_matrices, .bone_parent_indices = temp_bone_parent_indices, .local_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable, .model_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable, .animations = std.ArrayList(usize).init(allocator) }) catch unreachable;
+            skeleton_space_maps.append(allocator, jointspace_to_nodespace) catch unreachable;
+            result_skeletons.append(allocator, .{ .inverse_bind_matrices = temp_inverse_bind_matrices, .bone_parent_indices = temp_bone_parent_indices, .local_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable, .model_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable, .animations = std.ArrayList(usize).initCapacity(allocator, 0) catch unreachable }) catch unreachable;
         }
     }
     if (_animations_n != null) {
         for (_animations_n.?.array.items) |current_animation| {
-            var temp_channels = std.ArrayList(AnimationChannel).init(allocator);
+            var temp_channels = std.ArrayList(animation.channel).initCapacity(allocator, 0) catch unreachable;
 
             const channels_n = current_animation.object.get("channels");
             const samplers_n = current_animation.object.get("samplers");
@@ -925,13 +962,13 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
 
                 var target_index: usize = @intCast(channel.object.get("target").?.object.get("node").?.integer);
                 owner_skin = joint_to_skin.get(target_index).?;
-                target_index = skeleton_space_maps.items[owner_skin].get(target_index).?; // REMAP from node space to a  skin[0] bone TODO: make this use more than just the first skin in the file
+                target_index = skeleton_space_maps.items[owner_skin].get(target_index).?; // REMAP from gltf.node space to a  skin[0] bone TODO: make this use more than just the first skin in the file
 
                 const temp_inputs: []f32 = allocator.alloc(f32, input_length / 4) catch unreachable;
                 @memcpy(@as([*]u8, @ptrCast(temp_inputs)), bin_data[input_offset .. input_offset + input_length]);
 
                 const target_path = channel.object.get("target").?.object.get("path").?.string;
-                var output_type: ChannelOutputDataTag = undefined;
+                var output_type: animation.channel_output_data_tag = undefined;
                 if (std.mem.eql(u8, target_path, "rotation")) {
                     output_type = .rotation;
                 } else if (std.mem.eql(u8, target_path, "translation")) {
@@ -940,15 +977,15 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                     output_type = .scale;
                 } else unreachable;
 
-                var temp_outputs: ChannelOutputData = undefined;
+                var temp_outputs: animation.channel_output_data = undefined;
                 if (output_type == .rotation) {
-                    temp_outputs = ChannelOutputData{ .rotation = allocator.alloc(zeng.quat, output_length / 16) catch unreachable };
+                    temp_outputs = animation.channel_output_data{ .rotation = allocator.alloc(zeng.quat, output_length / 16) catch unreachable };
                     @memcpy(@as([*]u8, @ptrCast(temp_outputs.rotation)), bin_data[output_offset .. output_offset + output_length]);
                 } else if (output_type == .translation) {
-                    temp_outputs = ChannelOutputData{ .translation = allocator.alloc(zeng.vec3, output_length / 12) catch unreachable };
+                    temp_outputs = animation.channel_output_data{ .translation = allocator.alloc(zeng.vec3, output_length / 12) catch unreachable };
                     @memcpy(@as([*]u8, @ptrCast(temp_outputs.translation)), bin_data[output_offset .. output_offset + output_length]);
                 } else if (output_type == .scale) {
-                    temp_outputs = ChannelOutputData{ .scale = allocator.alloc(zeng.vec3, output_length / 12) catch unreachable };
+                    temp_outputs = animation.channel_output_data{ .scale = allocator.alloc(zeng.vec3, output_length / 12) catch unreachable };
                     @memcpy(@as([*]u8, @ptrCast(temp_outputs.scale)), bin_data[output_offset .. output_offset + output_length]);
                 } else unreachable;
 
@@ -956,15 +993,18 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                     max_timestamp = @max(max_timestamp, f);
                 }
 
-                temp_channels.append(AnimationChannel{
+                temp_channels.append(allocator, animation.channel{
                     .target = target_index,
                     .inputs = temp_inputs,
                     .outputs = temp_outputs,
                 }) catch unreachable;
             }
 
-            result_animations.append(Animation{ .channels = temp_channels.items, .duration = max_timestamp }) catch unreachable;
-            result_skeletons.items[owner_skin].animations.append(result_animations.items.len - 1) catch unreachable;
+            result_animations.append(allocator, animation{ .channels = temp_channels.items, .duration = max_timestamp }) catch unreachable;
+            // std.debug.print("{s}\n", .{current_animation.object.get("name").?.string});
+            result_animation_names.append(allocator, current_animation.object.get("name").?.string) catch unreachable;
+
+            result_skeletons.items[owner_skin].animations.append(allocator, result_animations.items.len - 1) catch unreachable;
         }
     }
 
@@ -974,7 +1014,7 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
 
         const children = current_node_n.object.get("children");
         if (children != null) {
-            var entry = std.ArrayList(usize).init(allocator);
+            var entry = std.ArrayList(usize).initCapacity(allocator, 0) catch unreachable;
             children_blk: for (children.?.array.items) |child| {
                 // test is any skin contains BOTH the child and the parent - otherwise add children to the hierarchy
                 for (skeleton_space_maps.items, 0..) |skin, s| {
@@ -983,17 +1023,17 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                         continue :children_blk;
                     }
                 }
-                entry.append(@intCast(child.integer)) catch unreachable;
+                entry.append(allocator, @intCast(child.integer)) catch unreachable;
             }
 
             if (entry.items.len > 0) {
                 result_children_list.put(current_node_index, entry) catch unreachable;
-            } else entry.deinit();
+            } else entry.deinit(allocator);
         }
 
         const mesh_index_n = current_node_n.object.get("mesh");
         const skin_index_n = current_node_n.object.get("skin");
-        if (mesh_index_n != null and skin_index_n != null) {
+        if (mesh_index_n != null and skin_index_n != null) { // skinned mesh
             var base_color_texture_gpu: u32 = default_texture;
 
             const mesh_n = root_n.?.object.get("meshes").?.array.items[@intCast(mesh_index_n.?.integer)];
@@ -1005,7 +1045,7 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                 const base_color_texture_index: usize = @intCast(material_n.object.get("pbrMetallicRoughness").?.object.get("baseColorTexture").?.object.get("index").?.integer);
                 const base_color_texture_image_index: usize = @intCast(_textures_n.?.array.items[base_color_texture_index].object.get("source").?.integer);
                 const base_color_texture_image_str = _images_n.?.array.items[base_color_texture_image_index].object.get("uri").?.string;
-                base_color_texture_gpu = zeng.loader.load_texture(zeng.loader.concat_as_null_terminated(dependencies_path, base_color_texture_image_str, allocator), true, false);
+                base_color_texture_gpu = zeng.loader.load_texture(std.fmt.allocPrint(allocator, "{s}/{s}\x00", .{ dependencies_path, base_color_texture_image_str }) catch unreachable, true, false);
             }
             var translation: zeng.vec3 = zeng.vec3.ZERO;
             var scale: zeng.vec3 = zeng.vec3.ONE;
@@ -1147,8 +1187,8 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
 
             // const skin_index: usize = @intCast(skin_index_n.?.integer);
             result_skinmesh_to_skeleton.put(current_node_index, @intCast(skin_index_n.?.integer)) catch unreachable;
-            result_nodes.append(gltf_node_w_matrix{
-                .node = gltf_node{
+            result_nodes.append(allocator, scene_node_w_matrix{
+                .node = scene_node{
                     .skinned_mesh = zeng.skinned_mesh{
                         .indices_length = @intCast(indices_data_len / indices_component_size),
                         .indices_type = get_component_type_enum(indices_component_type),
@@ -1163,7 +1203,7 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                 .matrix = mat,
                 .gltf_id = current_node_index,
             }) catch unreachable;
-        } else if (mesh_index_n != null) {
+        } else if (mesh_index_n != null) { // regular mesh
             const name = current_node_n.object.get("name");
 
             var translation: zeng.vec3 = zeng.vec3.ZERO;
@@ -1203,8 +1243,7 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                         const base_color_texture_index: usize = @intCast(material_n.object.get("pbrMetallicRoughness").?.object.get("baseColorTexture").?.object.get("index").?.integer);
                         const base_color_texture_image_index: usize = @intCast(_textures_n.?.array.items[base_color_texture_index].object.get("source").?.integer);
                         const base_color_texture_image_str = _images_n.?.array.items[base_color_texture_image_index].object.get("uri").?.string;
-                        // std.debug.print("image: {s}\n", .{base_color_texture_image_str});
-                        base_color_texture_gpu = zeng.loader.load_texture(zeng.loader.concat_as_null_terminated(dependencies_path, base_color_texture_image_str, allocator), true, false);
+                        base_color_texture_gpu = zeng.loader.load_texture(std.fmt.allocPrint(allocator, "{s}/{s}\x00", .{ dependencies_path, base_color_texture_image_str }) catch unreachable, true, false);
                     }
                 }
 
@@ -1250,11 +1289,11 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                     const collider_mesh = zeng.cpu_mesh{ .indices = collider_indices, .positions = collider_positions };
 
                     if (global_colliders == null) {
-                        global_matrices = std.ArrayList(zeng.world_matrix).init(allocator);
-                        global_colliders = std.ArrayList(zeng.cpu_mesh).init(allocator);
+                        global_matrices = std.ArrayList(zeng.world_matrix).initCapacity(allocator, 0) catch unreachable;
+                        global_colliders = std.ArrayList(zeng.cpu_mesh).initCapacity(allocator, 0) catch unreachable;
                     }
-                    global_colliders.?.append(collider_mesh) catch unreachable;
-                    global_matrices.?.append(mat) catch unreachable;
+                    global_colliders.?.append(allocator, collider_mesh) catch unreachable;
+                    global_matrices.?.append(allocator, mat) catch unreachable;
                 }
 
                 var _curr: usize = 0;
@@ -1324,8 +1363,8 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
                 zeng.gl.enableVertexAttribArray(1);
                 zeng.gl.enableVertexAttribArray(2);
 
-                result_nodes.append(gltf_node_w_matrix{
-                    .node = gltf_node{
+                result_nodes.append(allocator, scene_node_w_matrix{
+                    .node = scene_node{
                         .static_mesh = zeng.mesh{
                             .indices_length = @intCast(indices_data_len / indices_component_size),
                             .indices_type = get_component_type_enum(indices_component_type),
@@ -1363,8 +1402,8 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
             }
             const mat = zeng.mat_tran(zeng.mat_mult(zeng.quat_to_mat(rotation), zeng.mat_scal(zeng.mat_identity, scale)), translation);
 
-            result_nodes.append(gltf_node_w_matrix{
-                .node = gltf_node{
+            result_nodes.append(allocator, scene_node_w_matrix{
+                .node = scene_node{
                     .empty = void{},
                 },
                 .matrix = mat,
@@ -1373,17 +1412,17 @@ pub fn gltf_extract_resources(root_n: ?*Node, bin_data: []const u8, dependencies
         }
     }
 
-    return .{ result_nodes.items, result_animations.items, result_skeletons.items, result_children_list, result_top_level_objects, result_skinmesh_to_skeleton };
+    return .{ result_nodes.items, result_animations.items, result_animation_names.items, result_skeletons.items, result_children_list, result_top_level_objects, result_skinmesh_to_skeleton };
 }
-pub fn instantiate_model_hierarchy(mesh_slice: []gltf_node_w_matrix, parent_child_map: std.AutoArrayHashMap(usize, std.ArrayList(usize)), top_level: std.AutoHashMap(usize, void), skeleton_slice: []zeng.skeleton, skinmesh_to_skeleton: std.AutoHashMap(usize, usize), world: *ecs.world, ctx: *zeng.engine_context) ecs.entity_id {
-    var new_skeletons = std.ArrayList(ecs.entity_id).init(ctx.arena_allocator);
+pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, parent_child_map: std.AutoArrayHashMap(usize, std.ArrayList(usize)), top_level_children: std.AutoHashMap(usize, void), skeleton_slice: []zeng.skeleton, skinmesh_to_skeleton: std.AutoHashMap(usize, usize), world: *ecs.world, allocator: std.mem.Allocator) ecs.entity_id {
+    var new_skeletons = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
     for (skeleton_slice) |skel| {
         const e = world.spawn(.{skel});
-        new_skeletons.append(e) catch unreachable;
+        new_skeletons.append(allocator, e) catch unreachable;
     }
 
-    var node_mapping = std.AutoArrayHashMap(usize, ecs.entity_id).init(ctx.arena_allocator);
-    var top_level_children = std.ArrayList(ecs.entity_id).init(ctx.arena_allocator);
+    var node_mapping = std.AutoArrayHashMap(usize, ecs.entity_id).init(allocator);
+    var root_child_list = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
     for (mesh_slice) |mesh_like| {
         if (mesh_like.node == .skinned_mesh) {
             const entity_id = world.spawn(.{
@@ -1395,7 +1434,7 @@ pub fn instantiate_model_hierarchy(mesh_slice: []gltf_node_w_matrix, parent_chil
                     break :blk new;
                 },
             });
-            if (top_level.contains(mesh_like.gltf_id)) top_level_children.append(entity_id) catch unreachable;
+            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
             node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
         } else if (mesh_like.node == .static_mesh) {
             const entity_id = world.spawn(.{
@@ -1403,22 +1442,22 @@ pub fn instantiate_model_hierarchy(mesh_slice: []gltf_node_w_matrix, parent_chil
                 zeng.local_matrix{ .transform = mesh_like.matrix },
                 mesh_like.node.static_mesh,
             });
-            if (top_level.contains(mesh_like.gltf_id)) top_level_children.append(entity_id) catch unreachable;
+            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
             node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
         } else if (mesh_like.node == .empty) {
-            std.debug.print("empty node spawned!\n", .{});
+            // std.debug.print("empty node spawned!\n", .{});
             const entity_id = world.spawn(.{
                 zeng.mat_identity,
                 zeng.local_matrix{ .transform = mesh_like.matrix },
             });
-            if (top_level.contains(mesh_like.gltf_id)) top_level_children.append(entity_id) catch unreachable;
+            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
             node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
         }
     }
 
     for (parent_child_map.keys(), parent_child_map.values()) |parent, children| {
         if (node_mapping.get(parent)) |parent_e_id| {
-            const children_slice_component = ctx.arena_allocator.alloc(ecs.entity_id, children.items.len) catch unreachable;
+            const children_slice_component = allocator.alloc(ecs.entity_id, children.items.len) catch unreachable;
 
             for (0.., children.items) |idx, child| {
                 const child_e_id = node_mapping.get(child).?;
@@ -1431,27 +1470,38 @@ pub fn instantiate_model_hierarchy(mesh_slice: []gltf_node_w_matrix, parent_chil
 
     const model_root = world.spawn(.{
         zeng.mat_identity,
-        zeng.children{ .items = top_level_children.items },
+        zeng.children{ .items = root_child_list.items },
     });
 
     return model_root;
 }
-pub fn auto_import(ctx: *zeng.engine_context, world: *ecs.world, res: *zeng.resources_t, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, uv_checker_tex: u32) ecs.entity_id {
-    const buffer_0 = ctx.arena_allocator.alloc(u8, folder_name.len + file_name.len + 5) catch unreachable;
-    const full_file_path = std.fmt.bufPrint(buffer_0, "{s}{s}.gltf", .{ folder_name, file_name }) catch unreachable;
-    const buffer_1 = ctx.arena_allocator.alloc(u8, folder_name.len + file_name.len + 4) catch unreachable;
-    const full_bin_path = std.fmt.bufPrint(buffer_1, "{s}{s}.bin", .{ folder_name, file_name }) catch unreachable;
+pub fn auto_import(datablob: *main.Datablob, world: *ecs.world, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, allocator: std.mem.Allocator) ecs.entity_id {
+    const T = @typeInfo(@TypeOf(gltf_extract_resources)).@"fn".return_type.?;
+    const full_file_path = std.fmt.allocPrint(allocator, "{s}/{s}.gltf", .{ folder_name, file_name }) catch unreachable;
+    const full_bin_path = std.fmt.allocPrint(allocator, "{s}/{s}.bin", .{ folder_name, file_name }) catch unreachable;
+    defer allocator.free(full_bin_path);
 
-    const gltf_bytes = get_file_bytes(full_file_path, ctx.arena_allocator);
-    const bin_bytes = get_file_bytes(full_bin_path, ctx.arena_allocator);
-
-    const parsed_gltf = gltf_parse(gltf_bytes, ctx.arena_allocator);
-
-    const mesh_slice, const animation_slice, const skeleton_slice, const parent_child_map, const top_level, const skinned_mesh_to_skeleton = gltf_extract_resources(parsed_gltf, bin_bytes, folder_name, ctx.arena_allocator, skin_shader, static_shader, uv_checker_tex);
-
-    for (animation_slice) |A| {
-        res.get(main.animation_res).append(A) catch unreachable;
+    if (datablob.get_maybe(full_file_path, T)) |bundle| {
+        const mesh_slice, _, _, const skeleton_slice, const parent_child_map, const top_level_children, const skinned_mesh_to_skeleton = bundle.*;
+        return zeng.loader.instantiate_model_hierarchy(mesh_slice, parent_child_map, top_level_children, skeleton_slice, skinned_mesh_to_skeleton, world, allocator);
     }
 
-    return zeng.loader.instantiate_model_hierarchy(mesh_slice, parent_child_map, top_level, skeleton_slice, skinned_mesh_to_skeleton, world, ctx);
+    const gltf_bytes = get_file_bytes(full_file_path, allocator);
+    const bin_bytes = get_file_bytes(full_bin_path, allocator);
+
+    const parsed_gltf = gltf_parse(gltf_bytes, allocator);
+
+    const bundle: T = gltf_extract_resources(parsed_gltf, bin_bytes, folder_name, allocator, skin_shader, static_shader, uv_checker_tex);
+    const ptr = allocator.create(T) catch unreachable;
+    ptr.* = bundle;
+    datablob.put(full_file_path, ptr);
+
+    const mesh_slice, const animation_slice, const animation_name_slice, const skeleton_slice, const parent_child_map, const top_level_children, const skinned_mesh_to_skeleton = bundle;
+    for (animation_slice, animation_name_slice) |*_animation, animation_name| {
+        const full_animation_path = std.fmt.allocPrint(allocator, "{s}/animations/{s}", .{ full_file_path, animation_name }) catch unreachable;
+        std.debug.print("<<{s}>>\n", .{full_animation_path});
+        datablob.put(full_animation_path, _animation);
+    }
+
+    return zeng.loader.instantiate_model_hierarchy(mesh_slice, parent_child_map, top_level_children, skeleton_slice, skinned_mesh_to_skeleton, world, allocator);
 }

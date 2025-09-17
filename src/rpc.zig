@@ -17,7 +17,9 @@ pub fn CTS_print_int(i: i32) void {
     std.debug.print("here: {}\n", .{i});
 }
 
-pub const player_spawn_message = struct {};
+pub const player_spawn_message = struct {
+    SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
+};
 pub const snapshot_message = struct {
     position: zeng.vec3,
 };
@@ -40,7 +42,9 @@ pub const server_tick_offset = struct {
     server_time: f64,
     client_time: f64,
 };
-pub const missed_input = struct {};
+pub const missed_input = struct {
+    SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
+};
 pub const input_chunck = struct {
     arr: [30]input_message,
 };
@@ -54,7 +58,6 @@ pub const variable_input_message = struct {
         }
     }
 };
-
 pub const world_update = struct {
     tick: isize,
     server_player_matrix: zeng.world_matrix,

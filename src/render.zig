@@ -65,6 +65,7 @@ pub const color = struct {
     r: f32,
     g: f32,
     b: f32,
+    a: f32 = 1,
 
     pub const WHITE = color{ .r = 1.0, .g = 1.0, .b = 1.0 };
     pub const BLACK = color{ .r = 0.0, .g = 0.0, .b = 0.0 };
@@ -78,8 +79,9 @@ pub const color = struct {
     pub const ORANGE = color{ .r = 1.0, .g = 0.5, .b = 0.0 };
     pub const PURPLE = color{ .r = 0.5, .g = 0.0, .b = 0.5 };
     pub const LIME = color{ .r = 0.0, .g = 1.0, .b = 0.5 };
+    pub const CLEAR = color{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 };
 };
-pub fn draw_rect(ctx: zeng.engine_context, ui_ren: *@import("main.zig").rect_render_res, x: f32, y: f32, w: f32, h: f32, _color: color) void {
+pub fn draw_rect(__graphics: zeng.__graphics_module, ui_ren: *@import("main.zig").rect_render_res, x: f32, y: f32, w: f32, h: f32, _color: color) void {
     zeng.gl.useProgram(ui_ren.shader_program);
     zeng.gl.bindVertexArray(ui_ren.vao);
 
@@ -88,7 +90,7 @@ pub fn draw_rect(ctx: zeng.engine_context, ui_ren: *@import("main.zig").rect_ren
     const pos_location = zeng.gl.getUniformLocation(ui_ren.shader_program, "screen_pos");
     const size_location = zeng.gl.getUniformLocation(ui_ren.shader_program, "dims");
     const color_location = zeng.gl.getUniformLocation(ui_ren.shader_program, "_color");
-    zeng.gl.uniform2f(screen_res_location, @floatFromInt(ctx.width), @floatFromInt(ctx.height));
+    zeng.gl.uniform2f(screen_res_location, @floatFromInt(__graphics.width), @floatFromInt(__graphics.height));
     zeng.gl.uniform2f(pos_location, x, y);
     zeng.gl.uniform2f(size_location, w, h);
     zeng.gl.uniform3f(color_location, _color.r, _color.g, _color.b);
@@ -97,7 +99,7 @@ pub fn draw_rect(ctx: zeng.engine_context, ui_ren: *@import("main.zig").rect_ren
     zeng.gl.drawElements(zeng.gl.TRIANGLES, 6, zeng.gl.UNSIGNED_INT, null);
     zeng.gl.enable(zeng.gl.DEPTH_TEST);
 
-    zeng.gl_log_errors() catch void{};
+    zeng.gl_log_errors();
 }
 
 pub const triangle_debug_info = struct {
