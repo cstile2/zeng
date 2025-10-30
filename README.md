@@ -1,4 +1,4 @@
-A handmade game engine written in the Zig programming language. This project was designed to give power to developers without dictating their achitecture. I wanted to give users full-control over the application entry point and main loop, making this project a simple library.
+A handmade game engine written in C++ and Zig. This project was designed to give power to developers without dictating their achitecture. I wanted to give users full-control over the application entry point and main loop, allowing a wide range of use cases for this engine.
 
 Features:
 
@@ -20,3 +20,4 @@ Features:
 This repo includes the engine modules as well as an example main.zig file to demonstrate the engine in a first-person-shooter context. This example includes first-person-shooter gameplay, multiplayer over UDP, entity interpolation, client-side prediction, and more!
 
 This project currently only works for Windows.
+
