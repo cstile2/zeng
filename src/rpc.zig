@@ -3,6 +3,7 @@ const std = @import("std");
 const zeng = @import("zeng.zig");
 const main = @import("main.zig");
 const net = @import("networking.zig");
+const Player = @import("user/player.zig");
 
 pub const REMOTE_PROCEDURES = .{
     rpc.CTS_print_hello,
@@ -29,10 +30,11 @@ pub const input_message = struct {
     move_vect: zeng.vec2,
     rot_x: f64,
     rot_y: f64,
+    shoot: bool,
 };
 pub const state_correction = struct {
     tick: isize,
-    state: main.player,
+    state: Player.player,
     world_matrix: zeng.world_matrix,
 };
 pub const client_tick = struct {
@@ -61,10 +63,15 @@ pub const variable_input_message = struct {
 pub const world_update = struct {
     tick: isize,
     server_player_matrix: zeng.world_matrix,
+    // server_player_animation: []const u8,
+    // server_player_animation_time: f32,
     cube_pos: zeng.vec3,
 };
 // client send sync to server
 // server send sync to client
+pub const hitmarker = struct {
+    SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
+};
 
 pub const REMOTE_MESSAGE_TYPES = .{
     player_spawn_message,
@@ -76,4 +83,5 @@ pub const REMOTE_MESSAGE_TYPES = .{
     missed_input,
     input_chunck,
     world_update,
+    hitmarker,
 };

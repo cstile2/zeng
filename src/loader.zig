@@ -116,6 +116,25 @@ pub fn load_texture(path: anytype, srgb: bool, flip_y: bool) u32 {
 
     return ret;
 }
+
+pub fn serialized_size(T: type) usize {
+    switch (@typeInfo(T)) {
+        .int, .float, .bool, .pointer, .array => {
+            return @sizeOf(T);
+        },
+        .@"struct" => {
+            var sum: usize = 0;
+            inline for (std.meta.fields(T)) |f| {
+                sum += @sizeOf(f.type);
+            }
+            return sum;
+        },
+        else => {
+            // @compileError("this type cannot be serialized");
+            @compileLog(T);
+        },
+    }
+}
 pub fn serialize_to_bytes(payload: anytype, dest_bytes: []u8, dest_curr_byte: *u32) void {
     switch (@typeInfo(@TypeOf(payload))) {
         .int, .float, .bool, .pointer, .array => {
@@ -133,7 +152,7 @@ pub fn serialize_to_bytes(payload: anytype, dest_bytes: []u8, dest_curr_byte: *u
         },
     }
 }
-pub fn deserialize_from_bytes(T: type, dest_bytes: [*]u8, src_bytes: []u8, src_curr_byte: *u32, offset: u32) void {
+pub fn deserialize_from_bytes(T: type, dest_bytes: [*]u8, src_bytes: []const u8, src_curr_byte: *u32, offset: u32) void {
     switch (@typeInfo(T)) {
         .int, .float, .bool, .pointer, .array => {
             @memcpy(dest_bytes[offset .. offset + @sizeOf(T)], src_bytes[src_curr_byte.* .. src_curr_byte.* + @sizeOf(T)]);
@@ -149,6 +168,13 @@ pub fn deserialize_from_bytes(T: type, dest_bytes: [*]u8, src_bytes: []u8, src_c
         },
     }
 }
+pub fn serialize_to_byte_slice(payload: anytype, allocator: std.mem.Allocator) []u8 {
+    const s = allocator.alloc(u8, serialized_size(@TypeOf(payload))) catch unreachable;
+    var curr: u32 = 0;
+    serialize_to_bytes(payload, s, &curr);
+    return s;
+}
+
 pub fn create_square_mesh() struct { u32, c_int } {
     const vertices = [20]f32{
         1.0, 1.0, 0.0, 1.0, 1.0, // top right
@@ -1417,7 +1443,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
 pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, parent_child_map: std.AutoArrayHashMap(usize, std.ArrayList(usize)), top_level_children: std.AutoHashMap(usize, void), skeleton_slice: []zeng.skeleton, skinmesh_to_skeleton: std.AutoHashMap(usize, usize), world: *ecs.world, allocator: std.mem.Allocator) ecs.entity_id {
     var new_skeletons = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
     for (skeleton_slice) |skel| {
-        const e = world.spawn(.{skel});
+        const e = world.spawn(.{deep_copy_skeleton(skel, allocator)});
         new_skeletons.append(allocator, e) catch unreachable;
     }
 
@@ -1504,4 +1530,23 @@ pub fn auto_import(datablob: *main.Datablob, world: *ecs.world, folder_name: any
     }
 
     return zeng.loader.instantiate_model_hierarchy(mesh_slice, parent_child_map, top_level_children, skeleton_slice, skinned_mesh_to_skeleton, world, allocator);
+}
+
+pub fn deep_copy_skeleton(s: zeng.skeleton, allocator: std.mem.Allocator) zeng.skeleton {
+    var ret: zeng.skeleton = undefined;
+    ret.animations = s.animations.clone(allocator) catch unreachable;
+
+    ret.bone_parent_indices = allocator.alloc(isize, s.bone_parent_indices.len) catch unreachable;
+    @memcpy(ret.bone_parent_indices, s.bone_parent_indices);
+
+    ret.inverse_bind_matrices = allocator.alloc([16]f32, s.inverse_bind_matrices.len) catch unreachable;
+    @memcpy(ret.inverse_bind_matrices, s.inverse_bind_matrices);
+
+    ret.local_bone_matrices = allocator.alloc([16]f32, s.local_bone_matrices.len) catch unreachable;
+    @memcpy(ret.local_bone_matrices, s.local_bone_matrices);
+
+    ret.model_bone_matrices = allocator.alloc([16]f32, s.model_bone_matrices.len) catch unreachable;
+    @memcpy(ret.model_bone_matrices, s.model_bone_matrices);
+
+    return ret;
 }

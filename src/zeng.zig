@@ -905,15 +905,15 @@ pub const commands = struct {
     remote_messages_send_queue_len: u16,
 
     // reliable_resend_queue: std.ArrayList(remote_message),
-    reliable_message_seqs: std.AutoHashMap(usize, remote_message),
+    // reliable_message_seqs: std.AutoHashMap(usize, remote_message),
     // reliable_resend_queue: [100]remote_message,
 
-    curr_seq: usize = 1,
+    // curr_seq: usize = 1,
 
     time: f64 = 0.0,
 
-    last_recieved_seq: usize = 0,
-    ack_bits: u32 = 0,
+    // last_recieved_seq: usize = 0,
+    // ack_bits: u32 = 0,
 
     random: std.Random,
 
@@ -989,7 +989,8 @@ pub const commands = struct {
     };
 
     pub fn get_sim_send_time(self: *commands) f64 {
-        const jittered_delay = self.random.float(f32) * 0.1 + 0.9; // 60ms + 150ms
+        // const jittered_delay = self.random.float(f32) * 0.06 + 0.15; // 60ms + 150ms
+        const jittered_delay = self.random.float(f32) * 0.05 + 0.1; // 60ms + 150ms
         return self.time + jittered_delay;
     }
 
@@ -997,7 +998,6 @@ pub const commands = struct {
         for (self.remote_messages_send_queue[0..self.remote_messages_send_queue_len]) |mes| {
             self.allocator.free(mes.payload);
         }
-        self.reliable_message_seqs.deinit();
     }
 };
 
@@ -1169,6 +1169,7 @@ pub fn set_cursor(cursor_type: cursor_type_enum) void {
 }
 
 pub var global_mouse_pos: [2]i16 = .{ 0, 0 };
+pub var key_press_messages: std.ArrayList(u8) = undefined;
 pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lParam: c.LPARAM) callconv(.c) c.LRESULT {
     switch (msg) {
         c.WM_DESTROY => {
@@ -1216,6 +1217,16 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
         c.WM_KEYDOWN => {
             const vk: c.UINT = @intCast(wParam);
             key_down[vk] = true;
+            return 0;
+        },
+        c.WM_CHAR => {
+            const ch: u16 = @intCast(wParam);
+            // Convert UTF-16 to UTF-8
+            var buffer: [4]u8 = undefined;
+            _ = std.unicode.utf16LeToUtf8(&buffer, &[_]u16{ch}) catch return 0;
+            // std.debug.print("Character pressed: {c}\n", .{buffer[0]});
+            key_press_messages.append(main.global_allocator, buffer[0]) catch unreachable;
+
             return 0;
         },
         c.WM_KEYUP => {
@@ -1279,20 +1290,22 @@ pub fn events(T: type) type {
         const is_events = void{};
 
         array: std.ArrayList(T),
-        addresses: ?std.ArrayList(net.sockaddr_socklen_t) = null,
+        addresses: ?std.ArrayList(net.peer_info_t) = null,
+        allocator: std.mem.Allocator,
 
         pub fn init(allocator: std.mem.Allocator, networked: bool) @This() {
-            var ret = @This(){ .array = std.ArrayList(T).initCapacity(allocator, 0) catch unreachable };
-            if (networked) ret.addresses = std.ArrayList(net.sockaddr_socklen_t).initCapacity(allocator, 0) catch unreachable;
+            var ret = @This(){ .array = std.ArrayList(T).initCapacity(allocator, 0) catch unreachable, .allocator = allocator };
+            if (networked) ret.addresses = std.ArrayList(net.peer_info_t).initCapacity(allocator, 0) catch unreachable;
             return ret;
         }
         pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
             self.array.deinit(allocator);
         }
         pub fn send(this: *@This(), event: T) void {
-            this.array.append(event) catch unreachable;
+            this.array.append(this.allocator, event) catch unreachable;
+            (this.addresses orelse return).append(this.allocator, std.mem.zeroes(net.peer_info_t)) catch unreachable;
         }
-        pub fn send_with_address(this: *@This(), allocator: std.mem.Allocator, event: T, address: net.sockaddr_socklen_t) void {
+        pub fn send_with_address(this: *@This(), allocator: std.mem.Allocator, event: T, address: net.peer_info_t) void {
             this.array.append(allocator, event) catch unreachable;
             this.addresses.?.append(allocator, address) catch unreachable;
         }

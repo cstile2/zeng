@@ -2,7 +2,7 @@ const zeng = @import("zeng.zig");
 const std = @import("std");
 const ecs = @import("ecs.zig");
 
-pub fn draw_text(string: []const u8, ui_ren: *@import("main.zig").text_render_res, x: f32, y: f32) void {
+pub fn draw_text(string: []const u8, ui_ren: *@import("main.zig").text_render_res, x: f32, y: f32, ctx: zeng.__graphics_module) void {
     zeng.gl.disable(zeng.gl.DEPTH_TEST);
     defer zeng.gl.enable(zeng.gl.DEPTH_TEST);
 
@@ -10,12 +10,15 @@ pub fn draw_text(string: []const u8, ui_ren: *@import("main.zig").text_render_re
     zeng.gl.bindVertexArray(ui_ren.vao);
     zeng.gl.bindTexture(zeng.gl.TEXTURE_2D, ui_ren.texture);
 
-    zeng.gl.uniform2f(zeng.gl.getUniformLocation(ui_ren.shader_program, "dims"), 0.02, 0.05);
+    zeng.gl.uniform2f(zeng.gl.getUniformLocation(ui_ren.shader_program, "dims"), 12, 18);
+    const screen_res_location = zeng.gl.getUniformLocation(ui_ren.shader_program, "screen_res");
+    zeng.gl.uniform2f(screen_res_location, @floatFromInt(ctx.width), @floatFromInt(ctx.height));
 
     var horizontal: usize = 0;
     for (string) |char| {
-        zeng.gl.uniform2f(zeng.gl.getUniformLocation(ui_ren.shader_program, "screen_pos"), @as(f32, @floatFromInt(horizontal)) * 0.038 + x, y);
-        zeng.gl.uniform2f(zeng.gl.getUniformLocation(ui_ren.shader_program, "image_point"), @as(f32, @floatFromInt((char - 32) % 16)), @as(f32, @floatFromInt((char - 32) / 16)));
+        const _char = char - 32;
+        zeng.gl.uniform2f(zeng.gl.getUniformLocation(ui_ren.shader_program, "screen_pos"), @as(f32, @floatFromInt(horizontal)) * 12 + x, y);
+        zeng.gl.uniform2f(zeng.gl.getUniformLocation(ui_ren.shader_program, "image_point"), @as(f32, @floatFromInt(_char % 16)), @as(f32, @floatFromInt(_char / 16)));
         zeng.gl.drawElements(zeng.gl.TRIANGLES, ui_ren.indices_len, zeng.gl.UNSIGNED_INT, null);
         horizontal += 1;
     }

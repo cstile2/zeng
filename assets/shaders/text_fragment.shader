@@ -20,7 +20,9 @@ void main() {
     float _v = 1.0 / 6.0;
 
     uv.x += image_point.x * _h + 0.005;
-    uv.y += (-1-image_point.y) * _v + 0.02;
+    uv.y += (image_point.y) * _v + 0.02;
 
     FragColor = vec4(vec3(1), remap(0.5 - d, 0.5 + d, 0.0, 1.0, texture(image_texture, uv).x));
+    // FragColor = vec4(vec3(1) * remap(0.5 - d, 0.5 + d, 0.0, 1.0, texture(image_texture, uv).x), 1.0);
+    // FragColor = vec4(1,0,1,1);
 }
