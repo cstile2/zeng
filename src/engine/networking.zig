@@ -3,7 +3,7 @@ const std = @import("std");
 const ecs = @import("ecs.zig");
 const zeng = @import("zeng.zig");
 const rpc = @import("rpc.zig");
-const main = @import("main.zig");
+// const main = @import("main.zig");
 
 const FIONBIO: u32 = 0x8004667e;
 

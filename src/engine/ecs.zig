@@ -1,7 +1,8 @@
 const std = @import("std");
 const utils = @import("utils.zig");
-const main = @import("main.zig");
-const COMPONENT_TYPES = main.COMPONENT_TYPES;
+const zeng = @import("zeng.zig");
+// const main = @import("main.zig");
+const COMPONENT_TYPES = zeng.COMPONENT_TYPES;
 
 pub const comp_rtti = struct {
     hash: u64,
@@ -294,7 +295,7 @@ pub const world = struct {
         transfer_entity(self, old_table, new_table, old_edl);
         @memcpy(new_table.get_slice(t.component_id, new_table.count - 1), ptr[0..t.type_size]);
     }
-    pub fn runtime_get(self: *const world, id: entity_id, name: @import("main.zig").component_name) ?*anyopaque {
+    pub fn runtime_get(self: *const world, id: entity_id, name: zeng.component_name) ?*anyopaque {
         const unstable = self.locations.get(id).?;
         const ptr = (self.tables.getPtr(unstable.archetype_hash) orelse return null).get_(name, unstable.row);
 
@@ -439,7 +440,7 @@ pub const archetype_table = struct {
         if (row >= self.count) unreachable;
         return (self.storages.getPtr(comptime COMP_TYPE_TO_ID(T)) orelse return null).get(row, T);
     }
-    pub fn get_(self: *archetype_table, name: main.component_name, row: u64) ?*anyopaque {
+    pub fn get_(self: *archetype_table, name: zeng.component_name, row: u64) ?*anyopaque {
         if (row >= self.count) unreachable;
         return (self.storages.getPtr(@intFromEnum(name)) orelse return null).get_(row);
     }

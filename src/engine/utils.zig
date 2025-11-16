@@ -52,7 +52,7 @@ pub fn tuple_of_ptrs(comptime types: anytype) type {
     return payload_type;
 }
 pub fn type_id(comptime T: type) usize {
-    return @intFromPtr(&@typeName(T));
+    return @intFromPtr(@typeName(T));
 }
 
 var type_registry: std.StringArrayHashMap(u32) = undefined;

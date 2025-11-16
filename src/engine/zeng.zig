@@ -1,9 +1,8 @@
 const zeng = @This();
 const std = @import("std");
-const utils = @import("utils.zig");
-const ecs = @import("ecs.zig");
-const rpc = @import("rpc.zig");
-const main = @import("main.zig");
+pub const utils = @import("utils.zig");
+pub const ecs = @import("ecs.zig");
+pub const rpc = @import("rpc.zig");
 pub const net = @import("networking.zig");
 pub const gl = @import("gl");
 pub const c = @cImport({
@@ -18,6 +17,9 @@ pub const c = @cImport({
 });
 pub const loader = @import("loader.zig");
 pub const render = @import("render.zig");
+pub const aud = @import("audio.zig");
+pub const phy = @import("physics.zig");
+pub const Player = @import("user/player.zig");
 
 // Engine structs
 pub const vec2 = struct {
@@ -272,6 +274,296 @@ pub const cpu_mesh = struct {
     positions: []vec3,
 };
 pub const skeleton_pose = struct { []zeng.quat, []zeng.vec3, []zeng.vec3 };
+
+pub var global_world_ptr: *ecs.world = undefined;
+pub var global_player_entity: ecs.entity_id = undefined;
+pub var global_camera_entity: ecs.entity_id = undefined;
+pub var global_mouse_pressed = false;
+pub var global_allocator: std.mem.Allocator = undefined;
+
+pub const time_res = struct {
+    delta_time: f64,
+    dt: f32,
+    fixed_delta_time: f64,
+    fixed_dt: f32,
+};
+pub const input_res = struct {
+    t_down_last_frame: bool,
+};
+pub const main_camera_res = struct {
+    id: ecs.entity_id,
+};
+pub const text_render_res = struct {
+    shader_program: u32,
+    texture: u32,
+    vao: u32,
+    indices_len: c_int,
+};
+pub const rect_render_res = struct {
+    shader_program: u32,
+    vao: u32,
+    indices_len: c_int,
+};
+pub const networking_res = struct {
+    main_socket: zeng.net.socket_t,
+    server_address: zeng.net.Address,
+    is_server: bool = undefined,
+};
+pub const debug_res = @import("render.zig").triangle_debug_info;
+pub const cube_tracker_res = struct {
+    map: std.AutoHashMap(phy.ivec3, void),
+    cube_mesh: zeng.mesh,
+    cube_mesh_data: *const anyopaque,
+};
+pub const main_player_res = struct {
+    id: ecs.entity_id,
+};
+pub const sphere_collider = struct {
+    radius: f32 = 1.0,
+};
+pub const fly_component = struct {
+    // SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
+};
+pub const follow_component = struct {
+    anchor_point: zeng.vec3,
+    target: ecs.entity_id,
+};
+pub const animation_player = struct {
+    time: f32,
+    current_animation: usize,
+    animations: []zeng.animation,
+    skeleton_ptr: *zeng.skeleton,
+};
+pub const animation_component = struct {
+    time: f32,
+    current_animation: usize,
+};
+pub const input_implement = struct {
+    move_fn: *const fn () zeng.vec2,
+    jump_fn: *const fn () bool,
+    pub fn default_move_fn() zeng.vec2 {
+        var input_vect = zeng.vec2.ZERO;
+        if (zeng.get_key(.a)) {
+            input_vect.x += -1;
+        }
+        if (zeng.get_key(.d)) {
+            input_vect.x += 1;
+        }
+        if (zeng.get_key(.w)) {
+            input_vect.y += -1;
+        }
+        if (zeng.get_key(.s)) {
+            input_vect.y += 1;
+        }
+        return input_vect.clamp(1);
+    }
+    pub fn default_move_fn2() zeng.vec2 {
+        var input_vect = zeng.vec2.ZERO;
+        if (zeng.get_key(.left)) {
+            input_vect.x += -1;
+        }
+        if (zeng.get_key(.right)) {
+            input_vect.x += 1;
+        }
+        if (zeng.get_key(.up)) {
+            input_vect.y += -1;
+        }
+        if (zeng.get_key(.down)) {
+            input_vect.y += 1;
+        }
+        return input_vect.clamp(1);
+    }
+    pub fn default_jump() bool {
+        return zeng.get_key(.space);
+    }
+    pub fn default_jump2() bool {
+        return zeng.get_key(.y);
+    }
+};
+pub const floater_component = struct {
+    // SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
+};
+pub const snapshot_interpolator = struct { // interpolates visual elements between server updates, smoothing movement of remote players
+    buffer: zeng.ring_buffer(struct { position: zeng.vec3, tick: isize }),
+};
+pub const frame_interpolator = struct { // interpolates visual elements between simulation ticks, smoothing movement for high FPS
+    pos_a: zeng.vec3,
+    pos_b: zeng.vec3,
+
+    rot_a: zeng.quat,
+    rot_b: zeng.quat,
+
+    pub fn store(self: *@This(), mat: [16]f32) void {
+        self.pos_a = self.pos_b;
+        self.pos_b = zeng.mat_position(mat);
+
+        self.rot_a = self.rot_b;
+        self.rot_b = zeng.mat_to_quat(mat);
+    }
+    pub fn get_matrix(self: @This(), t_value: f32) [16]f32 {
+        const pos = self.pos_a.lerp(self.pos_b, t_value);
+        const rot = self.rot_a.nlerp(self.rot_b, t_value);
+
+        return zeng.mat_tran(zeng.quat_to_mat(rot), pos);
+    }
+};
+pub const net_id_component = struct {
+    net_id: u32,
+    remote_peer: ?net.peer_info_t,
+};
+
+pub const client_info = struct {
+    input_buffer: zeng.ring_buffer(rpc.input_message),
+    player: ecs.entity_id,
+};
+
+pub const COMPONENT_TYPES = [_]type{
+    zeng.mesh,
+    zeng.camera,
+    zeng.skinned_mesh,
+    zeng.world_matrix,
+    sphere_collider,
+    fly_component,
+    follow_component,
+    zeng.children,
+    zeng.local_matrix,
+    zeng.Player.player,
+    animation_component,
+    zeng.skeleton,
+    input_implement,
+    rpc.input_message,
+    floater_component,
+    snapshot_interpolator,
+    frame_interpolator,
+    net_id_component,
+};
+
+pub const Datablob = struct {
+    map: std.StringHashMap(*anyopaque),
+
+    pub fn get(this: *@This(), str: []const u8, T: type) *T {
+        return @ptrCast(@alignCast(this.map.get(str).?));
+    }
+    pub fn get_maybe(this: *@This(), str: []const u8, T: type) ?*T {
+        return @ptrCast(@alignCast(this.map.get(str) orelse return null));
+    }
+    pub fn put(this: *@This(), str: []const u8, ptr: *anyopaque) void {
+        this.map.put(str, ptr) catch unreachable;
+    }
+};
+
+pub fn find_component_of_type(world: *ecs.world, parent: ecs.entity_id, component_type: type, q_children: *ecs.query(.{zeng.children})) ?ecs.entity_id {
+    if (world.get(parent, component_type) != null) return parent;
+
+    const childrens = world.get(parent, zeng.children) orelse return null;
+    for (childrens.items) |child| {
+        const res = find_component_of_type(world, child, component_type, q_children);
+        if (res != null) return res;
+    }
+
+    return null;
+}
+pub fn find_component_of_type_actual(world: *ecs.world, parent: ecs.entity_id, component_type: type, q_children: *ecs.query(.{zeng.children})) ?*component_type {
+    const guy = world.get(parent, component_type);
+    if (guy != null) return guy.?;
+
+    const childrens = world.get(parent, zeng.children) orelse return null;
+    for (childrens.items) |child| {
+        const res = find_component_of_type_actual(world, child, component_type, q_children);
+        if (res != null) return res;
+    }
+
+    return null;
+}
+
+pub fn binary_search(inputs: []const f32, time: f32) usize {
+    if (time <= inputs[0]) return 0;
+    if (time >= inputs[inputs.len - 1]) return inputs.len - 2;
+
+    var left: usize = 0;
+    var right: usize = inputs.len - 1;
+
+    while (left < right - 1) {
+        const mid = left + (right - left) / 2;
+        if (inputs[mid] <= time) {
+            left = mid;
+        } else {
+            right = mid;
+        }
+    }
+    return left;
+}
+pub fn get_animation_pose_with_weight(animation: *zeng.loader.animation, time_norm: f32, pose: zeng.skeleton_pose, weight: f32) void {
+    const time = time_norm * animation.duration;
+    const rotations = pose[0];
+    const translations = pose[1];
+    const scales = pose[2];
+    for (animation.channels) |channel| {
+        const idx = binary_search(channel.inputs, time);
+        const lerp_amount = zeng.inv_lerp(channel.inputs[idx], channel.inputs[idx + 1], time);
+
+        if (channel.outputs == .rotation) {
+            rotations[channel.target] = channel.outputs.rotation[idx].nlerp(channel.outputs.rotation[idx + 1], lerp_amount).mult(weight);
+        } else if (channel.outputs == .translation) {
+            translations[channel.target] = channel.outputs.translation[idx].lerp(channel.outputs.translation[idx + 1], lerp_amount).mult(weight);
+        } else if (channel.outputs == .scale) {
+            scales[channel.target] = channel.outputs.scale[idx].lerp(channel.outputs.scale[idx + 1], lerp_amount).mult(weight);
+        }
+    }
+}
+pub fn add_animation_pose_with_weight(animation: *zeng.loader.animation, time_norm: f32, pose: zeng.skeleton_pose, weight: f32) void {
+    const time = time_norm * animation.duration;
+    const rotations = pose[0];
+    const translations = pose[1];
+    const scales = pose[2];
+    for (animation.channels) |channel| {
+        const idx = binary_search(channel.inputs, time);
+        const lerp_amount = zeng.inv_lerp(channel.inputs[idx], channel.inputs[idx + 1], time);
+
+        if (channel.outputs == .rotation) {
+            rotations[channel.target] = rotations[channel.target].add2(channel.outputs.rotation[idx].nlerp(channel.outputs.rotation[idx + 1], lerp_amount).mult(weight));
+        } else if (channel.outputs == .translation) {
+            translations[channel.target] = translations[channel.target].add(channel.outputs.translation[idx].lerp(channel.outputs.translation[idx + 1], lerp_amount).mult(weight));
+        } else if (channel.outputs == .scale) {
+            scales[channel.target] = scales[channel.target].add(channel.outputs.scale[idx].lerp(channel.outputs.scale[idx + 1], lerp_amount).mult(weight));
+        }
+    }
+}
+pub fn normalize_pose_quaternions(pose: zeng.skeleton_pose) void {
+    const rotations = pose[0];
+    for (rotations) |*r| {
+        r.* = r.normalize();
+    }
+}
+pub fn apply_pose_to_skeleton(_skeleton: *zeng.skeleton, pose: zeng.skeleton_pose) void {
+    var curr: usize = 0;
+    while (curr < _skeleton.bone_parent_indices.len) {
+        _skeleton.local_bone_matrices[curr] = zeng.mat_tran(zeng.mat_mult(zeng.quat_to_mat(pose[0][curr]), zeng.mat_scal(zeng.mat_identity, pose[2][curr])), pose[1][curr]);
+        const parent_index = _skeleton.bone_parent_indices[curr];
+        if (parent_index != -1) {
+            _skeleton.local_bone_matrices[curr] = zeng.mat_mult(_skeleton.local_bone_matrices[@intCast(parent_index)], _skeleton.local_bone_matrices[curr]);
+        }
+        _skeleton.model_bone_matrices[curr] = zeng.mat_mult(_skeleton.local_bone_matrices[curr], _skeleton.inverse_bind_matrices[curr]);
+        curr += 1;
+    }
+}
+pub fn matrix_use_rotations(matrix: *zeng.world_matrix, x: f64, y: f64) void {
+    const rot_mat_hor = zeng.mat_axis_angle(zeng.vec3.UP, @floatCast(x * -0.003));
+    const rot_mat_vert = zeng.mat_axis_angle(zeng.vec3.RIGHT, @floatCast(y * -0.003));
+    matrix.* = zeng.mat_tran(zeng.mat_mult(rot_mat_hor, rot_mat_vert), zeng.mat_position(matrix.*));
+}
+pub fn create_pose(allocator: std.mem.Allocator, num: usize) zeng.skeleton_pose {
+    const rotations = allocator.alloc(zeng.quat, num) catch unreachable;
+    const translations = allocator.alloc(zeng.vec3, num) catch unreachable;
+    const scales = allocator.alloc(zeng.vec3, num) catch unreachable;
+
+    return .{ rotations, translations, scales };
+}
+pub fn free_pose(allocator: std.mem.Allocator, pose: zeng.skeleton_pose) void {
+    allocator.free(pose[0]);
+    allocator.free(pose[1]);
+    allocator.free(pose[2]);
+}
 
 // Math
 pub fn quat_to_mat(q: quat) [16]f32 {
@@ -765,7 +1057,7 @@ pub const __graphics_module = struct {
 pub fn window_resize_handler(width: u32, height: u32) void {
     zeng.gl.viewport(0, 0, @bitCast(width), @bitCast(height));
 
-    const cam = main.global_world_ptr.get(main.global_camera_entity, zeng.camera).?;
+    const cam = global_world_ptr.get(global_camera_entity, zeng.camera).?;
     cam.projection_matrix = zeng.mat_perspective_projection(1.5, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
 }
 fn key_callback(window: zeng.glfw.Window, key: zeng.glfw.Key, scancode: i32, action: zeng.glfw.Action, mods: zeng.glfw.Mods) void {
@@ -1033,7 +1325,7 @@ pub fn start_of_frame() void {
 }
 pub fn end_of_frame(res: *resources_t) void {
     const new_time = zeng.timer_get();
-    res.get(main.time_res).delta_time = zeng.timer_calc_delta(old_time, new_time);
+    res.get(time_res).delta_time = zeng.timer_calc_delta(old_time, new_time);
     old_time = new_time;
     // std.time.sleep(std.time.ns_per_s / 60);
 }
@@ -1193,7 +1485,7 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
                 const _dx = raw.data.mouse.lLastX;
                 const _dy = raw.data.mouse.lLastY;
 
-                const _input = main.global_world_ptr.get(main.global_player_entity, rpc.input_message).?;
+                const _input = global_world_ptr.get(global_player_entity, rpc.input_message).?;
                 _input.rot_x += @as(f64, @floatFromInt(_dx)) * 0.7;
                 _input.rot_y += @as(f64, @floatFromInt(_dy)) * 0.7;
             }
@@ -1201,7 +1493,7 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
             const flags = raw.data.mouse.unnamed_0.unnamed_0.usButtonFlags;
             if ((flags & c.RI_MOUSE_LEFT_BUTTON_DOWN) != 0) {
                 mouse_button_down[@intFromEnum(mouse_button.left)] = true;
-                main.global_mouse_pressed = true;
+                global_mouse_pressed = true;
             }
             if ((flags & c.RI_MOUSE_LEFT_BUTTON_UP) != 0) {
                 mouse_button_down[@intFromEnum(mouse_button.left)] = false;
@@ -1225,7 +1517,7 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
             var buffer: [4]u8 = undefined;
             _ = std.unicode.utf16LeToUtf8(&buffer, &[_]u16{ch}) catch return 0;
             // std.debug.print("Character pressed: {c}\n", .{buffer[0]});
-            key_press_messages.append(main.global_allocator, buffer[0]) catch unreachable;
+            key_press_messages.append(global_allocator, buffer[0]) catch unreachable;
 
             return 0;
         },

@@ -1,7 +1,7 @@
 const std = @import("std");
 const zeng = @import("zeng.zig");
 const ecs = @import("ecs.zig");
-const main = @import("main.zig");
+// const main = @import("main.zig");
 const phy = @import("physics.zig");
 
 pub fn get_file_bytes(filepath: []const u8, allocator: std.mem.Allocator) []u8 {
@@ -1501,7 +1501,7 @@ pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, parent_chi
 
     return model_root;
 }
-pub fn auto_import(datablob: *main.Datablob, world: *ecs.world, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, allocator: std.mem.Allocator) ecs.entity_id {
+pub fn auto_import(datablob: *zeng.Datablob, world: *ecs.world, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, allocator: std.mem.Allocator) ecs.entity_id {
     const T = @typeInfo(@TypeOf(gltf_extract_resources)).@"fn".return_type.?;
     const full_file_path = std.fmt.allocPrint(allocator, "{s}/{s}.gltf", .{ folder_name, file_name }) catch unreachable;
     const full_bin_path = std.fmt.allocPrint(allocator, "{s}/{s}.bin", .{ folder_name, file_name }) catch unreachable;

@@ -1,18 +1,18 @@
 const std = @import("std");
 const zeng = @import("../zeng.zig");
-const ecs = @import("../ecs.zig");
-const rpc = @import("../rpc.zig");
-const phy = @import("../physics.zig");
-const aud = @import("../audio.zig");
-const util = @import("../utils.zig");
-const net = @import("../networking.zig");
+const ecs = zeng.ecs;
+const rpc = zeng.rpc;
+const phy = zeng.phy;
+const aud = zeng.aud;
+const util = zeng.utils;
+const net = zeng.net;
 const gl = zeng.gl;
 const c = zeng.c;
-const main = @import("../main.zig");
+// const main = @import("../main.zig");
 
-const debug_res = main.debug_res;
-const Datablob = main.Datablob;
-const time_res = main.time_res;
+const debug_res = zeng.debug_res;
+const Datablob = zeng.Datablob;
+const time_res = zeng.time_res;
 
 pub const player = struct {
     velocity: zeng.vec3,
@@ -24,7 +24,7 @@ pub const player = struct {
     camera: ecs.entity_id,
 };
 
-pub fn create_player(datablob: *Datablob, world: *ecs.world, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator, net_id_c: main.net_id_component) ecs.entity_id {
+pub fn create_player(datablob: *Datablob, world: *ecs.world, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator, net_id_c: zeng.net_id_component) ecs.entity_id {
     const player_gltf = zeng.loader.auto_import(datablob, world, "assets/gltf", "static_test", skin_shader, static_shader, uv_checker_tex, allocator);
     world.add(player{ .velocity = zeng.vec3.ZERO, .ground_normal = zeng.vec3.UP, .grounded = false, .animation_controller = undefined, .camera = undefined }, player_gltf);
     world.add(rpc.input_message{ .tick = 0, .jump = false, .move_vect = zeng.vec2.ZERO, .rot_x = 0.0, .rot_y = 0.0, .shoot = false }, player_gltf);
@@ -32,9 +32,9 @@ pub fn create_player(datablob: *Datablob, world: *ecs.world, skin_shader: u32, s
 
     // find the first instance of a skinned mesh component > retrieve the entity with that skeleton > add animation component to the player skeleton entity > ...
     // attach skeleton entity to the animation_controller on player > add netid to player
-    const player_random_skinned_mesh = main.find_component_of_type(world, player_gltf, zeng.skinned_mesh, fet.fresh_query(.{zeng.children})).?;
+    const player_random_skinned_mesh = zeng.find_component_of_type(world, player_gltf, zeng.skinned_mesh, fet.fresh_query(.{zeng.children})).?;
     const player_skeleton_entity = world.get(player_random_skinned_mesh, zeng.skinned_mesh).?.skeleton;
-    world.add(main.animation_component{ .time = 0.0, .current_animation = 0 }, player_skeleton_entity);
+    world.add(zeng.animation_component{ .time = 0.0, .current_animation = 0 }, player_skeleton_entity);
     world.get(player_gltf, player).?.animation_controller = player_skeleton_entity;
 
     top_children.append(allocator, player_gltf) catch unreachable;
@@ -55,7 +55,7 @@ pub fn player_collision_system(player_q: *ecs.query(.{ player, zeng.world_matrix
     }
 }
 /// Runs player movement simulation and visual animations once per tick
-pub fn player_simulate_and_animate_system(datablob: *Datablob, time: *time_res, player_q: *ecs.query(.{ player, rpc.input_message, zeng.world_matrix }), animator_q: *ecs.query(.{ zeng.skeleton, main.animation_component })) !void {
+pub fn player_simulate_and_animate_system(datablob: *Datablob, time: *time_res, player_q: *ecs.query(.{ player, rpc.input_message, zeng.world_matrix }), animator_q: *ecs.query(.{ zeng.skeleton, zeng.animation_component })) !void {
     const animation_A = datablob.get("assets/gltf/static_test.gltf/animations/idle", zeng.loader.animation);
     const animation_B = datablob.get("assets/gltf/static_test.gltf/animations/run_in_place2", zeng.loader.animation);
 
@@ -65,7 +65,7 @@ pub fn player_simulate_and_animate_system(datablob: *Datablob, time: *time_res, 
 
         simulate_player(_player, input, matrix, time);
 
-        const anim = animator_q.get(_player.animation_controller, main.animation_component).?;
+        const anim = animator_q.get(_player.animation_controller, zeng.animation_component).?;
         const skel = animator_q.get(_player.animation_controller, zeng.skeleton).?;
         const blend = _player.velocity.div(3.0).clamp(1.0).length();
 
@@ -73,12 +73,12 @@ pub fn player_simulate_and_animate_system(datablob: *Datablob, time: *time_res, 
         while (anim.time > 1.0) {
             anim.time -= 1.0;
         }
-        const pose = main.create_pose(std.heap.c_allocator, skel.bone_parent_indices.len);
-        main.get_animation_pose_with_weight(animation_B, anim.time, pose, blend);
-        main.add_animation_pose_with_weight(animation_A, anim.time, pose, 1.0 - blend);
-        main.normalize_pose_quaternions(pose);
-        main.apply_pose_to_skeleton(skel, pose);
-        main.free_pose(std.heap.c_allocator, pose);
+        const pose = zeng.create_pose(std.heap.c_allocator, skel.bone_parent_indices.len);
+        zeng.get_animation_pose_with_weight(animation_B, anim.time, pose, blend);
+        zeng.add_animation_pose_with_weight(animation_A, anim.time, pose, 1.0 - blend);
+        zeng.normalize_pose_quaternions(pose);
+        zeng.apply_pose_to_skeleton(skel, pose);
+        zeng.free_pose(std.heap.c_allocator, pose);
     }
 }
 /// Collision detection for players - designed to be run multiple times per frame for latency compensation
@@ -224,7 +224,7 @@ pub fn simulate_player(_player: *player, input: *const rpc.input_message, matrix
     }
 }
 
-pub fn shoot_system(q: *ecs.query(.{ rpc.input_message, zeng.world_matrix, main.net_id_component }), datablob: *Datablob, peer_map: *std.AutoHashMap(net.peer_info_t, main.client_info), world: *ecs.world, commands: *zeng.commands, tracker: *net.packet_ack_tracker_t, hitmarker_events: *zeng.events(rpc.hitmarker)) !void {
+pub fn shoot_system(q: *ecs.query(.{ rpc.input_message, zeng.world_matrix, zeng.net_id_component }), datablob: *Datablob, peer_map: *std.AutoHashMap(net.peer_info_t, zeng.client_info), world: *ecs.world, commands: *zeng.commands, tracker: *net.packet_ack_tracker_t, hitmarker_events: *zeng.events(rpc.hitmarker)) !void {
     var players = std.ArrayList(ecs.entity_id).initCapacity(std.heap.c_allocator, 0) catch unreachable;
     defer players.deinit(std.heap.c_allocator);
 
@@ -232,11 +232,11 @@ pub fn shoot_system(q: *ecs.query(.{ rpc.input_message, zeng.world_matrix, main.
     while (it_.next()) |e| {
         players.append(std.heap.c_allocator, e.value_ptr.player) catch unreachable;
     }
-    players.append(std.heap.c_allocator, main.global_player_entity) catch unreachable;
+    players.append(std.heap.c_allocator, zeng.global_player_entity) catch unreachable;
 
     var it = q.iterator();
     while (it.next()) |curr| {
-        const input: *rpc.input_message, const matrix, const netid: *main.net_id_component = curr;
+        const input: *rpc.input_message, const matrix, const netid: *zeng.net_id_component = curr;
         if (input.shoot) {
             for (players.items) |thing| {
                 if (matrix == world.get(thing, zeng.world_matrix)) continue;

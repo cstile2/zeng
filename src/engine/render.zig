@@ -2,7 +2,7 @@ const zeng = @import("zeng.zig");
 const std = @import("std");
 const ecs = @import("ecs.zig");
 
-pub fn draw_text(string: []const u8, ui_ren: *@import("main.zig").text_render_res, x: f32, y: f32, ctx: zeng.__graphics_module) void {
+pub fn draw_text(string: []const u8, ui_ren: *zeng.text_render_res, x: f32, y: f32, ctx: zeng.__graphics_module) void {
     zeng.gl.disable(zeng.gl.DEPTH_TEST);
     defer zeng.gl.enable(zeng.gl.DEPTH_TEST);
 
@@ -84,7 +84,7 @@ pub const color = struct {
     pub const LIME = color{ .r = 0.0, .g = 1.0, .b = 0.5 };
     pub const CLEAR = color{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 };
 };
-pub fn draw_rect(__graphics: zeng.__graphics_module, ui_ren: *@import("main.zig").rect_render_res, x: f32, y: f32, w: f32, h: f32, _color: color) void {
+pub fn draw_rect(__graphics: zeng.__graphics_module, ui_ren: *zeng.rect_render_res, x: f32, y: f32, w: f32, h: f32, _color: color) void {
     zeng.gl.useProgram(ui_ren.shader_program);
     zeng.gl.bindVertexArray(ui_ren.vao);
 

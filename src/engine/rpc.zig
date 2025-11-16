@@ -1,7 +1,7 @@
 const rpc = @This();
 const std = @import("std");
 const zeng = @import("zeng.zig");
-const main = @import("main.zig");
+// const main = @import("main.zig");
 const net = @import("networking.zig");
 const Player = @import("user/player.zig");
 
