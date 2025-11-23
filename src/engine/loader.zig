@@ -897,7 +897,7 @@ fn get_component_type_enum(_type: usize) zeng.gl.GLenum {
         5123 => zeng.gl.UNSIGNED_SHORT,
         5125 => zeng.gl.UNSIGNED_INT,
         5126 => zeng.gl.FLOAT,
-        else => 1,
+        else => unreachable,
     };
 }
 fn get_offsest_and_length(accessor_index: usize, accessors: gltf.node, bufferviews: gltf.node) struct { usize, usize, usize } {
@@ -906,6 +906,14 @@ fn get_offsest_and_length(accessor_index: usize, accessors: gltf.node, buffervie
     const length: usize = @intCast(bufferviews.array.items[bv_index].object.get("byteLength").?.integer);
     const component_type: usize = @intCast(accessors.array.items[accessor_index].object.get("componentType").?.integer);
     return .{ offset, length, component_type };
+}
+fn get_offsest_and_length2(accessor_index: usize, accessors: gltf.node, bufferviews: gltf.node) struct { usize, usize, usize, usize } {
+    const bv_index: usize = @intCast(accessors.array.items[accessor_index].object.get("bufferView").?.integer);
+    const offset: usize = @intCast(bufferviews.array.items[bv_index].object.get("byteOffset").?.integer);
+    const length: usize = @intCast(bufferviews.array.items[bv_index].object.get("byteLength").?.integer);
+    const buffer: usize = @intCast(bufferviews.array.items[bv_index].object.get("buffer").?.integer);
+    const component_type: usize = @intCast(accessors.array.items[accessor_index].object.get("componentType").?.integer);
+    return .{ buffer, offset, length, component_type };
 }
 fn get_float_from_numeric(n: *gltf.node, idx: comptime_int) f32 {
     if (n.array.items[idx].* == .float)
@@ -916,7 +924,96 @@ fn get_float_from_numeric(n: *gltf.node, idx: comptime_int) f32 {
 
 pub var global_colliders: ?std.ArrayList(zeng.cpu_mesh) = null;
 pub var global_matrices: ?std.ArrayList(zeng.world_matrix) = null;
-pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, dependencies_path: []const u8, allocator: std.mem.Allocator, skin_shader_program: u32, static_shader_program: u32, default_texture: u32) struct { []scene_node_w_matrix, []animation, [][]const u8, []zeng.skeleton, std.AutoArrayHashMap(usize, std.ArrayList(usize)), std.AutoHashMap(usize, void), std.AutoHashMap(usize, usize) } {
+
+pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, parent_child_map: std.AutoArrayHashMap(usize, std.ArrayList(usize)), top_level_children: std.AutoHashMap(usize, void), skeleton_slice: []zeng.skeleton, skinmesh_to_skeleton: std.AutoHashMap(usize, usize), world: *ecs.world, allocator: std.mem.Allocator) ecs.entity_id {
+    var new_skeletons = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
+    for (skeleton_slice, 0..) |skel, i| {
+        std.debug.print("skeleton: {}\n", .{i});
+        const e = world.spawn(.{deep_copy_skeleton(skel, allocator)});
+        new_skeletons.append(allocator, e) catch unreachable;
+    }
+
+    var node_mapping = std.AutoArrayHashMap(usize, ecs.entity_id).init(allocator);
+    var root_child_list = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
+    for (mesh_slice) |mesh_like| {
+        if (mesh_like.node == .skinned_mesh) {
+            const entity_id = world.spawn(.{
+                zeng.mat_identity,
+                zeng.local_matrix{ .transform = mesh_like.matrix },
+                blk: {
+                    var new = mesh_like.node.skinned_mesh;
+                    new.skeleton = new_skeletons.items[skinmesh_to_skeleton.get(mesh_like.gltf_id).?];
+                    break :blk new;
+                },
+            });
+            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
+            node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
+        } else if (mesh_like.node == .static_mesh) {
+            const entity_id = world.spawn(.{
+                zeng.mat_identity,
+                zeng.local_matrix{ .transform = mesh_like.matrix },
+                mesh_like.node.static_mesh,
+            });
+            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
+            node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
+        } else if (mesh_like.node == .empty) {
+            const entity_id = world.spawn(.{
+                zeng.mat_identity,
+                zeng.local_matrix{ .transform = mesh_like.matrix },
+            });
+            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
+            node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
+        }
+    }
+
+    for (parent_child_map.keys(), parent_child_map.values()) |parent, children| {
+        if (node_mapping.get(parent)) |parent_e_id| {
+            const children_slice_component = allocator.alloc(ecs.entity_id, children.items.len) catch unreachable;
+
+            for (0.., children.items) |idx, child| {
+                const child_e_id = node_mapping.get(child).?;
+                children_slice_component[idx] = child_e_id;
+            }
+
+            world.add(zeng.children{ .items = children_slice_component }, parent_e_id);
+        }
+    }
+
+    const model_root = world.spawn(.{
+        zeng.mat_identity,
+        zeng.children{ .items = root_child_list.items },
+    });
+
+    return model_root;
+}
+
+pub fn deep_copy_skeleton(s: zeng.skeleton, allocator: std.mem.Allocator) zeng.skeleton {
+    var ret: zeng.skeleton = undefined;
+    // ret.animations = s.animations.clone(allocator) catch unreachable;
+
+    ret.bone_parent_indices = allocator.alloc(isize, s.bone_parent_indices.len) catch unreachable;
+    @memcpy(ret.bone_parent_indices, s.bone_parent_indices);
+
+    ret.inverse_bind_matrices = allocator.alloc([16]f32, s.inverse_bind_matrices.len) catch unreachable;
+    @memcpy(ret.inverse_bind_matrices, s.inverse_bind_matrices);
+
+    ret.local_bone_matrices = allocator.alloc([16]f32, s.local_bone_matrices.len) catch unreachable;
+    @memcpy(ret.local_bone_matrices, s.local_bone_matrices);
+
+    ret.model_bone_matrices = allocator.alloc([16]f32, s.model_bone_matrices.len) catch unreachable;
+    @memcpy(ret.model_bone_matrices, s.model_bone_matrices);
+
+    ret.default_bone_translations = allocator.alloc(zeng.vec3, s.model_bone_matrices.len) catch unreachable;
+    @memcpy(ret.default_bone_translations, s.default_bone_translations);
+    ret.default_bone_rotations = allocator.alloc(zeng.quat, s.model_bone_matrices.len) catch unreachable;
+    @memcpy(ret.default_bone_rotations, s.default_bone_rotations);
+    ret.default_bone_scales = allocator.alloc(zeng.vec3, s.model_bone_matrices.len) catch unreachable;
+    @memcpy(ret.default_bone_scales, s.default_bone_scales);
+
+    return ret;
+}
+
+pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, dependencies_path: []const u8, allocator: std.mem.Allocator, skin_shader_program: u32, static_shader_program: u32, default_texture: u32) struct { []scene_node_w_matrix, []animation, [][]const u8, []zeng.skeleton, std.AutoArrayHashMap(usize, std.ArrayList(usize)), std.AutoHashMap(usize, void), std.AutoHashMap(usize, usize) } {
     var result_top_level_objects = std.AutoHashMap(usize, void).init(allocator);
     for (root_n.?.object.get("scenes").?.array.items) |scene_n| {
         for (scene_n.object.get("nodes").?.array.items) |node_n| {
@@ -924,15 +1021,14 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
         }
     }
     var joint_to_skin = std.AutoHashMap(usize, usize).init(allocator);
-
     var skeleton_space_maps = std.ArrayList(std.AutoHashMap(usize, usize)).initCapacity(allocator, 0) catch unreachable;
+
     var result_nodes = std.ArrayList(scene_node_w_matrix).initCapacity(allocator, 0) catch unreachable;
     var result_animations = std.ArrayList(animation).initCapacity(allocator, 0) catch unreachable;
     var result_animation_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
     var result_skeletons = std.ArrayList(zeng.skeleton).initCapacity(allocator, 0) catch unreachable;
     var result_children_list = std.AutoArrayHashMap(usize, std.ArrayList(usize)).init(allocator);
     var result_skinmesh_to_skeleton = std.AutoHashMap(usize, usize).init(allocator);
-    // var result_collider_map = std.AutoHashMap(ecs.entity_id, usize).init(allocator);
 
     const nodes_n = root_n.?.object.get("nodes").?;
     const accessors_n = root_n.?.object.get("accessors").?;
@@ -961,11 +1057,31 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
             @memset(temp_bone_parent_indices, -1);
 
             const temp_inverse_bind_matrices = allocator.alloc(zeng.world_matrix, bone_counter) catch unreachable;
-            const offset: usize, const length: usize, _ = get_offsest_and_length(@intCast(current_skin_n.object.get("inverseBindMatrices").?.integer), accessors_n.*, bufferviews_n.*);
-            @memcpy(@as([*]u8, @ptrCast(temp_inverse_bind_matrices)), bin_data[offset .. offset + length]);
+            const this_buffer_index, const offset: usize, const length: usize, _ = get_offsest_and_length2(@intCast(current_skin_n.object.get("inverseBindMatrices").?.integer), accessors_n.*, bufferviews_n.*);
+            @memcpy(@as([*]u8, @ptrCast(temp_inverse_bind_matrices)), buffers[this_buffer_index][offset .. offset + length]);
 
+            const _default_bone_translations = allocator.alloc(zeng.vec3, temp_bone_parent_indices.len) catch unreachable;
+            const _default_bone_rotations = allocator.alloc(zeng.quat, temp_bone_parent_indices.len) catch unreachable;
+            const _default_bone_scales = allocator.alloc(zeng.vec3, temp_bone_parent_indices.len) catch unreachable;
+            for (_default_bone_scales) |*s| {
+                s.* = zeng.vec3.ONE;
+            }
+            for (_default_bone_rotations) |*r| {
+                r.* = zeng.quat.IDENTITY;
+            }
+            for (_default_bone_translations) |*t| {
+                t.* = zeng.vec3.ZERO;
+            }
             skeleton_space_maps.append(allocator, jointspace_to_nodespace) catch unreachable;
-            result_skeletons.append(allocator, .{ .inverse_bind_matrices = temp_inverse_bind_matrices, .bone_parent_indices = temp_bone_parent_indices, .local_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable, .model_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable, .animations = std.ArrayList(usize).initCapacity(allocator, 0) catch unreachable }) catch unreachable;
+            result_skeletons.append(allocator, zeng.skeleton{
+                .inverse_bind_matrices = temp_inverse_bind_matrices,
+                .bone_parent_indices = temp_bone_parent_indices,
+                .local_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable,
+                .model_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable,
+                .default_bone_translations = _default_bone_translations,
+                .default_bone_rotations = _default_bone_rotations,
+                .default_bone_scales = _default_bone_scales,
+            }) catch unreachable;
         }
     }
     if (_animations_n != null) {
@@ -974,7 +1090,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
 
             const channels_n = current_animation.object.get("channels");
             const samplers_n = current_animation.object.get("samplers");
-            if (channels_n == null or samplers_n == null) break;
+            if (channels_n == null or samplers_n == null) unreachable;
 
             var max_timestamp: f32 = 0.0;
             var owner_skin: usize = 0;
@@ -983,15 +1099,20 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
 
                 const input_accessor_index: usize = @intCast(sampler.object.get("input").?.integer);
                 const output_accessor_index: usize = @intCast(sampler.object.get("output").?.integer);
-                const input_offset, const input_length, _ = get_offsest_and_length(input_accessor_index, accessors_n.*, bufferviews_n.*);
-                const output_offset, const output_length, _ = get_offsest_and_length(output_accessor_index, accessors_n.*, bufferviews_n.*);
+                const input_buffer, const input_offset, const input_length, const input_component_type = get_offsest_and_length2(input_accessor_index, accessors_n.*, bufferviews_n.*);
+                const output_buffer, const output_offset, const output_length, const output_component_type = get_offsest_and_length2(output_accessor_index, accessors_n.*, bufferviews_n.*);
+
+                std.debug.assert(get_component_type_enum(input_component_type) == zeng.gl.FLOAT);
+                std.debug.assert(get_component_type_enum(output_component_type) == zeng.gl.FLOAT);
+                std.debug.assert(input_length > 0);
+                std.debug.assert(output_length > 0);
 
                 var target_index: usize = @intCast(channel.object.get("target").?.object.get("node").?.integer);
                 owner_skin = joint_to_skin.get(target_index).?;
-                target_index = skeleton_space_maps.items[owner_skin].get(target_index).?; // REMAP from gltf.node space to a  skin[0] bone TODO: make this use more than just the first skin in the file
+                target_index = skeleton_space_maps.items[owner_skin].get(target_index).?; // REMAP from gltf.node space to a skin bone
 
                 const temp_inputs: []f32 = allocator.alloc(f32, input_length / 4) catch unreachable;
-                @memcpy(@as([*]u8, @ptrCast(temp_inputs)), bin_data[input_offset .. input_offset + input_length]);
+                @memcpy(@as([*]u8, @ptrCast(temp_inputs)), buffers[input_buffer][input_offset .. input_offset + input_length]);
 
                 const target_path = channel.object.get("target").?.object.get("path").?.string;
                 var output_type: animation.channel_output_data_tag = undefined;
@@ -1006,13 +1127,13 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
                 var temp_outputs: animation.channel_output_data = undefined;
                 if (output_type == .rotation) {
                     temp_outputs = animation.channel_output_data{ .rotation = allocator.alloc(zeng.quat, output_length / 16) catch unreachable };
-                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.rotation)), bin_data[output_offset .. output_offset + output_length]);
+                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.rotation)), buffers[output_buffer][output_offset .. output_offset + output_length]);
                 } else if (output_type == .translation) {
                     temp_outputs = animation.channel_output_data{ .translation = allocator.alloc(zeng.vec3, output_length / 12) catch unreachable };
-                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.translation)), bin_data[output_offset .. output_offset + output_length]);
+                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.translation)), buffers[output_buffer][output_offset .. output_offset + output_length]);
                 } else if (output_type == .scale) {
                     temp_outputs = animation.channel_output_data{ .scale = allocator.alloc(zeng.vec3, output_length / 12) catch unreachable };
-                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.scale)), bin_data[output_offset .. output_offset + output_length]);
+                    @memcpy(@as([*]u8, @ptrCast(temp_outputs.scale)), buffers[output_buffer][output_offset .. output_offset + output_length]);
                 } else unreachable;
 
                 for (temp_inputs) |f| {
@@ -1027,10 +1148,8 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
             }
 
             result_animations.append(allocator, animation{ .channels = temp_channels.items, .duration = max_timestamp }) catch unreachable;
-            // std.debug.print("{s}\n", .{current_animation.object.get("name").?.string});
             result_animation_names.append(allocator, current_animation.object.get("name").?.string) catch unreachable;
-
-            result_skeletons.items[owner_skin].animations.append(allocator, result_animations.items.len - 1) catch unreachable;
+            // result_skeletons.items[owner_skin].animations.append(allocator, result_animations.items.len - 1) catch unreachable;
         }
     }
 
@@ -1042,196 +1161,216 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
         if (children != null) {
             var entry = std.ArrayList(usize).initCapacity(allocator, 0) catch unreachable;
             children_blk: for (children.?.array.items) |child| {
-                // test is any skin contains BOTH the child and the parent - otherwise add children to the hierarchy
+                // test if any skeleton contains BOTH the child and the parent bone - otherwise add children to the hierarchy
                 for (skeleton_space_maps.items, 0..) |skin, s| {
-                    if (skin.contains(current_node_index) and skin.contains(@intCast(child.integer))) { // this is an armature connection - don't add it to the global children hierarchy - add it inside the skeleton
+                    if (skin.contains(current_node_index) and skin.contains(@intCast(child.integer))) { // this is an armature connection - don't add it to the global children hierarchy - add it inside this skeleton ONLY
                         result_skeletons.items[s].bone_parent_indices[skin.get(@intCast(child.integer)).?] = @intCast(skin.get(current_node_index).?);
+                        std.debug.print("added to skeleton\n", .{});
                         continue :children_blk;
                     }
                 }
+                std.debug.print("added to hierarchy\n", .{});
                 entry.append(allocator, @intCast(child.integer)) catch unreachable;
             }
 
             if (entry.items.len > 0) {
-                result_children_list.put(current_node_index, entry) catch unreachable;
+                result_children_list.put(current_node_index, entry) catch unreachable; // assign a set of children to this node in output
             } else entry.deinit(allocator);
         }
 
         const mesh_index_n = current_node_n.object.get("mesh");
         const skin_index_n = current_node_n.object.get("skin");
         if (mesh_index_n != null and skin_index_n != null) { // skinned mesh
-            var base_color_texture_gpu: u32 = default_texture;
+
+            var translation: zeng.vec3 = zeng.vec3.ZERO;
+            var scale: zeng.vec3 = zeng.vec3.ONE;
+            var rotation: zeng.quat = zeng.quat.IDENTITY;
+
+            if (current_node_n.object.get("translation")) |_translation| {
+                translation.x = get_float_from_numeric(_translation, 0);
+                translation.y = get_float_from_numeric(_translation, 1);
+                translation.z = get_float_from_numeric(_translation, 2);
+            }
+            if (current_node_n.object.get("rotation")) |_rotation| {
+                rotation.x = get_float_from_numeric(_rotation, 0);
+                rotation.y = get_float_from_numeric(_rotation, 1);
+                rotation.z = get_float_from_numeric(_rotation, 2);
+                rotation.w = get_float_from_numeric(_rotation, 3);
+            }
+            if (current_node_n.object.get("scale")) |_scale| {
+                scale.x = get_float_from_numeric(_scale, 0);
+                scale.y = get_float_from_numeric(_scale, 1);
+                scale.z = get_float_from_numeric(_scale, 2);
+            }
+            const mat = zeng.mat_tran(zeng.mat_mult(zeng.quat_to_mat(rotation), zeng.mat_scal(zeng.mat_identity, scale)), translation);
 
             const mesh_n = root_n.?.object.get("meshes").?.array.items[@intCast(mesh_index_n.?.integer)];
-            const primitive_n = mesh_n.object.get("primitives").?.array.items[0];
-            const attributes_n = primitive_n.object.get("attributes").?;
-            if (_textures_n != null and _images_n != null) {
-                const material_index: usize = @intCast(primitive_n.object.get("material").?.integer);
-                const material_n = root_n.?.object.get("materials").?.array.items[material_index];
-                const base_color_texture_index: usize = @intCast(material_n.object.get("pbrMetallicRoughness").?.object.get("baseColorTexture").?.object.get("index").?.integer);
-                const base_color_texture_image_index: usize = @intCast(_textures_n.?.array.items[base_color_texture_index].object.get("source").?.integer);
-                const base_color_texture_image_str = _images_n.?.array.items[base_color_texture_image_index].object.get("uri").?.string;
-                base_color_texture_gpu = zeng.loader.load_texture(std.fmt.allocPrint(allocator, "{s}/{s}\x00", .{ dependencies_path, base_color_texture_image_str }) catch unreachable, true, false);
-            }
-            var translation: zeng.vec3 = zeng.vec3.ZERO;
-            var scale: zeng.vec3 = zeng.vec3.ONE;
-            var rotation: zeng.quat = zeng.quat.IDENTITY;
-
-            if (current_node_n.object.get("translation")) |_translation| {
-                translation.x = get_float_from_numeric(_translation, 0);
-                translation.y = get_float_from_numeric(_translation, 1);
-                translation.z = get_float_from_numeric(_translation, 2);
-            }
-            if (current_node_n.object.get("rotation")) |_rotation| {
-                rotation.x = get_float_from_numeric(_rotation, 0);
-                rotation.y = get_float_from_numeric(_rotation, 1);
-                rotation.z = get_float_from_numeric(_rotation, 2);
-                rotation.w = get_float_from_numeric(_rotation, 3);
-            }
-            if (current_node_n.object.get("scale")) |_scale| {
-                scale.x = get_float_from_numeric(_scale, 0);
-                scale.y = get_float_from_numeric(_scale, 1);
-                scale.z = get_float_from_numeric(_scale, 2);
-            }
-            const mat = zeng.mat_tran(zeng.mat_mult(zeng.quat_to_mat(rotation), zeng.mat_scal(zeng.mat_identity, scale)), translation);
-
-            const position_data_offset: usize, const position_data_len: usize, const position_component_type: usize = get_offsest_and_length(@intCast(attributes_n.object.get("POSITION").?.integer), accessors_n.*, bufferviews_n.*);
-            const position_component_size = get_component_type_size(position_component_type);
-
-            const normal_data_offset: usize, const normal_data_len: usize, const normal_component_type: usize = get_offsest_and_length(@intCast(attributes_n.object.get("NORMAL").?.integer), accessors_n.*, bufferviews_n.*);
-            const normal_component_size = get_component_type_size(normal_component_type);
-
-            const texcoord_data_offset: usize, const texcoord_data_len: usize, const texcoord_component_type: usize = get_offsest_and_length(@intCast(attributes_n.object.get("TEXCOORD_0").?.integer), accessors_n.*, bufferviews_n.*);
-            const texcoord_component_size = get_component_type_size(texcoord_component_type);
-
-            const joints_data_offset: usize, const joints_data_len: usize, const joints_component_type: usize = get_offsest_and_length(@intCast(attributes_n.object.get("JOINTS_0").?.integer), accessors_n.*, bufferviews_n.*);
-            const joints_component_size = get_component_type_size(joints_component_type);
-
-            const weights_data_offset: usize, const weights_data_len: usize, const weights_component_type: usize = get_offsest_and_length(@intCast(attributes_n.object.get("WEIGHTS_0").?.integer), accessors_n.*, bufferviews_n.*);
-            const weights_component_size = get_component_type_size(weights_component_type);
-
-            const indices_data_offset: usize, const indices_data_len: usize, const indices_component_type: usize = get_offsest_and_length(@intCast(primitive_n.object.get("indices").?.integer), accessors_n.*, bufferviews_n.*);
-            const indices_component_size = get_component_type_size(indices_component_type);
-
-            const mesh_data_size: usize = (position_data_len / position_component_size) * (3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size + 4 * joints_component_size + 4 * weights_component_size);
-            var mesh_data = allocator.alloc(u8, mesh_data_size) catch unreachable;
-
-            var _curr: usize = 0;
-            var _i: usize = 0;
-            var _j: usize = 0;
-            var _k: usize = 0;
-            var _l: usize = 0;
-            var _m: usize = 0;
-            while (_i < position_data_len) {
-                if (position_data_len > 0) {
-                    @memcpy(
-                        mesh_data[_curr .. _curr + 3 * position_component_size],
-                        bin_data[position_data_offset + _i .. position_data_offset + _i + 3 * position_component_size],
-                    );
-                } else {
-                    unreachable;
+            for (mesh_n.object.get("primitives").?.array.items) |primitive_n| {
+                var base_color_texture_gpu: u32 = default_texture;
+                const attributes_n = primitive_n.object.get("attributes").?;
+                if (_textures_n != null and _images_n != null) {
+                    const material_index: usize = @intCast(primitive_n.object.get("material").?.integer);
+                    const material_n = root_n.?.object.get("materials").?.array.items[material_index];
+                    const base_color_texture_index: usize = @intCast(material_n.object.get("pbrMetallicRoughness").?.object.get("baseColorTexture").?.object.get("index").?.integer);
+                    const base_color_texture_image_index: usize = @intCast(_textures_n.?.array.items[base_color_texture_index].object.get("source").?.integer);
+                    const base_color_texture_image_str = _images_n.?.array.items[base_color_texture_image_index].object.get("uri").?.string;
+                    base_color_texture_gpu = zeng.loader.load_texture(std.fmt.allocPrint(allocator, "{s}/{s}\x00", .{ dependencies_path, base_color_texture_image_str }) catch unreachable, true, false);
                 }
-                _i += 3 * position_component_size;
-                _curr += 3 * position_component_size;
 
-                if (normal_data_len > 0) {
-                    @memcpy(
-                        mesh_data[_curr .. _curr + 3 * normal_component_size],
-                        bin_data[normal_data_offset + _j .. normal_data_offset + _j + 3 * normal_component_size],
-                    );
-                } else {
-                    @memset(mesh_data[_curr .. _curr + 3 * normal_component_size], 0);
+                const position_buffer, const position_data_offset: usize, const position_data_len: usize, const position_component_type: usize = get_offsest_and_length2(@intCast(attributes_n.object.get("POSITION").?.integer), accessors_n.*, bufferviews_n.*);
+                const position_component_size = get_component_type_size(position_component_type);
+
+                const normal_data_buffer, const normal_data_offset: usize, const normal_data_len: usize, const normal_component_type: usize = get_offsest_and_length2(@intCast(attributes_n.object.get("NORMAL").?.integer), accessors_n.*, bufferviews_n.*);
+                const normal_component_size = get_component_type_size(normal_component_type);
+
+                const texcoord_data_buffer, const texcoord_data_offset: usize, const texcoord_data_len: usize, const texcoord_component_type: usize = get_offsest_and_length2(@intCast(attributes_n.object.get("TEXCOORD_0").?.integer), accessors_n.*, bufferviews_n.*);
+                const texcoord_component_size = get_component_type_size(texcoord_component_type);
+
+                const joints_data_buffer, const joints_data_offset: usize, const joints_data_len: usize, const joints_component_type: usize = get_offsest_and_length2(@intCast(attributes_n.object.get("JOINTS_0").?.integer), accessors_n.*, bufferviews_n.*);
+                const joints_component_size = get_component_type_size(joints_component_type);
+
+                const weights_data_buffer, const weights_data_offset: usize, const weights_data_len: usize, const weights_component_type: usize = get_offsest_and_length2(@intCast(attributes_n.object.get("WEIGHTS_0").?.integer), accessors_n.*, bufferviews_n.*);
+                const weights_component_size = get_component_type_size(weights_component_type);
+
+                const indices_data_buffer, const indices_data_offset: usize, const indices_data_len: usize, const indices_component_type: usize = get_offsest_and_length2(@intCast(primitive_n.object.get("indices").?.integer), accessors_n.*, bufferviews_n.*);
+                const indices_component_size = get_component_type_size(indices_component_type);
+
+                const mesh_data_size: usize = (position_data_len / position_component_size) * (3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size + 4 * joints_component_size + 4 * weights_component_size);
+                var mesh_data = allocator.alloc(u8, mesh_data_size) catch unreachable;
+
+                std.debug.assert(get_component_type_enum(position_component_type) == zeng.gl.FLOAT);
+                std.debug.assert(get_component_type_enum(normal_component_type) == zeng.gl.FLOAT);
+                std.debug.assert(get_component_type_enum(texcoord_component_type) == zeng.gl.FLOAT);
+                std.debug.assert(get_component_type_enum(joints_component_type) == zeng.gl.UNSIGNED_BYTE);
+                std.debug.assert(get_component_type_enum(weights_component_type) == zeng.gl.FLOAT);
+                std.debug.assert(get_component_type_enum(indices_component_type) == zeng.gl.UNSIGNED_SHORT);
+                std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[(@intCast(attributes_n.object.get("POSITION").?.integer))].object.get("type").?.string, "VEC3"));
+                std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[(@intCast(attributes_n.object.get("NORMAL").?.integer))].object.get("type").?.string, "VEC3"));
+                std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[(@intCast(attributes_n.object.get("TEXCOORD_0").?.integer))].object.get("type").?.string, "VEC2"));
+                std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[(@intCast(attributes_n.object.get("JOINTS_0").?.integer))].object.get("type").?.string, "VEC4"));
+                std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[(@intCast(attributes_n.object.get("WEIGHTS_0").?.integer))].object.get("type").?.string, "VEC4"));
+                std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[@intCast(primitive_n.object.get("indices").?.integer)].object.get("type").?.string, "SCALAR"));
+                std.debug.assert(position_data_len > 0);
+                std.debug.assert(normal_data_len > 0);
+                std.debug.assert(position_data_len > 0);
+                std.debug.assert(joints_data_len > 0);
+                std.debug.assert(weights_data_len > 0);
+                std.debug.assert(indices_data_len > 0);
+
+                var _curr: usize = 0;
+                var _i: usize = 0;
+                var _j: usize = 0;
+                var _k: usize = 0;
+                var _l: usize = 0;
+                var _m: usize = 0;
+                while (_i < position_data_len) {
+                    if (position_data_len > 0) {
+                        @memcpy(
+                            mesh_data[_curr .. _curr + 3 * position_component_size],
+                            buffers[position_buffer][position_data_offset + _i .. position_data_offset + _i + 3 * position_component_size],
+                        );
+                    } else {
+                        unreachable;
+                    }
+                    _i += 3 * position_component_size;
+                    _curr += 3 * position_component_size;
+
+                    if (normal_data_len > 0) {
+                        @memcpy(
+                            mesh_data[_curr .. _curr + 3 * normal_component_size],
+                            buffers[normal_data_buffer][normal_data_offset + _j .. normal_data_offset + _j + 3 * normal_component_size],
+                        );
+                    } else {
+                        @memset(mesh_data[_curr .. _curr + 3 * normal_component_size], 0);
+                    }
+                    _j += 3 * normal_component_size;
+                    _curr += 3 * normal_component_size;
+
+                    if (texcoord_data_len > 0) {
+                        @memcpy(
+                            mesh_data[_curr .. _curr + 2 * texcoord_component_size],
+                            buffers[texcoord_data_buffer][texcoord_data_offset + _k .. texcoord_data_offset + _k + 2 * texcoord_component_size],
+                        );
+                    } else {
+                        @memset(mesh_data[_curr .. _curr + 2 * texcoord_component_size], 0);
+                    }
+                    _k += 2 * texcoord_component_size;
+                    _curr += 2 * texcoord_component_size;
+
+                    if (joints_data_len > 0) {
+                        @memcpy(
+                            mesh_data[_curr .. _curr + 4 * joints_component_size],
+                            buffers[joints_data_buffer][joints_data_offset + _l .. joints_data_offset + _l + 4 * joints_component_size],
+                        );
+                    } else {
+                        @memset(mesh_data[_curr .. _curr + 4 * joints_component_size], 0);
+                    }
+                    _l += 4 * joints_component_size;
+                    _curr += 4 * joints_component_size;
+
+                    if (weights_data_len > 0) {
+                        @memcpy(
+                            mesh_data[_curr .. _curr + 4 * weights_component_size],
+                            buffers[weights_data_buffer][weights_data_offset + _m .. weights_data_offset + _m + 4 * weights_component_size],
+                        );
+                    } else {
+                        @memset(mesh_data[_curr .. _curr + 4 * weights_component_size], 0);
+                    }
+                    _m += 4 * weights_component_size;
+                    _curr += 4 * weights_component_size;
                 }
-                _j += 3 * normal_component_size;
-                _curr += 3 * normal_component_size;
+                std.debug.assert(_i == position_data_len);
 
-                if (texcoord_data_len > 0) {
-                    @memcpy(
-                        mesh_data[_curr .. _curr + 2 * texcoord_component_size],
-                        bin_data[texcoord_data_offset + _k .. texcoord_data_offset + _k + 2 * texcoord_component_size],
-                    );
-                } else {
-                    @memset(mesh_data[_curr .. _curr + 2 * texcoord_component_size], 0);
-                }
-                _k += 2 * texcoord_component_size;
-                _curr += 2 * texcoord_component_size;
+                const index_data = allocator.alloc(u8, indices_data_len) catch unreachable;
 
-                if (joints_data_len > 0) {
-                    @memcpy(
-                        mesh_data[_curr .. _curr + 4 * joints_component_size],
-                        bin_data[joints_data_offset + _l .. joints_data_offset + _l + 4 * joints_component_size],
-                    );
-                } else {
-                    @memset(mesh_data[_curr .. _curr + 4 * joints_component_size], 0);
-                }
-                _l += 4 * joints_component_size;
-                _curr += 4 * joints_component_size;
+                @memcpy(@as([*]u8, @ptrCast(index_data)), buffers[indices_data_buffer][indices_data_offset .. indices_data_offset + indices_data_len]);
 
-                if (weights_data_len > 0) {
-                    @memcpy(
-                        mesh_data[_curr .. _curr + 4 * weights_component_size],
-                        bin_data[weights_data_offset + _m .. weights_data_offset + _m + 4 * weights_component_size],
-                    );
-                } else {
-                    @memset(mesh_data[_curr .. _curr + 4 * weights_component_size], 0);
-                }
-                _m += 4 * weights_component_size;
-                _curr += 4 * weights_component_size;
-            }
-            if (_i != position_data_len) unreachable;
+                var VAO: u32 = undefined;
+                zeng.gl.genVertexArrays(1, &VAO);
+                zeng.gl.bindVertexArray(VAO);
 
-            const index_data = allocator.alloc(u8, indices_data_len) catch unreachable;
+                var VBO: u32 = undefined;
+                zeng.gl.genBuffers(1, &VBO);
+                zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, VBO);
+                zeng.gl.bufferData(zeng.gl.ARRAY_BUFFER, @intCast(mesh_data.len), mesh_data.ptr, zeng.gl.STATIC_DRAW);
 
-            @memcpy(@as([*]u8, @ptrCast(index_data)), bin_data[indices_data_offset .. indices_data_offset + indices_data_len]);
+                var EBO: u32 = undefined;
+                zeng.gl.genBuffers(1, &EBO);
+                zeng.gl.bindBuffer(zeng.gl.ELEMENT_ARRAY_BUFFER, EBO);
+                zeng.gl.bufferData(zeng.gl.ELEMENT_ARRAY_BUFFER, @intCast(index_data.len), index_data.ptr, zeng.gl.STATIC_DRAW);
 
-            var VAO: u32 = undefined;
-            zeng.gl.genVertexArrays(1, &VAO);
-            zeng.gl.bindVertexArray(VAO);
+                const stride: c_int = @intCast(3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size + 4 * joints_component_size + 4 * weights_component_size);
+                zeng.gl.vertexAttribPointer(0, 3, zeng.gl.FLOAT, zeng.gl.FALSE, stride, @ptrFromInt(0)); // position
+                zeng.gl.vertexAttribPointer(1, 3, zeng.gl.FLOAT, zeng.gl.FALSE, stride, @ptrFromInt(3 * position_component_size)); // normal
+                zeng.gl.vertexAttribPointer(2, 2, zeng.gl.FLOAT, zeng.gl.FALSE, stride, @ptrFromInt(3 * position_component_size + 3 * normal_component_size)); // uv
+                zeng.gl.vertexAttribIPointer(3, 4, get_component_type_enum(joints_component_type), stride, @ptrFromInt(3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size)); // joint index
+                zeng.gl.vertexAttribPointer(4, 4, zeng.gl.FLOAT, zeng.gl.FALSE, stride, @ptrFromInt(3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size + 4 * joints_component_size)); // joint weights
 
-            var VBO: u32 = undefined;
-            zeng.gl.genBuffers(1, &VBO);
-            zeng.gl.bindBuffer(zeng.gl.ARRAY_BUFFER, VBO);
-            zeng.gl.bufferData(zeng.gl.ARRAY_BUFFER, @intCast(mesh_data.len), mesh_data.ptr, zeng.gl.STATIC_DRAW);
+                zeng.gl.enableVertexAttribArray(0);
+                zeng.gl.enableVertexAttribArray(1);
+                zeng.gl.enableVertexAttribArray(2);
+                zeng.gl.enableVertexAttribArray(3);
+                zeng.gl.enableVertexAttribArray(4);
 
-            var EBO: u32 = undefined;
-            zeng.gl.genBuffers(1, &EBO);
-            zeng.gl.bindBuffer(zeng.gl.ELEMENT_ARRAY_BUFFER, EBO);
-            zeng.gl.bufferData(zeng.gl.ELEMENT_ARRAY_BUFFER, @intCast(index_data.len), index_data.ptr, zeng.gl.STATIC_DRAW);
-
-            const stride: c_int = @intCast(3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size + 4 * joints_component_size + 4 * weights_component_size);
-            zeng.gl.vertexAttribPointer(0, 3, zeng.gl.FLOAT, zeng.gl.FALSE, stride, @ptrFromInt(0)); // position
-            zeng.gl.vertexAttribPointer(1, 3, zeng.gl.FLOAT, zeng.gl.FALSE, stride, @ptrFromInt(3 * position_component_size)); // normal
-            zeng.gl.vertexAttribPointer(2, 2, zeng.gl.FLOAT, zeng.gl.FALSE, stride, @ptrFromInt(3 * position_component_size + 3 * normal_component_size)); // uv
-            zeng.gl.vertexAttribIPointer(3, 4, get_component_type_enum(joints_component_type), stride, @ptrFromInt(3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size)); // joint index
-            zeng.gl.vertexAttribPointer(4, 4, zeng.gl.FLOAT, zeng.gl.FALSE, stride, @ptrFromInt(3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size + 4 * joints_component_size)); // joint weights
-
-            zeng.gl.enableVertexAttribArray(0);
-            zeng.gl.enableVertexAttribArray(1);
-            zeng.gl.enableVertexAttribArray(2);
-            zeng.gl.enableVertexAttribArray(3);
-            zeng.gl.enableVertexAttribArray(4);
-
-            // const skin_index: usize = @intCast(skin_index_n.?.integer);
-            result_skinmesh_to_skeleton.put(current_node_index, @intCast(skin_index_n.?.integer)) catch unreachable;
-            result_nodes.append(allocator, scene_node_w_matrix{
-                .node = scene_node{
-                    .skinned_mesh = zeng.skinned_mesh{
-                        .indices_length = @intCast(indices_data_len / indices_component_size),
-                        .indices_type = get_component_type_enum(indices_component_type),
-                        .material = .{
-                            .shader_program = skin_shader_program,
-                            .texture = base_color_texture_gpu,
+                result_skinmesh_to_skeleton.put(current_node_index, @intCast(skin_index_n.?.integer)) catch unreachable;
+                result_nodes.append(allocator, scene_node_w_matrix{
+                    .node = scene_node{
+                        .skinned_mesh = zeng.skinned_mesh{
+                            .indices_length = @intCast(indices_data_len / indices_component_size),
+                            .indices_type = get_component_type_enum(indices_component_type),
+                            .material = .{
+                                .shader_program = skin_shader_program,
+                                .texture = base_color_texture_gpu,
+                            },
+                            .vao_gpu = VAO,
+                            .skeleton = 99999,
                         },
-                        .vao_gpu = VAO,
-                        .skeleton = 99999,
                     },
-                },
-                .matrix = mat,
-                .gltf_id = current_node_index,
-            }) catch unreachable;
+                    .matrix = mat,
+                    .gltf_id = current_node_index,
+                }) catch unreachable;
+            }
         } else if (mesh_index_n != null) { // regular mesh
-            const name = current_node_n.object.get("name");
-
             var translation: zeng.vec3 = zeng.vec3.ZERO;
             var scale: zeng.vec3 = zeng.vec3.ONE;
             var rotation: zeng.quat = zeng.quat.IDENTITY;
@@ -1253,10 +1392,6 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
                 scale.z = get_float_from_numeric(_scale, 2);
             }
             const mat = zeng.mat_tran(zeng.mat_mult(zeng.quat_to_mat(rotation), zeng.mat_scal(zeng.mat_identity, scale)), translation);
-            if (name != null and std.mem.eql(u8, name.?.string, "C\\u00edrculo.017")) {
-                // std.debug.print("{} {} {}\n", .{ translation, scale, rotation });
-                std.debug.print("{any}\n", .{mat});
-            }
 
             const mesh_n = root_n.?.object.get("meshes").?.array.items[@intCast(mesh_index_n.?.integer)];
             for (mesh_n.object.get("primitives").?.array.items) |primitive_n| {
@@ -1273,32 +1408,34 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
                     }
                 }
 
-                const position_data_offset: usize, const position_data_len: usize, const position_component_type: usize = get_offsest_and_length(@intCast(attributes_n.object.get("POSITION").?.integer), accessors_n.*, bufferviews_n.*);
+                const position_buffer, const position_data_offset: usize, const position_data_len: usize, const position_component_type: usize = get_offsest_and_length2(@intCast(attributes_n.object.get("POSITION").?.integer), accessors_n.*, bufferviews_n.*);
                 const position_component_size = get_component_type_size(position_component_type);
 
-                const normal_data_offset: usize, const normal_data_len: usize, const normal_component_type: usize = get_offsest_and_length(@intCast(attributes_n.object.get("NORMAL").?.integer), accessors_n.*, bufferviews_n.*);
+                const normal_data_buffer, const normal_data_offset: usize, const normal_data_len: usize, const normal_component_type: usize = get_offsest_and_length2(@intCast(attributes_n.object.get("NORMAL").?.integer), accessors_n.*, bufferviews_n.*);
                 const normal_component_size = get_component_type_size(normal_component_type);
 
-                var texcoord_data_offset: usize, var texcoord_data_len: usize, var texcoord_component_type: usize = .{ 0, 0, 5126 };
+                var texcoord_data_buffer: usize, var texcoord_data_offset: usize, var texcoord_data_len: usize, var texcoord_component_type: usize = .{ 0, 0, 0, 5126 };
                 if (attributes_n.object.get("TEXCOORD_0") != null)
-                    texcoord_data_offset, texcoord_data_len, texcoord_component_type = get_offsest_and_length(@intCast(attributes_n.object.get("TEXCOORD_0").?.integer), accessors_n.*, bufferviews_n.*);
+                    texcoord_data_buffer, texcoord_data_offset, texcoord_data_len, texcoord_component_type = get_offsest_and_length2(@intCast(attributes_n.object.get("TEXCOORD_0").?.integer), accessors_n.*, bufferviews_n.*);
                 const texcoord_component_size = get_component_type_size(texcoord_component_type);
 
-                const indices_data_offset: usize, const indices_data_len: usize, const indices_component_type: usize = get_offsest_and_length(@intCast(primitive_n.object.get("indices").?.integer), accessors_n.*, bufferviews_n.*);
+                const indices_data_buffer, const indices_data_offset: usize, const indices_data_len: usize, const indices_component_type: usize = get_offsest_and_length2(@intCast(primitive_n.object.get("indices").?.integer), accessors_n.*, bufferviews_n.*);
                 const indices_component_size = get_component_type_size(indices_component_type);
 
                 const mesh_data_size: usize = (position_data_len / position_component_size) * (3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size);
                 var mesh_data = allocator.alloc(u8, mesh_data_size) catch unreachable;
 
-                // if (name != null and std.mem.eql(u8, name.?.string, "Grid")) {
-                {
-                    if (indices_component_size != 2) unreachable;
+                std.debug.assert(get_component_type_enum(position_component_type) == zeng.gl.FLOAT);
+                std.debug.assert(get_component_type_enum(normal_component_type) == zeng.gl.FLOAT);
+                std.debug.assert(get_component_type_enum(texcoord_component_type) == zeng.gl.FLOAT);
+                std.debug.assert(get_component_type_enum(indices_component_type) == zeng.gl.UNSIGNED_SHORT);
 
+                { // create a collider based on this mesh and add it to the global list of colliders
                     var collider_positions: []zeng.vec3 = undefined;
                     var collider_indices: []u32 = undefined;
 
                     collider_positions = allocator.alloc(zeng.vec3, position_data_len / 12) catch unreachable;
-                    @memcpy(@as([*]u8, @ptrCast(collider_positions)), bin_data[position_data_offset .. position_data_offset + position_data_len]);
+                    @memcpy(@as([*]u8, @ptrCast(collider_positions)), buffers[position_buffer][position_data_offset .. position_data_offset + position_data_len]);
 
                     collider_indices = allocator.alloc(u32, indices_data_len / 2) catch unreachable;
                     var curr_ind: usize = 0;
@@ -1306,11 +1443,10 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
                         defer curr_ind += 2;
 
                         var i: u16 = undefined;
-                        @memcpy(@as([*]u8, @ptrCast(&i)), bin_data[indices_data_offset + curr_ind .. indices_data_offset + curr_ind + 2]);
+                        @memcpy(@as([*]u8, @ptrCast(&i)), buffers[indices_data_buffer][indices_data_offset + curr_ind .. indices_data_offset + curr_ind + 2]);
                         const _i: u32 = @intCast(i);
                         collider_indices[curr_ind / 2] = _i;
                     }
-                    // std.debug.print("TRIS: {}\n", .{collider_indices.len / 3});
 
                     const collider_mesh = zeng.cpu_mesh{ .indices = collider_indices, .positions = collider_positions };
 
@@ -1330,7 +1466,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
                     if (position_data_len > 0) {
                         @memcpy(
                             mesh_data[_curr .. _curr + 3 * position_component_size],
-                            bin_data[position_data_offset + _i .. position_data_offset + _i + 3 * position_component_size],
+                            buffers[position_buffer][position_data_offset + _i .. position_data_offset + _i + 3 * position_component_size],
                         );
                     } else {
                         unreachable;
@@ -1341,7 +1477,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
                     if (normal_data_len > 0) {
                         @memcpy(
                             mesh_data[_curr .. _curr + 3 * normal_component_size],
-                            bin_data[normal_data_offset + _j .. normal_data_offset + _j + 3 * normal_component_size],
+                            buffers[normal_data_buffer][normal_data_offset + _j .. normal_data_offset + _j + 3 * normal_component_size],
                         );
                     } else {
                         @memset(mesh_data[_curr .. _curr + 3 * normal_component_size], 0);
@@ -1352,7 +1488,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
                     if (texcoord_data_len > 0) {
                         @memcpy(
                             mesh_data[_curr .. _curr + 2 * texcoord_component_size],
-                            bin_data[texcoord_data_offset + _k .. texcoord_data_offset + _k + 2 * texcoord_component_size],
+                            buffers[texcoord_data_buffer][texcoord_data_offset + _k .. texcoord_data_offset + _k + 2 * texcoord_component_size],
                         );
                     } else {
                         @memset(mesh_data[_curr .. _curr + 2 * texcoord_component_size], 0);
@@ -1360,11 +1496,11 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
                     _k += 2 * texcoord_component_size;
                     _curr += 2 * texcoord_component_size;
                 }
-                if (_i != position_data_len) unreachable;
+                std.debug.assert(_i == position_data_len);
 
                 const index_data = allocator.alloc(u8, indices_data_len) catch unreachable;
 
-                @memcpy(@as([*]u8, @ptrCast(index_data)), bin_data[indices_data_offset .. indices_data_offset + indices_data_len]);
+                @memcpy(@as([*]u8, @ptrCast(index_data)), buffers[indices_data_buffer][indices_data_offset .. indices_data_offset + indices_data_len]);
 
                 var VAO: u32 = undefined;
                 zeng.gl.genVertexArrays(1, &VAO);
@@ -1438,74 +1574,46 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, bin_data: []const u8, depende
         }
     }
 
+    current_node_index = 0;
+    for (nodes_n.array.items) |current_node_n| {
+        defer current_node_index += 1;
+        var translation: zeng.vec3 = zeng.vec3.ZERO;
+        var scale: zeng.vec3 = zeng.vec3.ONE;
+        var rotation: zeng.quat = zeng.quat.IDENTITY;
+
+        if (current_node_n.object.get("translation")) |_translation| {
+            translation.x = get_float_from_numeric(_translation, 0);
+            translation.y = get_float_from_numeric(_translation, 1);
+            translation.z = get_float_from_numeric(_translation, 2);
+        }
+        if (current_node_n.object.get("rotation")) |_rotation| {
+            rotation.x = get_float_from_numeric(_rotation, 0);
+            rotation.y = get_float_from_numeric(_rotation, 1);
+            rotation.z = get_float_from_numeric(_rotation, 2);
+            rotation.w = get_float_from_numeric(_rotation, 3);
+        }
+        if (current_node_n.object.get("scale")) |_scale| {
+            scale.x = get_float_from_numeric(_scale, 0);
+            scale.y = get_float_from_numeric(_scale, 1);
+            scale.z = get_float_from_numeric(_scale, 2);
+        }
+
+        if (joint_to_skin.get(current_node_index)) |my_skeleton| {
+            const index_within_skeleton = skeleton_space_maps.items[my_skeleton].get(current_node_index).?;
+            result_skeletons.items[my_skeleton].default_bone_translations[index_within_skeleton] = translation;
+            result_skeletons.items[my_skeleton].default_bone_rotations[index_within_skeleton] = rotation;
+            result_skeletons.items[my_skeleton].default_bone_scales[index_within_skeleton] = scale;
+        }
+    }
+
     return .{ result_nodes.items, result_animations.items, result_animation_names.items, result_skeletons.items, result_children_list, result_top_level_objects, result_skinmesh_to_skeleton };
 }
-pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, parent_child_map: std.AutoArrayHashMap(usize, std.ArrayList(usize)), top_level_children: std.AutoHashMap(usize, void), skeleton_slice: []zeng.skeleton, skinmesh_to_skeleton: std.AutoHashMap(usize, usize), world: *ecs.world, allocator: std.mem.Allocator) ecs.entity_id {
-    var new_skeletons = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
-    for (skeleton_slice) |skel| {
-        const e = world.spawn(.{deep_copy_skeleton(skel, allocator)});
-        new_skeletons.append(allocator, e) catch unreachable;
-    }
 
-    var node_mapping = std.AutoArrayHashMap(usize, ecs.entity_id).init(allocator);
-    var root_child_list = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
-    for (mesh_slice) |mesh_like| {
-        if (mesh_like.node == .skinned_mesh) {
-            const entity_id = world.spawn(.{
-                zeng.mat_identity,
-                zeng.local_matrix{ .transform = mesh_like.matrix },
-                blk: {
-                    var new = mesh_like.node.skinned_mesh;
-                    new.skeleton = new_skeletons.items[skinmesh_to_skeleton.get(mesh_like.gltf_id).?];
-                    break :blk new;
-                },
-            });
-            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
-            node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
-        } else if (mesh_like.node == .static_mesh) {
-            const entity_id = world.spawn(.{
-                zeng.mat_identity,
-                zeng.local_matrix{ .transform = mesh_like.matrix },
-                mesh_like.node.static_mesh,
-            });
-            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
-            node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
-        } else if (mesh_like.node == .empty) {
-            // std.debug.print("empty node spawned!\n", .{});
-            const entity_id = world.spawn(.{
-                zeng.mat_identity,
-                zeng.local_matrix{ .transform = mesh_like.matrix },
-            });
-            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
-            node_mapping.put(mesh_like.gltf_id, entity_id) catch unreachable;
-        }
-    }
-
-    for (parent_child_map.keys(), parent_child_map.values()) |parent, children| {
-        if (node_mapping.get(parent)) |parent_e_id| {
-            const children_slice_component = allocator.alloc(ecs.entity_id, children.items.len) catch unreachable;
-
-            for (0.., children.items) |idx, child| {
-                const child_e_id = node_mapping.get(child).?;
-                children_slice_component[idx] = child_e_id;
-            }
-
-            world.add(zeng.children{ .items = children_slice_component }, parent_e_id);
-        }
-    }
-
-    const model_root = world.spawn(.{
-        zeng.mat_identity,
-        zeng.children{ .items = root_child_list.items },
-    });
-
-    return model_root;
-}
 pub fn auto_import(datablob: *zeng.Datablob, world: *ecs.world, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, allocator: std.mem.Allocator) ecs.entity_id {
     const T = @typeInfo(@TypeOf(gltf_extract_resources)).@"fn".return_type.?;
     const full_file_path = std.fmt.allocPrint(allocator, "{s}/{s}.gltf", .{ folder_name, file_name }) catch unreachable;
-    const full_bin_path = std.fmt.allocPrint(allocator, "{s}/{s}.bin", .{ folder_name, file_name }) catch unreachable;
-    defer allocator.free(full_bin_path);
+
+    std.debug.print(":::::{s}\n", .{full_file_path});
 
     if (datablob.get_maybe(full_file_path, T)) |bundle| {
         const mesh_slice, _, _, const skeleton_slice, const parent_child_map, const top_level_children, const skinned_mesh_to_skeleton = bundle.*;
@@ -1513,11 +1621,31 @@ pub fn auto_import(datablob: *zeng.Datablob, world: *ecs.world, folder_name: any
     }
 
     const gltf_bytes = get_file_bytes(full_file_path, allocator);
-    const bin_bytes = get_file_bytes(full_bin_path, allocator);
 
     const parsed_gltf = gltf_parse(gltf_bytes, allocator);
+    var buffers = std.ArrayList([]u8).initCapacity(allocator, parsed_gltf.?.object.get("buffers").?.array.items.len) catch unreachable;
 
-    const bundle: T = gltf_extract_resources(parsed_gltf, bin_bytes, folder_name, allocator, skin_shader, static_shader, uv_checker_tex);
+    const decoder = std.base64.Base64Decoder.init(std.base64.standard_alphabet_chars, '=');
+    for (parsed_gltf.?.object.get("buffers").?.array.items) |buffer_n| {
+        const byte_length: usize = @intCast(buffer_n.object.get("byteLength").?.integer);
+        const uri = buffer_n.object.get("uri");
+        const PREFIX = "data:application/octet-stream;base64,";
+        if (uri.?.string.len > PREFIX.len and std.mem.eql(u8, uri.?.string[0..PREFIX.len], PREFIX)) {
+            std.debug.assert(decoder.calcSizeForSlice(uri.?.string[PREFIX.len..]) catch unreachable == byte_length);
+            const data = allocator.alloc(u8, byte_length) catch unreachable;
+
+            decoder.decode(data, uri.?.string[PREFIX.len..]) catch unreachable;
+
+            buffers.append(allocator, data) catch unreachable;
+        } else {
+            const full_data_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ folder_name, uri.?.string }) catch unreachable;
+            const bin_bytes = get_file_bytes(full_data_path, allocator);
+
+            buffers.append(allocator, bin_bytes) catch unreachable;
+        }
+    }
+
+    const bundle: T = gltf_extract_resources(parsed_gltf, buffers.items, folder_name, allocator, skin_shader, static_shader, uv_checker_tex);
     const ptr = allocator.create(T) catch unreachable;
     ptr.* = bundle;
     datablob.put(full_file_path, ptr);
@@ -1525,28 +1653,8 @@ pub fn auto_import(datablob: *zeng.Datablob, world: *ecs.world, folder_name: any
     const mesh_slice, const animation_slice, const animation_name_slice, const skeleton_slice, const parent_child_map, const top_level_children, const skinned_mesh_to_skeleton = bundle;
     for (animation_slice, animation_name_slice) |*_animation, animation_name| {
         const full_animation_path = std.fmt.allocPrint(allocator, "{s}/animations/{s}", .{ full_file_path, animation_name }) catch unreachable;
-        std.debug.print("<<{s}>>\n", .{full_animation_path});
         datablob.put(full_animation_path, _animation);
     }
 
     return zeng.loader.instantiate_model_hierarchy(mesh_slice, parent_child_map, top_level_children, skeleton_slice, skinned_mesh_to_skeleton, world, allocator);
-}
-
-pub fn deep_copy_skeleton(s: zeng.skeleton, allocator: std.mem.Allocator) zeng.skeleton {
-    var ret: zeng.skeleton = undefined;
-    ret.animations = s.animations.clone(allocator) catch unreachable;
-
-    ret.bone_parent_indices = allocator.alloc(isize, s.bone_parent_indices.len) catch unreachable;
-    @memcpy(ret.bone_parent_indices, s.bone_parent_indices);
-
-    ret.inverse_bind_matrices = allocator.alloc([16]f32, s.inverse_bind_matrices.len) catch unreachable;
-    @memcpy(ret.inverse_bind_matrices, s.inverse_bind_matrices);
-
-    ret.local_bone_matrices = allocator.alloc([16]f32, s.local_bone_matrices.len) catch unreachable;
-    @memcpy(ret.local_bone_matrices, s.local_bone_matrices);
-
-    ret.model_bone_matrices = allocator.alloc([16]f32, s.model_bone_matrices.len) catch unreachable;
-    @memcpy(ret.model_bone_matrices, s.model_bone_matrices);
-
-    return ret;
 }

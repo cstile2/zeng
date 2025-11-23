@@ -232,6 +232,7 @@ pub const quat = packed struct {
 pub const material = struct {
     shader_program: u32,
     texture: u32,
+    // parameter_map: hashmap(string, *anyopaque)
 };
 pub const vec4 = packed struct {
     x: f32 = 0,
@@ -260,7 +261,10 @@ pub const skeleton = struct {
     inverse_bind_matrices: []zeng.world_matrix,
     local_bone_matrices: []zeng.world_matrix,
     model_bone_matrices: []zeng.world_matrix,
-    animations: std.ArrayList(usize),
+    // animations: std.ArrayList(usize),
+    default_bone_translations: []zeng.vec3,
+    default_bone_rotations: []zeng.quat,
+    default_bone_scales: []zeng.vec3,
 };
 pub const skinned_mesh = struct {
     vao_gpu: u32,
@@ -417,6 +421,8 @@ pub const client_info = struct {
     player: ecs.entity_id,
 };
 
+pub const name_component = []const u8;
+
 pub const COMPONENT_TYPES = [_]type{
     zeng.mesh,
     zeng.camera,
@@ -436,6 +442,7 @@ pub const COMPONENT_TYPES = [_]type{
     snapshot_interpolator,
     frame_interpolator,
     net_id_component,
+    name_component,
 };
 
 pub const Datablob = struct {
@@ -552,10 +559,14 @@ pub fn matrix_use_rotations(matrix: *zeng.world_matrix, x: f64, y: f64) void {
     const rot_mat_vert = zeng.mat_axis_angle(zeng.vec3.RIGHT, @floatCast(y * -0.003));
     matrix.* = zeng.mat_tran(zeng.mat_mult(rot_mat_hor, rot_mat_vert), zeng.mat_position(matrix.*));
 }
-pub fn create_pose(allocator: std.mem.Allocator, num: usize) zeng.skeleton_pose {
+pub fn create_pose(allocator: std.mem.Allocator, num: usize, _skeleton: zeng.skeleton) zeng.skeleton_pose {
     const rotations = allocator.alloc(zeng.quat, num) catch unreachable;
     const translations = allocator.alloc(zeng.vec3, num) catch unreachable;
     const scales = allocator.alloc(zeng.vec3, num) catch unreachable;
+
+    @memcpy(translations, _skeleton.default_bone_translations);
+    @memcpy(rotations, _skeleton.default_bone_rotations);
+    @memcpy(scales, _skeleton.default_bone_scales);
 
     return .{ rotations, translations, scales };
 }

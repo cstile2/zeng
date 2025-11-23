@@ -1,9 +1,12 @@
+export fn on_button_pressed(res: *zeng.resources_t) callconv(.c) void {
+    _ = res;
+}
 const std = @import("std");
 const zeng = @import("zeng");
 
-pub const HotReloadAPI = extern struct {
+pub const hot_reload_procedures = extern struct {
     update: *const @TypeOf(update),
-    render: *const @TypeOf(render),
+    on_button_pressed: *const @TypeOf(on_button_pressed),
 };
 
 pub fn get_item(res: *zeng.resources_t, T: type) *T {
@@ -18,20 +21,16 @@ pub fn get_item(res: *zeng.resources_t, T: type) *T {
 }
 
 export fn update(res: *zeng.resources_t) callconv(.c) void {
-    const player = get_item(res, zeng.main_player_res);
-    const world = get_item(res, zeng.ecs.world);
-    const M = world.get(player.id, zeng.world_matrix).?;
-
-    M.* = zeng.mat_tran(M.*, .{ .x = 0.02 });
+    _ = res;
+    // const _player = get_item(res, zeng.main_player_res);
+    // const world = get_item(res, zeng.ecs.world);
+    // const player = world.get(_player.id, zeng.Player.player).?;
+    // player.velocity.y += 18;
 }
 
-export fn render() callconv(.c) void {
-    std.debug.print("render rand\n", .{});
-}
-
-pub export fn get_game_api() *const HotReloadAPI {
+pub export fn get_game_api() *const hot_reload_procedures {
     return &.{
         .update = update,
-        .render = render,
+        .on_button_pressed = on_button_pressed,
     };
 }

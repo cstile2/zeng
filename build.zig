@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
+    std.debug.print("hello world\n", .{});
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -18,7 +19,7 @@ pub fn build(b: *std.Build) !void {
         },
     });
     const hot_reload_module = b.addModule("hot_reload", .{
-        .root_source_file = b.path("dynamic/hot_reload.zig"),
+        .root_source_file = b.path("dynamic/script_copy.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -47,6 +48,7 @@ pub fn build(b: *std.Build) !void {
         .linkage = .dynamic,
     });
     b.installArtifact(hot_reload_dll);
+    const hot_reload_dll_install = b.addInstallArtifact(hot_reload_dll, .{});
 
     zeng_module.linkSystemLibrary("ole32", .{});
     zeng_module.linkSystemLibrary("uuid", .{});
@@ -64,4 +66,5 @@ pub fn build(b: *std.Build) !void {
 
     const dll_build_command = b.step("hot", "compile hot reload code");
     dll_build_command.dependOn(&hot_reload_dll.step);
+    dll_build_command.dependOn(&hot_reload_dll_install.step);
 }

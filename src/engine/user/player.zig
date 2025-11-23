@@ -8,7 +8,6 @@ const util = zeng.utils;
 const net = zeng.net;
 const gl = zeng.gl;
 const c = zeng.c;
-// const main = @import("../main.zig");
 
 const debug_res = zeng.debug_res;
 const Datablob = zeng.Datablob;
@@ -73,7 +72,7 @@ pub fn player_simulate_and_animate_system(datablob: *Datablob, time: *time_res, 
         while (anim.time > 1.0) {
             anim.time -= 1.0;
         }
-        const pose = zeng.create_pose(std.heap.c_allocator, skel.bone_parent_indices.len);
+        const pose = zeng.create_pose(std.heap.c_allocator, skel.bone_parent_indices.len, skel.*);
         zeng.get_animation_pose_with_weight(animation_B, anim.time, pose, blend);
         zeng.add_animation_pose_with_weight(animation_A, anim.time, pose, 1.0 - blend);
         zeng.normalize_pose_quaternions(pose);

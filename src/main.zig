@@ -8,6 +8,7 @@ const util = zeng.utils;
 const net = zeng.net;
 const gl = zeng.gl;
 const c = zeng.c;
+const vec2 = zeng.vec2;
 
 pub const __ui_box_module = struct {
     const color = zeng.render.color;
@@ -115,7 +116,6 @@ pub const SizeMode = enum {
     grow,
     match,
 };
-const vec2 = zeng.vec2;
 
 pub fn dim(node: *Node, d: bool) *f32 {
     return if (d) &node.height else &node.width;
@@ -260,16 +260,6 @@ pub fn ui_layout(pos: vec2, node: *Node) void {
     ui_grow(node);
     ui_pos(pos, node);
 }
-/// TODO: finish this
-pub fn deep_copy(allocator: std.mem.Allocator, node: *Node) *Node {
-    const new = allocator.create(node) catch unreachable;
-    new.* = node.*;
-
-    // need to deep copy all children, and growables making sure that if &old.growable[a] == &old.children[b] then &new.growable[a] == &new.children[b]
-    // for (node.children.?.items) |child| {}
-
-    return new;
-}
 
 pub fn mouse_over(node: *const Node, s: *const mouse_state_t) bool {
     return (s.pos.x > node.pos.x and s.pos.x < node.pos.x + node.width and s.pos.y > node.pos.y and s.pos.y < node.pos.y + node.height);
@@ -374,59 +364,79 @@ pub fn card_widget(cover: u32) *Node {
 pub fn parameter_widget(str_dyn: *Parameter.StringDynamic, pos: vec2) *Node {
     return n(.{
         .pos = pos,
-        .width = @as(f32, @floatFromInt(str_dyn.len * 12)),
+        .width = @as(f32, @floatFromInt(@max(1, str_dyn.len) * 12)),
         .width_size_mode = .fixed,
         .height = 18,
         .height_size_mode = .fixed,
-        .color = .BLACK,
-        .radius = 10,
+        .color = .{ .r = 0.5, .g = 0.5, .b = 0.5 },
+        .radius = 5,
         .text = str_dyn.str[0..str_dyn.len],
         .data_ptr = str_dyn,
         .pos_absolute = true,
     }, &.{});
 }
 
+var global_num: usize = 0;
 pub fn block_widget(B: *CodeBlock, pos: vec2) *Node {
-    var total: usize = 0;
+    var total_width: usize = 0;
     var buff = zeng.global_allocator.alloc(u8, 255) catch unreachable;
     for (B.params) |param| {
         if (param == .Label) {
-            @memcpy(buff[total .. total + param.Label.len], param.Label);
-            total += param.Label.len;
+            @memcpy(buff[total_width .. total_width + param.Label.len], param.Label);
+            total_width += param.Label.len;
         }
         if (param == .String) {
             // @memcpy(buff[total .. total + param.String.len], param.String.str[0..param.String.len]);
-            @memset(buff[total .. total + param.String.len], ' ');
+            @memset(buff[total_width .. total_width + @max(1, param.String.len)], ' ');
 
-            total += param.String.len;
+            total_width += @max(1, param.String.len);
         }
     }
 
     var children = std.ArrayList(*Node).initCapacity(zeng.global_allocator, 0) catch unreachable;
     defer children.deinit(zeng.global_allocator);
 
-    var total2: usize = 0;
+    var rolling_width: usize = 0;
     for (B.params) |*param| {
         if (param.* == .Label) {
-            total2 += param.Label.len;
+            rolling_width += param.Label.len;
         }
         if (param.* == .String) {
-            children.append(zeng.global_allocator, parameter_widget(&param.String, .{ .x = pos.x + @as(f32, @floatFromInt(total2 * 12)), .y = pos.y })) catch unreachable;
-            total2 += param.String.len;
+            children.append(zeng.global_allocator, parameter_widget(&param.String, .{ .x = pos.x + @as(f32, @floatFromInt(rolling_width * 12)), .y = pos.y })) catch unreachable;
+            rolling_width += @max(1, param.String.len);
         }
     }
 
-    for (B.children.items, 1..) |b_child, i| {
-        children.append(zeng.global_allocator, block_widget(b_child, .{ .x = pos.x + 18, .y = pos.y + @as(f32, @floatFromInt(i * 18)) })) catch unreachable;
+    const start = global_num;
+    for (B.children.items) |b_child| {
+        const delta = global_num - start;
+        const new_x = pos.x + 18;
+        const new_y = pos.y + @as(f32, @floatFromInt((delta + 1) * 18));
+        children.append(zeng.global_allocator, block_widget(b_child, .{ .x = new_x, .y = new_y })) catch unreachable;
     }
 
+    global_num += 1;
+    if (B.children.items.len > 0) {
+        global_num += 1;
+        children.append(zeng.global_allocator, n(
+            .{ .color = B.color, .pos = .{ .x = pos.x, .y = pos.y }, .width = 18, .height = @floatFromInt((global_num - start) * 18), .width_size_mode = .fixed, .height_size_mode = .fixed, .pos_absolute = true },
+            &.{},
+        )) catch unreachable;
+        children.append(zeng.global_allocator, n(
+            .{ .color = B.color, .pos = .{ .x = pos.x, .y = pos.y + @as(f32, @floatFromInt((global_num - start - 1) * 18)) }, .width = @floatFromInt(total_width * 12), .height = 18, .width_size_mode = .fixed, .height_size_mode = .fixed, .pos_absolute = true },
+            &.{},
+        )) catch unreachable;
+    }
+    children.append(zeng.global_allocator, n(
+        .{ .color = .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .pos = .{ .x = pos.x, .y = pos.y }, .width = 18, .height = 18, .width_size_mode = .fixed, .height_size_mode = .fixed, .pos_absolute = true, .text = buff[0..total_width] },
+        &.{},
+    )) catch unreachable;
     return n(.{
-        .width = @floatFromInt(total * 12),
+        .width = @floatFromInt(total_width * 12),
         .height = 18,
         .color = B.color,
         .width_size_mode = .fixed,
         .height_size_mode = .fixed,
-        .text = buff[0..total],
         .pos = pos,
         .pos_absolute = true,
     }, children.items);
@@ -532,15 +542,16 @@ pub fn example(datablob: *zeng.resources_t) void {
 const dyn = @import("hot_reload");
 const DLL_LOCATION = "zig-out/bin/hot_reload_copy.dll";
 var HINSTANCE: ?[*c]c.struct_HINSTANCE__ = null;
-pub fn hot_reload() ?dyn.HotReloadAPI {
+pub fn hot_reload() ?dyn.hot_reload_procedures {
     const game_lib = zeng.c.LoadLibraryA(DLL_LOCATION);
     HINSTANCE = game_lib;
     if (game_lib == null) return null;
     const ptr = c.GetProcAddress(game_lib, "get_game_api");
     const dynamic_get_game_api: *const @TypeOf(dyn.get_game_api) = @ptrCast(ptr orelse return null);
+    std.debug.print("script was hot reloaded!\n", .{});
     return dynamic_get_game_api().*;
 }
-pub fn HOT_RELOAD() !dyn.HotReloadAPI {
+pub fn HOT_RELOAD() !dyn.hot_reload_procedures {
     var src_dir = std.fs.cwd().openDir(".", .{}) catch unreachable;
     defer src_dir.close();
 
@@ -557,6 +568,63 @@ fn get_last_write_time(path: []const u8) !i128 {
 
     const info = try file.stat();
     return info.mtime;
+}
+pub fn insert_text_into_file(path: []const u8, offset: usize, insert: []const u8, gpa: std.mem.Allocator) !void {
+
+    // Open for read/write
+    var file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
+    defer file.close();
+
+    // Read existing file size
+    const stat = try file.stat();
+    if (offset > stat.size) return error.OffsetOutOfRange;
+
+    // Read tail of file into memory
+    const tail_len = stat.size - offset;
+    const tail = try gpa.alloc(u8, tail_len);
+    defer gpa.free(tail);
+
+    try file.seekTo(offset);
+    _ = try file.readAll(tail);
+
+    // Write insertion
+    try file.seekTo(offset);
+    try file.writeAll(insert);
+
+    // Write original tail
+    try file.writeAll(tail);
+}
+pub fn compile_dll(allocator: std.mem.Allocator) !void {
+    var child = std.process.Child.init(&.{ "zig", "build", "hot" }, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    try child.spawn();
+
+    const stdout = try child.stdout.?.readToEndAlloc(allocator, 16 * 1024);
+    defer allocator.free(stdout);
+
+    const stderr = try child.stderr.?.readToEndAlloc(allocator, 16 * 1024);
+    defer allocator.free(stderr);
+
+    const term = try child.wait();
+    std.debug.print("{s}\n{s}\n", .{ stdout, stderr });
+
+    if (term != .Exited) {
+        return error.CompilationFailed;
+    }
+}
+pub fn create_script_zig_file(B: *CodeBlock, allocator: std.mem.Allocator) void {
+    const dir = std.fs.cwd().openDir("dynamic", .{}) catch unreachable;
+    std.fs.Dir.copyFile(dir, "script_master.zig", dir, "script_copy.zig", .{}) catch unreachable;
+
+    var buff: [4000]u8 = undefined;
+    var buff_len: usize = 0;
+    B.print_code.?(B, buff[0..], &buff_len);
+
+    insert_text_into_file("dynamic/script_copy.zig", 0, buff[0..buff_len], allocator) catch unreachable;
+    compile_dll(allocator) catch unreachable;
 }
 
 // const Block = union(enum) {
@@ -591,6 +659,7 @@ const CodeBlock = struct {
     __rect: Rect = Rect{},
 
     execute: ?ExecuteFN = null,
+    print_code: ?*const fn (*CodeBlock, []u8, *usize) void,
     color: zeng.render.color,
 };
 const Value = union(enum) {
@@ -747,6 +816,48 @@ pub fn CODEBLOCKEXECUTE_get_player(_B: *const anyopaque, res: *zeng.resources_t,
     }
 }
 
+pub fn CODEBLOCKPRINT_event(_B: *const CodeBlock, buffer: []u8, buffer_len: *usize) void {
+    const new = std.fmt.bufPrint(buffer[buffer_len.*..],
+        \\export fn on_button_pressed(res: *zeng.resources_t) callconv(.c) void {{
+        \\  const _player = get_item(res, zeng.main_player_res);
+        \\  const world = get_item(res, zeng.ecs.world);
+        \\  const player = world.get(_player.id, zeng.Player.player).?;
+    , .{}) catch unreachable;
+    buffer_len.* += new.len;
+
+    for (_B.children.items) |C| {
+        (C.print_code orelse continue)(C, buffer, buffer_len);
+    }
+
+    const new2 = std.fmt.bufPrint(buffer[buffer_len.*..], "}}\n", .{}) catch unreachable;
+    buffer_len.* += new2.len;
+}
+
+pub fn CODEBLOCKPRINT_if(_B: *const CodeBlock, buffer: []u8, buffer_len: *usize) void {
+    const new = std.fmt.bufPrint(buffer[buffer_len.*..], "if ({s}) {{", .{_B.params[1].String.str[0.._B.params[1].String.len]}) catch unreachable;
+    buffer_len.* += new.len;
+
+    for (_B.children.items) |C| {
+        (C.print_code orelse continue)(C, buffer, buffer_len);
+    }
+
+    const new2 = std.fmt.bufPrint(buffer[buffer_len.*..], "}}\n", .{}) catch unreachable;
+    buffer_len.* += new2.len;
+}
+
+pub fn CODEBLOCKPRINT_blank(_B: *const CodeBlock, buffer: []u8, buffer_len: *usize) void {
+    const new = std.fmt.bufPrint(buffer[buffer_len.*..], "{s}", .{_B.params[0].String.str[0.._B.params[0].String.len]}) catch unreachable;
+    buffer_len.* += new.len;
+}
+
+pub fn CODEBLOCKPRINT_jump(_B: *const CodeBlock, buffer: []u8, buffer_len: *usize) void {
+    const new = std.fmt.bufPrint(buffer[buffer_len.*..], "player.velocity.y += ", .{}) catch unreachable;
+    buffer_len.* += new.len;
+
+    const new2 = std.fmt.bufPrint(buffer[buffer_len.*..], "{s};\n", .{_B.params[1].String.str[0.._B.params[1].String.len]}) catch unreachable;
+    buffer_len.* += new2.len;
+}
+
 pub fn micro_mouse_over(r: Rect, m: vec2) bool {
     return (m.x > r.pos.x and m.x < r.pos.x + r.size.x and m.y > r.pos.y and m.y < r.pos.y + r.size.y);
 }
@@ -770,7 +881,7 @@ pub fn get_mouseover(B: *CodeBlock, parent: ?*CodeBlock, index: ?usize, mouse_po
     return .{ null, null, null, null };
 }
 
-pub fn CB(allocator: std.mem.Allocator, params: []const Parameter, color: zeng.render.color, children: []const *CodeBlock, shape: BlockShape, execute_fn: ?ExecuteFN) *CodeBlock {
+pub fn CB(allocator: std.mem.Allocator, params: []const Parameter, color: zeng.render.color, children: []const *CodeBlock, shape: BlockShape, execute_fn: ?ExecuteFN, print_fn: ?*const @TypeOf(CODEBLOCKPRINT_event)) *CodeBlock {
     const ptr = allocator.create(CodeBlock) catch unreachable;
     const _params = allocator.alloc(Parameter, params.len) catch unreachable;
     for (params, _params) |param, *_param| {
@@ -785,6 +896,7 @@ pub fn CB(allocator: std.mem.Allocator, params: []const Parameter, color: zeng.r
 
     ptr.shape = shape;
     ptr.execute = execute_fn;
+    ptr.print_code = print_fn;
     ptr.color = color;
     ptr.__params_rects = allocator.alloc(Rect, params.len) catch unreachable;
     for (ptr.__params_rects) |*v| {
@@ -800,6 +912,40 @@ pub fn remove_code_block_ptr(list: *std.ArrayList(*CodeBlock), cb: *CodeBlock) v
             _ = list.swapRemove(i);
             return;
         }
+    }
+}
+
+pub fn recurse_children(e_id: ecs.entity_id, world: *ecs.world, tabs: usize) void {
+    var buffer: [32]ecs.entity_id = undefined;
+    var extra_children = std.ArrayList(ecs.entity_id).initBuffer(buffer[0..]);
+    for (0..tabs) |_| {
+        std.debug.print(" - ", .{});
+    }
+    std.debug.print("#{}: ", .{e_id});
+    if (world.get(e_id, zeng.skinned_mesh)) |sm| {
+        std.debug.print("skinned_mesh ", .{});
+        extra_children.appendAssumeCapacity(sm.skeleton);
+    }
+    if (world.get(e_id, zeng.mesh)) |_| {
+        std.debug.print("static_mesh ", .{});
+    }
+    if (world.get(e_id, zeng.world_matrix)) |_| {
+        std.debug.print("world_matrix ", .{});
+    }
+    if (world.get(e_id, zeng.local_matrix)) |_| {
+        std.debug.print("local_matrix ", .{});
+    }
+    if (world.get(e_id, zeng.skeleton)) |_| {
+        std.debug.print("skeleton ", .{});
+    }
+    std.debug.print("\n", .{});
+
+    for (extra_children.items) |i| {
+        recurse_children(i, world, tabs + 1);
+    }
+    const children = world.get(e_id, zeng.children) orelse return;
+    for (children.items) |i| {
+        recurse_children(i, world, tabs + 1);
     }
 }
 
@@ -888,6 +1034,13 @@ pub fn main() !void {
     top_children.append(arena_allocator, map_entity) catch unreachable;
     const cube_entity = world.spawn(.{ cube_mesh, zeng.mat_tran(zeng.mat_identity, .{ .x = -7.0, .y = 2.0 }), zeng.floater_component{} });
     if (!is_server) world.add(zeng.snapshot_interpolator{ .buffer = undefined }, cube_entity);
+    const test_entity = zeng.loader.auto_import(&datablob, &world, "assets/gltf/people", "King", skin_shader, static_shader, black_tex, arena_allocator);
+    top_children.append(arena_allocator, test_entity) catch unreachable;
+    const test_random_skinned_mesh = zeng.find_component_of_type(&world, test_entity, zeng.skinned_mesh, fet.fresh_query(.{zeng.children})).?;
+    const test_skeleton_entity = world.get(test_random_skinned_mesh, zeng.skinned_mesh).?.skeleton;
+    world.add(zeng.animation_component{ .time = 0.0, .current_animation = 0 }, test_skeleton_entity);
+    world.get(test_entity, zeng.world_matrix).?.* = zeng.mat_tran(world.get(test_entity, zeng.world_matrix).?.*, .{ .x = 5 });
+    recurse_children(test_entity, &world, 0);
 
     const player_entity = zeng.Player.create_player(&datablob, &world, skin_shader, static_shader, uv_checker_tex, &fet, &top_children, arena_allocator, .{ .net_id = get_new_netid(), .remote_peer = null });
     world.add(zeng.input_implement{ .move_fn = zeng.input_implement.default_move_fn, .jump_fn = zeng.input_implement.default_jump }, player_entity);
@@ -912,9 +1065,7 @@ pub fn main() !void {
         top_children.append(arena_allocator, remote_player_entity) catch unreachable;
     }
 
-    const cube_entity2 = world.spawn(.{ cube_mesh, zeng.mat_identity });
-
-    __resources.insert(zeng.main_player_res{ .id = cube_entity2 });
+    __resources.insert(zeng.main_player_res{ .id = player_entity });
 
     const square_vao, const square_indices_length = zeng.loader.create_square_mesh();
     __resources.insert(zeng.text_render_res{ .shader_program = zeng.loader.load_shader(allocator, "assets/shaders/text_vertex.shader", "assets/shaders/text_fragment.shader"), .texture = zeng.loader.load_texture("assets/images/sdf_font.png", false, false), .vao = __ui_box.vao, .indices_len = square_indices_length });
@@ -1022,28 +1173,26 @@ pub fn main() !void {
 
     var exponential_rtt: f64 = 1.0;
 
-    var render_info: ?graph_render.render_info = null;
+    // var render_info: ?graph_render.render_info = null;
 
     var done = false;
 
     var game_api = HOT_RELOAD() catch unreachable;
-    _ = __resources.get(zeng.main_camera_res);
-    var it = __resources.map.iterator();
-    while (it.next()) |curr| {
-        std.debug.print("{s}\n", .{@as([*:0]const u8, @ptrFromInt(curr.key_ptr.*))});
-    }
-    game_api.update(&__resources);
     var last_write_time = try get_last_write_time("zig-out/bin/hot_reload.dll");
 
-    var r_pressed_last_frame = false;
-    const top = CB(arena_allocator, &.{ Parameter{ .Label = "When R pressed" }, Parameter{ .String = .{ .str = arena_allocator.alloc(u8, 255) catch unreachable, .len = 4 } } }, .{ .r = 0.8, .g = 0.2, .b = 0.1 }, &.{
-        CB(arena_allocator, &.{Parameter{ .Label = "Do super jump" }}, .{ .r = 0.1, .g = 0.3, .b = 0.8 }, &.{}, .instruction, CODEBLOCKEXECUTE_test),
-        CB(arena_allocator, &.{Parameter{ .Label = "Print 'HELLO WORLD!'" }}, .{ .r = 0.15, .g = 0.6, .b = 0.1 }, &.{}, .instruction, CODEBLOCKEXECUTE_hello_world),
+    // var r_pressed_last_frame = false;
+    const top = CB(arena_allocator, &.{Parameter{ .Label = "When button clicked (res) (player) (world)" }}, .{ .r = 0.8, .g = 0.2, .b = 0.1 }, &.{
+        CB(arena_allocator, &.{ Parameter{ .Label = "Do super jump" }, Parameter{ .String = .{ .str = arena_allocator.alloc(u8, 255) catch unreachable, .len = 0 } } }, .{ .r = 0.1, .g = 0.3, .b = 0.8 }, &.{}, .instruction, CODEBLOCKEXECUTE_test, CODEBLOCKPRINT_jump),
+        CB(arena_allocator, &.{Parameter{ .Label = "Print 'HELLO WORLD!'" }}, .{ .r = 0.15, .g = 0.6, .b = 0.1 }, &.{}, .instruction, CODEBLOCKEXECUTE_hello_world, null),
+        CB(arena_allocator, &.{ Parameter{ .Label = "If" }, Parameter{ .String = .{ .str = arena_allocator.alloc(u8, 255) catch unreachable, .len = 0 } } }, .RED, &.{}, .instruction, null, CODEBLOCKPRINT_if),
+        CB(arena_allocator, &.{Parameter{ .String = .{ .str = arena_allocator.alloc(u8, 255) catch unreachable, .len = 0 } }}, .{ .r = 0.2, .g = 0.2, .b = 0.2 }, &.{}, .instruction, CODEBLOCKEXECUTE_hello_world, CODEBLOCKPRINT_blank),
+
         // CB(arena_allocator, &.{Parameter{ .Label = "Make var" }}, .{ .r = 0.15, .g = 0.15, .b = 0.15 }, &.{}, .instruction, CODERBLOCKEXECUTE_make_var),
         // CB(arena_allocator, &.{Parameter{ .Label = "Print var" }}, .{ .r = 0.15, .g = 0.2, .b = 0.2 }, &.{}, .instruction, CODERBLOCKEXECUTE_print_var),
-    }, .start, CODEBLOCKEXECUTE_start);
-    var dragging_code_block: ?*CodeBlock = null;
+    }, .start, CODEBLOCKEXECUTE_start, CODEBLOCKPRINT_event);
+    // var dragging_code_block: ?*CodeBlock = null;
     var mouse_down_last_frame = false;
+    // var selected_parameter: ?*Parameter = null;
 
     var top_level_code_blocks = std.ArrayList(*CodeBlock).initCapacity(allocator, 0) catch unreachable;
     defer top_level_code_blocks.deinit(allocator);
@@ -1295,6 +1444,21 @@ pub fn main() !void {
             fet.run_system(zeng.Player.player_simulate_and_animate_system);
             fet.run_system(zeng.Player.shoot_system);
 
+            {
+                const animation: *zeng.loader.animation = datablob.get("assets/gltf/people/King.gltf/animations/Walk", zeng.loader.animation);
+                const anim = world.get(test_skeleton_entity, zeng.animation_component).?;
+                const skel = world.get(test_skeleton_entity, zeng.skeleton).?;
+
+                anim.time += __resources.get(zeng.time_res).fixed_dt / animation.duration;
+                while (anim.time > 1.0) {
+                    anim.time -= 1.0;
+                }
+                const pose = zeng.create_pose(allocator, skel.bone_parent_indices.len, skel.*);
+                zeng.get_animation_pose_with_weight(animation, anim.time, pose, 1);
+                zeng.apply_pose_to_skeleton(skel, pose);
+                zeng.free_pose(allocator, pose);
+            }
+
             if (is_server) { // periodic client/server communication
                 var client_it = peer_map.iterator();
                 while (client_it.next()) |thing| {
@@ -1327,6 +1491,13 @@ pub fn main() !void {
         const local_player_input = world.get(player_entity, rpc.input_message).?;
         zeng.matrix_use_rotations(world.get(main_camera, zeng.world_matrix).?, local_player_input.rot_x, local_player_input.rot_y);
 
+        {
+            const player_pos = zeng.mat_position(world.get(player_entity, zeng.world_matrix).?.*);
+            const test_pos = zeng.mat_position(world.get(test_entity, zeng.world_matrix).?.*);
+            const vec = player_pos.sub(test_pos).normalized().mult(0.05);
+            zeng.mat_position_set(world.get(test_entity, zeng.world_matrix).?, test_pos.add(vec));
+        }
+
         const gun_position: zeng.vec4 = if (zeng.get_mouse_button(.right)) zeng.vec4{ .y = -0.107, .z = -0.15 } else zeng.vec4{ .x = 0.15, .y = -0.15, .z = -0.2 };
         world.get(pistol_entity, zeng.world_matrix).?.* = zeng.mat_tran(world.get(main_camera, zeng.world_matrix).?.*, zeng.mat_mult_vec4(world.get(main_camera, zeng.world_matrix).?.*, gun_position).to_vec3());
         for (top_children.items) |ch| {
@@ -1354,8 +1525,12 @@ pub fn main() !void {
         const camera_matrix_ptr = world.get(main_camera, zeng.world_matrix).?;
         zeng.render.draw_sky(sky_shader, square_vao, square_indices_length, camera_matrix_ptr.*, camera_camera_ptr);
         fet.run_system(render_system);
+        zeng.render.draw_mesh(cube_mesh, zeng.mat_tran(zeng.mat_scal(zeng.mat_identity, zeng.vec3.ONE.mult(0.1)), zeng.vec3.ZERO), world.get(__resources.get(zeng.main_camera_res).id, zeng.camera).?.projection_matrix, zeng.mat_invert(world.get(__resources.get(zeng.main_camera_res).id, zeng.world_matrix).?.*));
 
-        const mouse_state = mouse_state_t{ .pos = .{ .x = @floatFromInt(zeng.global_mouse_pos[0]), .y = @floatFromInt(zeng.global_mouse_pos[1]) } };
+        // const mouse_state = mouse_state_t{ .pos = .{ .x = @floatFromInt(zeng.global_mouse_pos[0]), .y = @floatFromInt(zeng.global_mouse_pos[1]) } };
+        // const mouse_pressed = zeng.get_mouse_button(.left) and !mouse_down_last_frame;
+        // const mouse_released = !zeng.get_mouse_button(.left) and mouse_down_last_frame;
+        defer mouse_down_last_frame = zeng.get_mouse_button(.left);
 
         // { // block code
         //     var D1 = BlockNode{ .block = .{ .Add = .{ .a = 0, .b = 0 } }, .children = null };
@@ -1411,138 +1586,144 @@ pub fn main() !void {
             zeng.render.draw_rect(__graphics, __resources.get(zeng.rect_render_res), 0, 0, 6, 6, zeng.render.color.BLACK);
             zeng.render.draw_rect(__graphics, __resources.get(zeng.rect_render_res), 0, 0, 4, 4, zeng.render.color.WHITE);
         }
-        { // UI processing
+        // { // UI processing
+        //     zeng.set_cursor(.arrow);
 
-            const page = page_widget(uv_checker_tex, uv_checker_tex, @floatFromInt(__graphics.width), @floatFromInt(__graphics.height), 0.3);
-            ui_layout(.{ .x = 0, .y = 0 }, page);
-            // const nptr = recursive_mouse_over(page, &mouse_state);
-            // zeng.set_cursor(.arrow);
-            // if (nptr) |node_ptr| {
-            //     if (node_ptr.color.?.a > 0.01) zeng.set_cursor(.pointer);
-            // }
-            // const button = global_id_map.get("play_button");
-            // if (mouse_over(button, &mouse_state)) {
-            //     zeng.set_cursor(.pointer);
-            //     button.color = .WHITE;
-            // } else {
-            //     zeng.set_cursor(.arrow);
-            // }
-            ui_draw(&__ui_box, __graphics, page, __resources.get(zeng.text_render_res));
+        //     const page = page_widget(uv_checker_tex, uv_checker_tex, @floatFromInt(__graphics.width), @floatFromInt(__graphics.height), 0.3);
+        //     ui_layout(.{ .x = 0, .y = 0 }, page);
+        //     // const nptr = recursive_mouse_over(page, &mouse_state);
+        //     // zeng.set_cursor(.arrow);
+        //     // if (nptr) |node_ptr| {
+        //     //     if (node_ptr.color.?.a > 0.01) zeng.set_cursor(.pointer);
+        //     // }
+        //     const button = global_id_map.get("play_button");
+        //     if (mouse_over(button, &mouse_state)) {
+        //         zeng.set_cursor(.pointer);
+        //         button.color = .WHITE;
+        //         if (mouse_pressed) {
+        //             game_api.on_button_pressed(&__resources);
+        //         }
+        //     }
+        //     ui_draw(&__ui_box, __graphics, page, __resources.get(zeng.text_render_res));
 
-            if (render_info == null) {
-                render_info = visualize_graph(arena_allocator, page);
-            }
+        //     if (render_info == null) {
+        //         render_info = visualize_graph(arena_allocator, page);
+        //     }
 
-            for (render_info.?.nodes) |*node| {
-                var sum = vec2.ZERO;
-                for (render_info.?.nodes) |*_node| {
-                    if (node == _node) continue;
-                    sum = sum.add(_node.sub(node.*).normalized());
-                }
-                sum = sum.normalized().mult(-0.5);
-                node.* = node.add(sum);
-            }
-            for (render_info.?.edges) |*edge| {
-                const pos_a = &render_info.?.nodes[edge.from];
-                const pos_b = &render_info.?.nodes[edge.to];
+        //     for (render_info.?.nodes) |*node| {
+        //         var sum = vec2.ZERO;
+        //         for (render_info.?.nodes) |*_node| {
+        //             if (node == _node) continue;
+        //             sum = sum.add(_node.sub(node.*).normalized());
+        //         }
+        //         sum = sum.normalized().mult(-0.5);
+        //         node.* = node.add(sum);
+        //     }
+        //     for (render_info.?.edges) |*edge| {
+        //         const pos_a = &render_info.?.nodes[edge.from];
+        //         const pos_b = &render_info.?.nodes[edge.to];
 
-                const delta = pos_a.sub(pos_b.*);
-                const over_amt = delta.length() - 50;
-                if (over_amt > 0) {
-                    pos_a.* = pos_a.add(delta.normalized().mult(-over_amt * 0.5));
-                    pos_b.* = pos_b.add(delta.normalized().mult(over_amt * 0.5));
-                }
-            }
-            for (render_info.?.edges) |edge| {
-                const pos_a = render_info.?.nodes[edge.from];
-                const pos_b = render_info.?.nodes[edge.to];
+        //         const delta = pos_a.sub(pos_b.*);
+        //         const over_amt = delta.length() - 50;
+        //         if (over_amt > 0) {
+        //             pos_a.* = pos_a.add(delta.normalized().mult(-over_amt * 0.5));
+        //             pos_b.* = pos_b.add(delta.normalized().mult(over_amt * 0.5));
+        //         }
+        //     }
+        //     for (render_info.?.edges) |edge| {
+        //         const pos_a = render_info.?.nodes[edge.from];
+        //         const pos_b = render_info.?.nodes[edge.to];
 
-                for (0..10) |i| {
-                    const p = pos_a.lerp(pos_b, @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(10)));
-                    __ui_box.draw_img(__graphics, p.x, p.y, 6, 6, .WHITE, 0, 0);
-                }
-                __ui_box.draw_img(__graphics, pos_a.x, pos_a.y, 15, 15, .BLACK, 0, 4);
-                __ui_box.draw_img(__graphics, pos_b.x, pos_b.y, 15, 15, .BLACK, 0, 4);
-            }
+        //         for (0..10) |i| {
+        //             const p = pos_a.lerp(pos_b, @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(10)));
+        //             __ui_box.draw_img(__graphics, p.x, p.y, 6, 6, .WHITE, 0, 0);
+        //         }
+        //         __ui_box.draw_img(__graphics, pos_a.x, pos_a.y, 15, 15, .BLACK, 0, 4);
+        //         __ui_box.draw_img(__graphics, pos_b.x, pos_b.y, 15, 15, .BLACK, 0, 4);
+        //     }
 
-            const a = block_widget(top, .{});
-            ui_layout(.{ .x = 0, .y = 0 }, a);
-            ui_draw(&__ui_box, __graphics, a, __resources.get(zeng.text_render_res));
+        //     global_num = 0;
+        //     const a = block_widget(top, .{});
+        //     ui_layout(.{ .x = 0, .y = 0 }, a);
+        //     ui_draw(&__ui_box, __graphics, a, __resources.get(zeng.text_render_res));
 
-            const nptr = recursive_mouse_over(a, &mouse_state);
-            zeng.set_cursor(.arrow);
-            if (nptr) |node_ptr| {
-                if (node_ptr.data_ptr != null) zeng.set_cursor(.pointer);
-            }
-        }
-        {
-            for (zeng.key_press_messages.items) |k| {
-                if (k == 8) {
-                    const _len = &top.params[1].String.len;
-                    if (_len.* > 0) _len.* -= 1;
-                } else {
-                    top.params[1].String.str[top.params[1].String.len] = k;
-                    top.params[1].String.len += 1;
-                }
-            }
-            zeng.key_press_messages.clearAndFree(allocator);
+        //     if (mouse_pressed) {
+        //         selected_parameter = null;
+        //     }
+        //     const nptr = recursive_mouse_over(a, &mouse_state);
+        //     if (nptr) |node_ptr| {
+        //         if (node_ptr.data_ptr != null) {
+        //             zeng.set_cursor(.pointer);
+        //             if (mouse_pressed) {
+        //                 selected_parameter = @ptrCast(@alignCast(node_ptr.data_ptr.?));
+        //             }
+        //         }
+        //     }
+        // }
+        // {
+        //     if (selected_parameter) |sp| {
+        //         for (zeng.key_press_messages.items) |k| {
+        //             if (k == 8) {
+        //                 const _len = &sp.String.len;
+        //                 if (_len.* > 0) _len.* -= 1;
+        //             } else {
+        //                 sp.String.str[sp.String.len] = k;
+        //                 sp.String.len += 1;
+        //             }
+        //         }
+        //     }
+        //     zeng.key_press_messages.clearAndFree(allocator);
 
-            const mouse_pressed = zeng.get_mouse_button(.left) and !mouse_down_last_frame;
-            const mouse_released = !zeng.get_mouse_button(.left) and mouse_down_last_frame;
-            mouse_down_last_frame = zeng.get_mouse_button(.left);
+        //     var hovered_p: ?*CodeBlock = null;
+        //     var hovered_c: ?usize = null;
+        //     var hovered_block: ?*CodeBlock = null;
+        //     var hovered_param: ?*Parameter = null;
 
-            var hovered_p: ?*CodeBlock = null;
-            var hovered_c: ?usize = null;
-            var hovered_block: ?*CodeBlock = null;
-            var hovered_param: ?*Parameter = null;
+        //     // for (top_level_code_blocks.items) |code_block| {
+        //     //     _ = get_height(code_block, 18);
+        //     //     draw(code_block, 18, &__ui_box, &__graphics, &__resources, code_block.__rect.pos);
+        //     // }
+        //     for (top_level_code_blocks.items) |code_block| {
+        //         hovered_p, hovered_c, hovered_block, hovered_param = get_mouseover(code_block, null, null, mouse_state.pos);
+        //         if (hovered_block != null) break;
+        //     }
+        //     if (mouse_pressed) {
+        //         if (hovered_block != null) {
+        //             if (hovered_p != null and hovered_c != null) {
+        //                 dragging_code_block = hovered_p.?.children.orderedRemove(hovered_c.?);
+        //                 top_level_code_blocks.append(allocator, dragging_code_block.?) catch unreachable;
+        //             } else {
+        //                 dragging_code_block = hovered_block;
+        //             }
+        //         }
+        //     }
+        //     if (mouse_released) {
+        //         if (hovered_block != null and dragging_code_block != null and hovered_block.? != dragging_code_block.?) {
+        //             if (hovered_p != null and hovered_c != null) {
+        //                 hovered_p.?.children.insert(allocator, hovered_c.?, dragging_code_block.?) catch unreachable;
+        //                 remove_code_block_ptr(&top_level_code_blocks, dragging_code_block.?);
+        //             } else {
+        //                 hovered_block.?.children.insert(allocator, 0, dragging_code_block.?) catch unreachable;
+        //                 remove_code_block_ptr(&top_level_code_blocks, dragging_code_block.?);
+        //             }
+        //         }
+        //     }
+        //     if (!zeng.get_mouse_button(.left)) dragging_code_block = null;
 
-            for (top_level_code_blocks.items) |code_block| {
-                _ = get_height(code_block, 18);
-                draw(code_block, 18, &__ui_box, &__graphics, &__resources, code_block.__rect.pos);
-            }
-            for (top_level_code_blocks.items) |code_block| {
-                hovered_p, hovered_c, hovered_block, hovered_param = get_mouseover(code_block, null, null, mouse_state.pos);
-                if (hovered_block != null) break;
-            }
-            if (mouse_pressed) {
-                if (hovered_block != null) {
-                    if (hovered_p != null and hovered_c != null) {
-                        dragging_code_block = hovered_p.?.children.orderedRemove(hovered_c.?);
-                        top_level_code_blocks.append(allocator, dragging_code_block.?) catch unreachable;
-                    } else {
-                        dragging_code_block = hovered_block;
-                    }
-                }
-            }
-            if (mouse_released) {
-                if (hovered_block != null and dragging_code_block != null and hovered_block.? != dragging_code_block.?) {
-                    if (hovered_p != null and hovered_c != null) {
-                        hovered_p.?.children.insert(allocator, hovered_c.?, dragging_code_block.?) catch unreachable;
-                        remove_code_block_ptr(&top_level_code_blocks, dragging_code_block.?);
-                    } else {
-                        hovered_block.?.children.insert(allocator, 0, dragging_code_block.?) catch unreachable;
-                        remove_code_block_ptr(&top_level_code_blocks, dragging_code_block.?);
-                    }
-                }
-            }
-            if (!zeng.get_mouse_button(.left)) dragging_code_block = null;
+        //     if (dragging_code_block) |cb| {
+        //         cb.__rect.pos = mouse_state.pos;
+        //     }
 
-            if (dragging_code_block) |cb| {
-                cb.__rect.pos = mouse_state.pos;
-            }
+        //     if (zeng.get_key(.r) and !r_pressed_last_frame) {
+        //         // top.execute.?(top, &__resources, &script_context);
+        //         create_script_zig_file(top, allocator);
+        //         script_context.reset();
+        //     }
+        //     r_pressed_last_frame = zeng.get_key(.r);
 
-            if (zeng.get_key(.r) and !r_pressed_last_frame) {
-                top.execute.?(top, &__resources, &script_context);
-                script_context.reset();
-            }
-            r_pressed_last_frame = zeng.get_key(.r);
-
-            var buffer: [255]u8 = undefined;
-            zeng.render.draw_text(std.fmt.bufPrint(buffer[0..], ":{} :{}", .{ top_level_code_blocks.items.len, top.children.items.len }) catch unreachable, __resources.get(zeng.text_render_res), 200, 40, __graphics);
-        }
-
-        std.debug.print("{}\n", .{zeng.utils.type_id(zeng.main_player_res)});
-        game_api.update(&__resources);
+        //     // var buffer: [255]u8 = undefined;
+        //     // zeng.render.draw_text(std.fmt.bufPrint(buffer[0..], ":{} :{}", .{ top_level_code_blocks.items.len, top.children.items.len }) catch unreachable, __resources.get(zeng.text_render_res), 200, 40, __graphics);
+        // }
 
         commands.process_commands(&world);
         zeng.net.send_net_messages(&commands, __resources.get(zeng.time_res).delta_time, &tracker);
@@ -1616,12 +1797,8 @@ pub fn frame_interpolator_tick_system(interp_q: *ecs.query(.{ zeng.frame_interpo
     }
 }
 
-// helper functions
-
-// unify the block rendering/layout code with the ui code
-// create a function to recursive check a node's children for mouse intersection, then check the node
-// allow for editing of code blocks - text editing - check
-// focus mode on individual elements of blocks - only provide key inputs to focused elements
+// start adding game elements to test the architecture flexibility
+// finish block code + UI
 
 // MISSING FEATURES:
 // networked animations
@@ -1638,12 +1815,5 @@ pub fn frame_interpolator_tick_system(interp_q: *ecs.query(.{ zeng.frame_interpo
 // make sure audio is thread-safe, deal with multiple samplerates
 // robust text rendering
 // better rendering - lights
-// better material system
+// add proper materials
 // test and overhaul the reliable message system
-
-// font rendering
-// ui text
-// programming system (zig subset)
-
-// dynamic code prototype:
-// block scripts generate zig text as a procedure -> pasted into a hot reloaded file and replaces and empty placeholder -> hot reload, script runs in-game
