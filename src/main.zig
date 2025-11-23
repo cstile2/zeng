@@ -922,6 +922,9 @@ pub fn recurse_children(e_id: ecs.entity_id, world: *ecs.world, tabs: usize) voi
         std.debug.print(" - ", .{});
     }
     std.debug.print("#{}: ", .{e_id});
+    if (world.get(e_id, zeng.name_component)) |name| {
+        std.debug.print("\"{s}\" ", .{name.*});
+    }
     if (world.get(e_id, zeng.skinned_mesh)) |sm| {
         std.debug.print("skinned_mesh ", .{});
         extra_children.appendAssumeCapacity(sm.skeleton);
@@ -1453,7 +1456,7 @@ pub fn main() !void {
                 while (anim.time > 1.0) {
                     anim.time -= 1.0;
                 }
-                const pose = zeng.create_pose(allocator, skel.bone_parent_indices.len, skel.*);
+                const pose = zeng.create_pose(allocator, skel.*);
                 zeng.get_animation_pose_with_weight(animation, anim.time, pose, 1);
                 zeng.apply_pose_to_skeleton(skel, pose);
                 zeng.free_pose(allocator, pose);

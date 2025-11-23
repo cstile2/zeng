@@ -48,26 +48,13 @@ pub fn draw_animated_skinned_mesh(world: *ecs.world, entity_mesh: zeng.skinned_m
     var clip_matrix = zeng.mat_mult(projection_matrix, zeng.mat_mult(inv_camera_matrix, entity_transform));
 
     const bone_matrices_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "bone_matrices");
-    zeng.gl.uniformMatrix4fv(bone_matrices_location, 100, zeng.gl.FALSE, @ptrCast(world.get(entity_mesh.skeleton, zeng.skeleton).?.model_bone_matrices));
-
     const world_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "world");
     const clip_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "clip");
     zeng.gl.uniformMatrix4fv(world_location, 1, zeng.gl.FALSE, &entity_transform);
     zeng.gl.uniformMatrix4fv(clip_location, 1, zeng.gl.FALSE, &clip_matrix);
+    zeng.gl.uniformMatrix4fv(bone_matrices_location, 100, zeng.gl.FALSE, @ptrCast(world.get(entity_mesh.skeleton, zeng.skeleton).?.model_bone_matrices));
 
     zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, entity_mesh.indices_type, null);
-
-    // const arr: [100][16]f32 = .{zeng.mat_identity} ** 100;
-    // const sk = world.get(entity_mesh.skeleton, zeng.skeleton).?;
-    // zeng.gl.uniformMatrix4fv(bone_matrices_location, 100, zeng.gl.FALSE, @ptrCast(sk.local_bone_matrices));
-    // zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, entity_mesh.indices_type, null);
-
-    // if (noise_tex == null) noise_tex = zeng.loader.load_texture("assets/images/noise.png", true, false);
-    // zeng.gl.useProgram(0);
-    // zeng.gl.bindTexture(zeng.gl.TEXTURE_2D, noise_tex.?);
-    // // zeng.gl.polygonMode(zeng.gl.FRONT_AND_BACK, zeng.gl.LINE);
-    // zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, zeng.gl.UNSIGNED_BYTE, null);
-    // // zeng.gl.polygonMode(zeng.gl.FRONT_AND_BACK, zeng.gl.FILL);
 }
 pub fn draw_sky(sky_shader: u32, square_vao: u32, square_indices_length: c_int, camera_matrix: zeng.world_matrix, camera: *zeng.camera) void {
     zeng.gl.useProgram(sky_shader);

@@ -559,14 +559,10 @@ pub fn matrix_use_rotations(matrix: *zeng.world_matrix, x: f64, y: f64) void {
     const rot_mat_vert = zeng.mat_axis_angle(zeng.vec3.RIGHT, @floatCast(y * -0.003));
     matrix.* = zeng.mat_tran(zeng.mat_mult(rot_mat_hor, rot_mat_vert), zeng.mat_position(matrix.*));
 }
-pub fn create_pose(allocator: std.mem.Allocator, num: usize, _skeleton: zeng.skeleton) zeng.skeleton_pose {
-    const rotations = allocator.alloc(zeng.quat, num) catch unreachable;
-    const translations = allocator.alloc(zeng.vec3, num) catch unreachable;
-    const scales = allocator.alloc(zeng.vec3, num) catch unreachable;
-
-    @memcpy(translations, _skeleton.default_bone_translations);
-    @memcpy(rotations, _skeleton.default_bone_rotations);
-    @memcpy(scales, _skeleton.default_bone_scales);
+pub fn create_pose(allocator: std.mem.Allocator, _skeleton: zeng.skeleton) zeng.skeleton_pose {
+    const rotations = allocator.dupe(quat, _skeleton.default_bone_rotations) catch unreachable;
+    const translations = allocator.dupe(vec3, _skeleton.default_bone_translations) catch unreachable;
+    const scales = allocator.dupe(vec3, _skeleton.default_bone_scales) catch unreachable;
 
     return .{ rotations, translations, scales };
 }
