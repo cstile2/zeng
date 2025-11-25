@@ -231,8 +231,16 @@ pub const quat = packed struct {
 };
 pub const material = struct {
     shader_program: u32,
+    // texture: u32,
+    parameter_map: std.StringHashMap(material_parameter) = undefined,
+};
+pub const material_parameter = union(enum) {
+    float_1: f32,
+    float_2: vec2,
+    float_3: vec3,
+    float_4: quat,
+    matrix_4: [16]f32,
     texture: u32,
-    // parameter_map: hashmap(string, *anyopaque)
 };
 pub const vec4 = packed struct {
     x: f32 = 0,
@@ -254,6 +262,7 @@ pub const mesh = struct {
 };
 pub const camera = struct {
     projection_matrix: [16]f32,
+    fov: f32 = 1.5,
 };
 pub const world_matrix = [16]f32;
 pub const skeleton = struct {
@@ -555,8 +564,8 @@ pub fn apply_pose_to_skeleton(_skeleton: *zeng.skeleton, pose: zeng.skeleton_pos
     }
 }
 pub fn matrix_use_rotations(matrix: *zeng.world_matrix, x: f64, y: f64) void {
-    const rot_mat_hor = zeng.mat_axis_angle(zeng.vec3.UP, @floatCast(x * -0.003));
-    const rot_mat_vert = zeng.mat_axis_angle(zeng.vec3.RIGHT, @floatCast(y * -0.003));
+    const rot_mat_hor = zeng.mat_axis_angle(zeng.vec3.UP, @floatCast(x));
+    const rot_mat_vert = zeng.mat_axis_angle(zeng.vec3.RIGHT, @floatCast(y));
     matrix.* = zeng.mat_tran(zeng.mat_mult(rot_mat_hor, rot_mat_vert), zeng.mat_position(matrix.*));
 }
 pub fn create_pose(allocator: std.mem.Allocator, _skeleton: zeng.skeleton) zeng.skeleton_pose {
@@ -1065,7 +1074,7 @@ pub fn window_resize_handler(width: u32, height: u32) void {
     zeng.gl.viewport(0, 0, @bitCast(width), @bitCast(height));
 
     const cam = global_world_ptr.get(global_camera_entity, zeng.camera).?;
-    cam.projection_matrix = zeng.mat_perspective_projection(1.5, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
+    cam.projection_matrix = zeng.mat_perspective_projection(cam.fov, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
 }
 fn key_callback(window: zeng.glfw.Window, key: zeng.glfw.Key, scancode: i32, action: zeng.glfw.Action, mods: zeng.glfw.Mods) void {
     _ = key; // autofix
@@ -1073,6 +1082,16 @@ fn key_callback(window: zeng.glfw.Window, key: zeng.glfw.Key, scancode: i32, act
     _ = scancode; // autofix
     _ = action; // autofix
     _ = mods; // autofix
+}
+pub fn swap_buffers(__graphics: __graphics_module) void {
+    _ = zeng.c.SwapBuffers(__graphics.hdc);
+}
+
+var next_netid: u32 = 0;
+pub fn get_new_netid() u32 {
+    const temp = next_netid;
+    next_netid += 1;
+    return temp;
 }
 
 // Iterators + Resources
@@ -1493,8 +1512,8 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
                 const _dy = raw.data.mouse.lLastY;
 
                 const _input = global_world_ptr.get(global_player_entity, rpc.input_message).?;
-                _input.rot_x += @as(f64, @floatFromInt(_dx)) * 0.7;
-                _input.rot_y += @as(f64, @floatFromInt(_dy)) * 0.7;
+                _input.rot_x -= @as(f64, @floatFromInt(_dx)) * 0.001;
+                _input.rot_y -= @as(f64, @floatFromInt(_dy)) * 0.001;
             }
 
             const flags = raw.data.mouse.unnamed_0.unnamed_0.usButtonFlags;

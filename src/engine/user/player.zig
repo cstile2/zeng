@@ -39,13 +39,25 @@ pub fn create_player(datablob: *Datablob, world: *ecs.world, skin_shader: u32, s
     top_children.append(allocator, player_gltf) catch unreachable;
     return player_gltf;
 }
-
-pub fn _player_matrix_from_rotations(x: f64, y: f64) zeng.world_matrix {
-    const rot_mat_hor = zeng.mat_axis_angle(zeng.vec3.UP, @floatCast(x * -0.003));
-    const rot_mat_vert = zeng.mat_axis_angle(zeng.vec3.RIGHT, @floatCast(y * -0.003));
-    return zeng.mat_mult(rot_mat_hor, rot_mat_vert);
+pub fn construct_main_server_player(datablob: *zeng.Datablob, world: *ecs.world, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator) ecs.entity_id {
+    const result = zeng.Player.create_player(datablob, world, skin_shader, static_shader, uv_checker_tex, fet, top_children, allocator, .{ .net_id = zeng.get_new_netid(), .remote_peer = null });
+    world.add(zeng.input_implement{ .move_fn = zeng.input_implement.default_move_fn, .jump_fn = zeng.input_implement.default_jump }, result);
+    world.get(result, zeng.world_matrix).?.* = zeng.mat_tran(world.get(result, zeng.world_matrix).?.*, zeng.vec3{ .y = 10.0 });
+    world.add(@as(zeng.frame_interpolator, undefined), result);
+    var found_entity = zeng.find_component_of_type(world, result, zeng.skinned_mesh, fet.fresh_query(.{zeng.children}));
+    while (found_entity) |_| {
+        world.remove(zeng.skinned_mesh, found_entity.?);
+        found_entity = zeng.find_component_of_type(world, result, zeng.skinned_mesh, fet.fresh_query(.{zeng.children}));
+    }
+    zeng.global_player_entity = result;
+    return result;
 }
 
+pub fn _player_matrix_from_rotations(x: f64, y: f64) zeng.world_matrix {
+    const rot_mat_hor = zeng.mat_axis_angle(zeng.vec3.UP, @floatCast(x));
+    const rot_mat_vert = zeng.mat_axis_angle(zeng.vec3.RIGHT, @floatCast(y));
+    return zeng.mat_mult(rot_mat_hor, rot_mat_vert);
+}
 pub fn player_collision_system(player_q: *ecs.query(.{ player, zeng.world_matrix }), debug: *debug_res, tri_ev: *zeng.events([3]zeng.vec3), spatial_hash_grid: *std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.collider_info))) !void {
     var player_it = player_q.iterator();
     while (player_it.next()) |player_curr| {
@@ -222,7 +234,6 @@ pub fn simulate_player(_player: *player, input: *const rpc.input_message, matrix
         _player.velocity = zeng.vec3.ZERO;
     }
 }
-
 pub fn shoot_system(q: *ecs.query(.{ rpc.input_message, zeng.world_matrix, zeng.net_id_component }), datablob: *Datablob, peer_map: *std.AutoHashMap(net.peer_info_t, zeng.client_info), world: *ecs.world, commands: *zeng.commands, tracker: *net.packet_ack_tracker_t, hitmarker_events: *zeng.events(rpc.hitmarker)) !void {
     var players = std.ArrayList(ecs.entity_id).initCapacity(std.heap.c_allocator, 0) catch unreachable;
     defer players.deinit(std.heap.c_allocator);

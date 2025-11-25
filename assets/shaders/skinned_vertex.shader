@@ -13,6 +13,7 @@ uniform mat4 clip;
 
 out vec3 f_normal;
 out vec2 f_tex_coord;
+out vec3 world_pos;
 
 void main() {
     vec4 blend_pos = vec4(0.0);
@@ -26,6 +27,7 @@ void main() {
     blend_normal = world * blend_normal;
     
     gl_Position = clip * blend_pos;
+    world_pos = (world * blend_pos).xyz;
 
     f_normal = normalize(blend_normal.xyz);
     f_tex_coord = v_tex_coord;

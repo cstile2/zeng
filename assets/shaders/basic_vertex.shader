@@ -9,6 +9,7 @@ uniform mat4 clip;
 
 out vec3 f_normal;
 out vec2 f_tex_coord;
+out vec3 world_pos;
 
 vec4 snap_to_position(vec4 base_position)
 {
@@ -29,6 +30,7 @@ void main()
 {
     f_normal = (world * vec4(v_normal, 0.0)).xyz;
     gl_Position = clip * vec4(v_position, 1.0);
+	world_pos = (world * vec4(v_position, 1.0)).xyz;
     // gl_Position = snap_to_position(gl_Position);
     f_tex_coord = v_tex_coord;
 }
