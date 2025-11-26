@@ -1085,6 +1085,8 @@ pub fn main() !void {
     __resources.insert_ptr(&peer_map);
     __resources.insert_ptr(&inverse_peer_map);
 
+    __resources.insert(zeng.shadow_map_res.init(allocator));
+
     zeng.loader.global_colliders.?.append(arena_allocator, zeng.cpu_mesh{ .indices = cube_collider_indices[0..], .positions = util.convert_float_slice_to_vec_slice(cube_collider_pos[0..]) }) catch unreachable;
     zeng.loader.global_matrices.?.append(arena_allocator, zeng.mat_identity) catch unreachable;
     var colliders = std.ArrayList(phy.collider_info).initCapacity(allocator, 0) catch unreachable;
@@ -1503,9 +1505,14 @@ pub fn main() !void {
         }
         animate_skeleton(test_skeleton_entity, "assets/gltf/people/KingShiny.gltf/animations/Walk", @floatCast(__resources.get(zeng.time_res).delta_time), &datablob, &world);
 
+        __resources.get(zeng.shadow_map_res).shadow_pass(fet.fresh_query(.{ zeng.world_matrix, zeng.mesh }));
+
+        zeng.gl.viewport(0, 0, __graphics.width, __graphics.height);
+
         const camera_camera_ptr = world.get(main_camera, zeng.camera).?;
         const camera_matrix_ptr = world.get(main_camera, zeng.world_matrix).?;
         zeng.render.draw_sky(sky_shader, square_vao, square_indices_length, camera_matrix_ptr.*, camera_camera_ptr);
+        // zeng.gl.clear(zeng.gl.COLOR_BUFFER_BIT | zeng.gl.DEPTH_BUFFER_BIT);
         fet.run_system(render_system);
         // zeng.render.draw_mesh(cube_mesh, zeng.mat_tran(zeng.mat_scal(zeng.mat_identity, zeng.vec3.ONE.mult(0.1)), zeng.vec3.ZERO), world.get(__resources.get(zeng.main_camera_res).id, zeng.camera).?.projection_matrix, zeng.mat_invert(world.get(__resources.get(zeng.main_camera_res).id, zeng.world_matrix).?.*));
 
@@ -1749,7 +1756,7 @@ pub fn camera_fly_system(cam: *zeng.main_camera_res, world: *ecs.world, q: *ecs.
     }
 }
 /// Render all meshes and skinned meshes (if they also have a world_matrix component)
-pub fn render_system(world: *ecs.world, cam: *zeng.main_camera_res, render_q: *ecs.query(.{ zeng.world_matrix, zeng.mesh }), skinned_q: *ecs.query(.{ zeng.world_matrix, zeng.skinned_mesh })) !void {
+pub fn render_system(world: *ecs.world, cam: *zeng.main_camera_res, render_q: *ecs.query(.{ zeng.world_matrix, zeng.mesh }), skinned_q: *ecs.query(.{ zeng.world_matrix, zeng.skinned_mesh }), shadow_map: *zeng.shadow_map_res) !void {
     const cam_matrix = world.get(cam.id, zeng.world_matrix).?;
     const cam_cam = world.get(cam.id, zeng.camera).?;
 
@@ -1759,7 +1766,7 @@ pub fn render_system(world: *ecs.world, cam: *zeng.main_camera_res, render_q: *e
     while (render_iterator.next()) |transform_mesh| {
         const transform, const mesh = transform_mesh;
 
-        zeng.render.draw_mesh(mesh.*, transform.*, cam_cam.projection_matrix, inv_camera_matrix, zeng.mat_position(cam_matrix.*));
+        zeng.render.draw_mesh(mesh.*, transform.*, cam_cam.projection_matrix, inv_camera_matrix, zeng.mat_position(cam_matrix.*), shadow_map.camera_matrix, shadow_map);
     }
 
     var skinned_iterator = skinned_q.iterator();

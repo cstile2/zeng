@@ -331,6 +331,74 @@ pub const cube_tracker_res = struct {
 pub const main_player_res = struct {
     id: ecs.entity_id,
 };
+pub const shadow_map_res = struct {
+    depth_map_frame_buffer_object: u32,
+    depth_map_texture: u32,
+    shadow_width: c_int,
+    shadow_height: c_int,
+    shader_program: u32,
+    camera_matrix: [16]f32,
+
+    pub fn init(allocator: std.mem.Allocator) @This() {
+        var ret: @This() = undefined;
+        ret.shadow_width = 2048;
+        ret.shadow_height = 2048;
+        ret.shader_program = loader.load_shader(allocator, "assets/shaders/light_map_vertex.shader", "assets/shaders/light_map_fragment.shader");
+
+        const light_view = mat_tran(mat_axis_angle(zeng.vec3.RIGHT, -3.14159 / 2.0), .{ .y = 10 });
+        const projection = mat_ortho(-10, 10, -10, 10, 0, 20);
+
+        ret.camera_matrix = zeng.mat_mult(projection, zeng.mat_invert(light_view));
+
+        zeng.gl.genFramebuffers(1, &ret.depth_map_frame_buffer_object);
+
+        gl.genTextures(1, &ret.depth_map_texture);
+        gl.bindTexture(gl.TEXTURE_2D, ret.depth_map_texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT, ret.shadow_width, ret.shadow_height, 0, gl.DEPTH_COMPONENT, gl.FLOAT, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        // gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        // gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_BORDER);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_BORDER);
+        const borderColor: [4]f32 = .{ 1.0, 1.0, 1.0, 1.0 };
+        gl.texParameterfv(gl.TEXTURE_2D, gl.TEXTURE_BORDER_COLOR, &borderColor);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, ret.depth_map_frame_buffer_object);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, ret.depth_map_texture, 0);
+        gl.drawBuffer(gl.NONE);
+        gl.readBuffer(gl.NONE);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, 0);
+
+        return ret;
+    }
+
+    pub fn shadow_pass(this: *@This(), q: *ecs.query(.{ world_matrix, mesh })) void {
+        gl.useProgram(this.shader_program);
+        const light_space_matrix_location = gl.getUniformLocation(this.shader_program, "lightSpaceMatrix");
+        gl.uniformMatrix4fv(light_space_matrix_location, 1, gl.FALSE, &this.camera_matrix);
+        const model_location = gl.getUniformLocation(this.shader_program, "model");
+
+        gl.viewport(0, 0, this.shadow_width, this.shadow_height);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.depth_map_frame_buffer_object);
+        gl.clear(gl.DEPTH_BUFFER_BIT);
+
+        var it = q.iterator();
+        while (it.next()) |bundle| {
+            const entity_matrix, const entity_mesh = bundle;
+
+            gl.uniformMatrix4fv(model_location, 1, gl.FALSE, entity_matrix);
+
+            zeng.gl.bindVertexArray(entity_mesh.vao_gpu);
+            zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, entity_mesh.indices_type, null);
+        }
+
+        // RenderScene();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, 0);
+    }
+};
+
 pub const sphere_collider = struct {
     radius: f32 = 1.0,
 };
@@ -864,6 +932,22 @@ pub fn mat_perspective_projection(fov: f32, aspect_ratio: f32, near: f32, far: f
     result[15] = 0.0;
 
     return result;
+}
+pub fn mat_ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) [16]f32 {
+    // Column-major layout (OpenGL style)
+    // indices:  m[col*4 + row]
+    var m: [16]f32 = .{0} ** 16;
+
+    m[0] = 2.0 / (right - left); // col 0, row 0
+    m[5] = 2.0 / (top - bottom); // col 1, row 1
+    m[10] = -2.0 / (far - near); // col 2, row 2
+    m[15] = 1.0; // col 3, row 3
+
+    m[12] = -(right + left) / (right - left); // col 3, row 0 → index 12
+    m[13] = -(top + bottom) / (top - bottom); // col 3, row 1 → index 13
+    m[14] = -(far + near) / (far - near); // col 3, row 2 → index 14
+
+    return m;
 }
 pub fn mat_axis_angle(axis: vec3, angle: f32) [16]f32 {
     const cosine = @cos(angle);
