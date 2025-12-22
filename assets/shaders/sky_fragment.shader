@@ -26,13 +26,14 @@ void main() {
 
     // Simple gradient sky: horizon to zenith
     float t = clamp(dir.y * 6.0 + 0.5, 0.0, 1.0);
-    vec3 horizon = vec3(0.02, 0.03, 0.02);
-     vec3 zenith_a = vec3(0.1, 0.1, 0.3);
-     vec3 zenith_b = vec3(0.4, 0.2, 0.4);
+    vec3 horizon = vec3(0.3,0.2,0.3); //vec3(0.02, 0.03, 0.02);
+    vec3 zenith_a = vec3(0.6, 0.6, 0.7);
+    vec3 zenith_b = horizon; //vec3(0.4, 0.2, 0.4);
     vec3 zenith = mix(zenith_b, zenith_a, smoothstep(0.0, 1.0, dir.y * 1.3));
 
-    vec3 skyColor = mix(horizon, zenith, smoothstep(0.0, 1.0, t));
-    // vec3 skyColor = zenith;
+    vec3 color = mix(horizon, zenith, smoothstep(0.0, 1.0, t));
+    float avg = (color.x + color.y + color.z)/3.0;
+    color = color / (avg + 1.0);
 
-    FragColor = vec4(skyColor, 1.0);
+    FragColor = vec4(color, 1.0);
 }

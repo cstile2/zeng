@@ -1,5 +1,9 @@
 export fn on_button_pressed(res: *zeng.resources_t) callconv(.c) void {
-    _ = res;
+    const _player = dll_compatible_res_get(res, zeng.main_player_res);
+    const world = dll_compatible_res_get(res, zeng.ecs.world);
+    const player = world.get(_player.id, zeng.Player.player).?;
+    player.velocity.y += 10;
+    if (true) {}
 }
 const std = @import("std");
 const zeng = @import("zeng");
@@ -9,7 +13,7 @@ pub const hot_reload_procedures = extern struct {
     on_button_pressed: *const @TypeOf(on_button_pressed),
 };
 
-pub fn get_item(res: *zeng.resources_t, T: type) *T {
+pub fn dll_compatible_res_get(res: *zeng.resources_t, T: type) *T {
     var it = res.map.iterator();
     while (it.next()) |curr| {
         const ptr = @as([*:0]const u8, @ptrFromInt(curr.key_ptr.*));
@@ -22,10 +26,6 @@ pub fn get_item(res: *zeng.resources_t, T: type) *T {
 
 export fn update(res: *zeng.resources_t) callconv(.c) void {
     _ = res;
-    // const _player = get_item(res, zeng.main_player_res);
-    // const world = get_item(res, zeng.ecs.world);
-    // const player = world.get(_player.id, zeng.Player.player).?;
-    // player.velocity.y += 18;
 }
 
 pub export fn get_game_api() *const hot_reload_procedures {

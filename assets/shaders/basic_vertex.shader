@@ -34,6 +34,6 @@ void main()
     gl_Position = clip * vec4(v_position, 1.0);
 	world_pos = (world * vec4(v_position, 1.0)).xyz;
 	FragPosLightSpace = lightSpaceMatrix * vec4(world_pos, 1.0);
-    // gl_Position = snap_to_position(gl_Position);
+    gl_Position = snap_to_position(gl_Position);
     f_tex_coord = v_tex_coord;
 }

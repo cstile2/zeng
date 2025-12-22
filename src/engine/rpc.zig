@@ -1,22 +1,8 @@
 const rpc = @This();
 const std = @import("std");
 const zeng = @import("zeng.zig");
-// const main = @import("main.zig");
 const net = @import("networking.zig");
 const Player = @import("user/player.zig");
-
-pub const REMOTE_PROCEDURES = .{
-    rpc.CTS_print_hello,
-    rpc.CTS_print_int,
-};
-
-pub fn CTS_print_hello() void {
-    std.debug.print("this is being printed on the server!\n", .{});
-}
-
-pub fn CTS_print_int(i: i32) void {
-    std.debug.print("here: {}\n", .{i});
-}
 
 pub const player_spawn_message = struct {
     SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
@@ -67,8 +53,6 @@ pub const world_update = struct {
     // server_player_animation_time: f32,
     cube_pos: zeng.vec3,
 };
-// client send sync to server
-// server send sync to client
 pub const hitmarker = struct {
     SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
 };

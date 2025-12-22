@@ -1,7 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const zeng = @import("zeng.zig");
-// const main = @import("main.zig");
 const COMPONENT_TYPES = zeng.COMPONENT_TYPES;
 
 pub const comp_rtti = struct {
@@ -18,11 +17,11 @@ pub const unstable_entity_location = struct {
 const component_id = u64;
 const archetype_id = u64;
 pub const entity_id = u64;
-const ECSError = error{
-    RequestFailed,
-    OutOfBounds,
-    RedundantOperation,
-    NonexistentComponent,
+const ecs_error = error{
+    request_failed,
+    out_of_bounds,
+    redundant_operation,
+    nonexistent_component,
 };
 
 // integrate custom type-checking
@@ -156,6 +155,16 @@ pub fn query(comptime component_list: anytype) type {
     };
 }
 pub fn query_iterator(comptime types: anytype) type {
+    comptime var tuple_fields2: [types.len]std.builtin.Type.StructField = undefined;
+    comptime for (types, 0..) |_type, i| {
+        tuple_fields2[i] = .{
+            .type = _type,
+            .name = std.fmt.comptimePrint("c_{}", .{_type}),
+            .default_value_ptr = null,
+            .is_comptime = false,
+            .alignment = @alignOf(_type),
+        };
+    };
     comptime var tuple_fields: [types.len]std.builtin.Type.StructField = undefined;
     comptime for (types, 0..) |_type, i| {
         tuple_fields[i] = .{
@@ -172,12 +181,19 @@ pub fn query_iterator(comptime types: anytype) type {
         .decls = &.{},
         .is_tuple = true,
     } });
+    const ptrs_to_components_struct = @Type(.{ .@"struct" = .{
+        .layout = .auto,
+        .fields = &tuple_fields2,
+        .decls = &.{},
+        .is_tuple = false,
+    } });
 
     return struct {
         q: *const query(types),
         q_table_values: []*const archetype_table,
         index: usize,
         current_table: usize,
+        HACKY_CURR_ENTITY_ID: entity_id = undefined,
         pub const TYPES: @TypeOf(types) = types;
         pub fn next(self: *@This()) ?ptrs_to_components {
             if (self.q_table_values.len == 0) return null;
@@ -194,10 +210,32 @@ pub fn query_iterator(comptime types: anytype) type {
             inline for (&component_ptrs, comptime 0..) |*component_ptr, i| {
                 component_ptr.* = current_columns[i].get(self.index, @TypeOf(component_ptr.*.*));
             }
+            self.HACKY_CURR_ENTITY_ID = self.q_table_values[self.current_table].public_ids[self.index];
 
             self.index += 1;
             return component_ptrs;
         }
+        pub fn next_entity(self: *@This()) ?ptrs_to_components_struct {
+            if (self.q_table_values.len == 0) return null;
+            while (self.index >= self.q_table_values[self.current_table].count) {
+                if (self.current_table + 1 < self.q_table_values.len) {
+                    self.current_table += 1;
+                    self.index = 0;
+                } else return null;
+            }
+
+            var current_columns = self.q.ordered_component_columns.items[self.current_table];
+
+            var component_ptrs: ptrs_to_components = undefined;
+            inline for (&component_ptrs, comptime 0..) |*component_ptr, i| {
+                component_ptr.* = current_columns[i].get(self.index, @TypeOf(component_ptr.*.*));
+            }
+            self.HACKY_CURR_ENTITY_ID = self.q_table_values[self.current_table].public_ids[self.index];
+
+            self.index += 1;
+            return component_ptrs;
+        }
+
         pub fn reset(self: *@This()) void {
             self.index = 0;
             self.current_table = 0;
@@ -252,6 +290,13 @@ pub const world = struct {
         self.new_public_id += 1;
         return self.new_public_id - 1;
     }
+    /// delete an entity from the world completely - does not free any memory owned by the entity or its components
+    pub fn despawn(self: *world, entity: entity_id) void {
+        const unstable = self.locations.get(entity).?;
+        const table = self.tables.getPtr(unstable.archetype_hash).?;
+        swap_remove_entity(self, table, unstable.row) catch unreachable;
+        _ = self.locations.remove(entity);
+    }
     /// add component - not to be used outside of world context
     pub fn _internal_faster_add(self: *world, V: anytype, edl: *unstable_entity_location) !void {
         const old_hash = edl.archetype_hash;
@@ -305,6 +350,18 @@ pub const world = struct {
     pub fn get(self: *const world, id: entity_id, T: type) ?*T {
         const unstable = self.locations.get(id).?;
         return (self.tables.getPtr(unstable.archetype_hash) orelse return null).get(T, unstable.row);
+    }
+    pub fn get_checked(self: *const world, id: entity_id, T: type) !?*T {
+        const my_error = error{just_an_error};
+        const unstable = self.locations.get(id) orelse return my_error.just_an_error;
+        return (self.tables.getPtr(unstable.archetype_hash) orelse return null).get(T, unstable.row);
+    }
+    pub fn is_alive(this: *@This(), entity: entity_id) bool {
+        if (this.locations.get(entity)) |_| {
+            return true;
+        } else {
+            return false;
+        }
     }
     /// removes a component if that component type is on the specified entity
     pub fn _internal_faster_remove(self: *world, T: type, edl: *unstable_entity_location) !void {
@@ -422,7 +479,7 @@ pub const archetype_table = struct {
         self.ensure_enough_capacity() catch unreachable;
 
         inline for (component_values) |field| {
-            const storage = self.storages.getPtr(comptime COMP_TYPE_TO_ID(@TypeOf(field))) orelse return ECSError.RequestFailed;
+            const storage = self.storages.getPtr(comptime COMP_TYPE_TO_ID(@TypeOf(field))) orelse return ecs_error.request_failed;
             storage.get(self.count, @TypeOf(field)).* = field;
         }
         self.count += 1;
@@ -459,8 +516,8 @@ pub const component_column = struct {
         self.capacity = capacity;
         self.type_info = T_run;
         if (self.type_info.type_size == 0) return;
-        self.array = (allocator.rawAlloc(T_run.type_size * capacity, @enumFromInt(self.type_info.type_alignment), @returnAddress()) orelse return ECSError.RequestFailed)[0 .. capacity * T_run.type_size];
-        // self.array = (allocator.vtable.alloc(allocator.ptr, T_run.type_size * capacity, T_run.type_alignment, @returnAddress()) orelse return ECSError.RequestFailed)[0 .. T_run.type_size * capacity];
+        self.array = (allocator.rawAlloc(T_run.type_size * capacity, @enumFromInt(self.type_info.type_alignment), @returnAddress()) orelse return ecs_error.request_failed)[0 .. capacity * T_run.type_size];
+        // self.array = (allocator.vtable.alloc(allocator.ptr, T_run.type_size * capacity, T_run.type_alignment, @returnAddress()) orelse return ecs_error.request_failed)[0 .. T_run.type_size * capacity];
     }
     pub fn deinit(self: *component_column, allocator: std.mem.Allocator) !void {
         if (self.type_info.type_size == 0) return;
@@ -471,7 +528,7 @@ pub const component_column = struct {
     pub fn double_capacity(self: *component_column, allocator: std.mem.Allocator) !void {
         self.capacity *= 2;
         if (self.type_info.type_size == 0) return;
-        const temp = (allocator.vtable.alloc(allocator.ptr, self.type_info.type_size * self.capacity * 2, @enumFromInt(self.type_info.type_alignment), @returnAddress()) orelse return ECSError.RequestFailed)[0 .. self.type_info.type_size * self.capacity * 2];
+        const temp = (allocator.vtable.alloc(allocator.ptr, self.type_info.type_size * self.capacity * 2, @enumFromInt(self.type_info.type_alignment), @returnAddress()) orelse return ecs_error.request_failed)[0 .. self.type_info.type_size * self.capacity * 2];
         @memcpy(temp[0..self.array.len], self.array);
         allocator.vtable.free(allocator.ptr, self.array, @enumFromInt(self.type_info.type_alignment), @returnAddress());
         self.array = temp;

@@ -17,37 +17,37 @@ pub const mesh_triangle_data = struct {
 };
 
 pub const collider_type = enum {
-    mesh,
+    // mesh,
     sphere,
     support_based,
 };
-pub const collider_info = struct {
+pub const convex_collider = struct {
     tag: collider_type = .sphere,
-    support: *const fn (vec3, collider_info) vec3,
+    support: *const fn (vec3, convex_collider) vec3,
     data: *const anyopaque,
     matrix: zeng.world_matrix,
 
-    pub fn _support(self: collider_info, dir: vec3) vec3 {
+    pub fn _support(self: convex_collider, dir: vec3) vec3 {
         const _dir = zeng.mat_mult_vec4(zeng.mat_invert(self.matrix), dir.to_vec4(0.0)).to_vec3();
         return zeng.mat_mult_vec4(self.matrix, self.support(_dir, self).to_vec4(1.0)).to_vec3();
     }
 };
 
-pub fn sphere(dir: vec3, coll: collider_info) vec3 {
+pub fn sphere(dir: vec3, coll: convex_collider) vec3 {
     _ = coll; // autofix
     return dir.normalized();
 }
-pub fn point(dir: vec3, coll: collider_info) vec3 {
+pub fn point(dir: vec3, coll: convex_collider) vec3 {
     _ = dir; // autofix
     _ = coll; // autofix
     return vec3.ZERO;
 }
-pub fn dual_point(dir: vec3, coll: collider_info) vec3 {
+pub fn dual_point(dir: vec3, coll: convex_collider) vec3 {
     _ = coll; // autofix
     if (dir.y >= 0) return vec3{ .y = 0.5 };
     return vec3{ .y = -0.5 };
 }
-pub fn cube(dir: vec3, coll: collider_info) vec3 {
+pub fn cube(dir: vec3, coll: convex_collider) vec3 {
     _ = coll; // autofix
     return vec3{
         .x = if (dir.x >= 0) 0.5 else -0.5,
@@ -55,7 +55,7 @@ pub fn cube(dir: vec3, coll: collider_info) vec3 {
         .z = if (dir.z >= 0) 0.5 else -0.5,
     };
 }
-pub fn triangle(dir: vec3, coll: collider_info) vec3 {
+pub fn triangle(dir: vec3, coll: convex_collider) vec3 {
     const tri_data = @as(*const [3]vec3, @ptrCast(@alignCast(coll.data)));
 
     var max_float = tri_data[0].dot(dir);
@@ -69,11 +69,10 @@ pub fn triangle(dir: vec3, coll: collider_info) vec3 {
 
     return max_pos;
 }
-pub fn player_capsule(dir: vec3, coll: collider_info) vec3 {
+pub fn player_capsule(dir: vec3, coll: convex_collider) vec3 {
     return dual_point(dir, coll).add(dir.normalized().mult(0.35));
 }
-
-pub fn mesh_triangle(dir: vec3, coll: collider_info) vec3 {
+pub fn mesh_triangle(dir: vec3, coll: convex_collider) vec3 {
     const tri_data = @as(*const mesh_triangle_data, @ptrCast(@alignCast(coll.data)));
 
     var max_float = tri_data.positions[tri_data.indices[0]].dot(dir);
@@ -88,7 +87,7 @@ pub fn mesh_triangle(dir: vec3, coll: collider_info) vec3 {
     return max_pos;
 }
 
-fn support(a_coll: collider_info, b_coll: collider_info, dir: vec3) vec3 {
+fn support(a_coll: convex_collider, b_coll: convex_collider, dir: vec3) vec3 {
     const a_dir = zeng.mat_mult_vec4(zeng.mat_invert(a_coll.matrix), dir.to_vec4(0.0)).to_vec3();
     const b_dir = zeng.mat_mult_vec4(zeng.mat_invert(b_coll.matrix), dir.to_vec4(0.0)).to_vec3();
 
@@ -97,7 +96,7 @@ fn support(a_coll: collider_info, b_coll: collider_info, dir: vec3) vec3 {
         zeng.mat_mult_vec4(b_coll.matrix, b_coll.support(b_dir.neg(), b_coll).to_vec4(1.0)).to_vec3(),
     );
 }
-fn support_flat(a_coll: collider_info, b_coll: collider_info, direction: vec2, basis_right: vec3, basis_up: vec3) vec3 {
+fn support_flat(a_coll: convex_collider, b_coll: convex_collider, direction: vec2, basis_right: vec3, basis_up: vec3) vec3 {
     const real_direction = basis_right.mult(direction.x).add(basis_up.mult(direction.y));
     return support(a_coll, b_coll, real_direction);
 }
@@ -137,14 +136,8 @@ const gjk_state = struct {
     bad: bool = false,
 };
 
-const w_lambda = struct {
-    [4]f32,
-    [4]vec3,
-    usize,
-};
-
-pub fn shape_cast(a_coll: collider_info, b_coll: collider_info, ray_direction: vec3, enter_t: *f32, exit_t: *f32, _error: *bool) bool {
-    _error.* = false;
+pub fn shape_cast(a_coll: convex_collider, b_coll: convex_collider, ray_direction: vec3, enter_t: *f32, exit_t: *f32, raycast_error: *bool) bool {
+    raycast_error.* = false;
     var tri2d: [3]vec2 = undefined;
     var tri3d: [3]vec3 = undefined;
 
@@ -183,7 +176,7 @@ pub fn shape_cast(a_coll: collider_info, b_coll: collider_info, ray_direction: v
             var error_exit = false;
             enter_t.* = shape_cast_refine(a_coll, b_coll, tri3d, tri2d, ray_direction, basis_right, basis_up, true, &error_enter);
             exit_t.* = shape_cast_refine(a_coll, b_coll, tri3d, tri2d, ray_direction, basis_right, basis_up, false, &error_exit);
-            _error.* = error_enter or error_exit;
+            raycast_error.* = error_enter or error_exit;
             return true;
         }
 
@@ -197,7 +190,7 @@ pub fn shape_cast(a_coll: collider_info, b_coll: collider_info, ray_direction: v
     }
     return false;
 }
-fn shape_cast_refine(a_coll: collider_info, b_coll: collider_info, _tri3d: [3]vec3, _tri2d: [3]vec2, ray_direction: vec3, basis_right: vec3, basis_up: vec3, use_enter: bool, _error: *bool) f32 {
+fn shape_cast_refine(a_coll: convex_collider, b_coll: convex_collider, _tri3d: [3]vec3, _tri2d: [3]vec2, ray_direction: vec3, basis_right: vec3, basis_up: vec3, use_enter: bool, _error: *bool) f32 {
     var tri3d = _tri3d;
     var tri2d = _tri2d;
     _error.* = false;
@@ -247,7 +240,7 @@ fn shape_cast_refine(a_coll: collider_info, b_coll: collider_info, _tri3d: [3]ve
 
     return (tri3d[0]).dot(final_normal) / denom;
 }
-pub fn shape_overlap(a_coll: collider_info, b_coll: collider_info) bool {
+pub fn shape_overlap(a_coll: convex_collider, b_coll: convex_collider) bool {
     var tet: [4]vec3 = undefined;
 
     var dir = vec3{ .x = 1 };
@@ -304,7 +297,7 @@ pub fn shape_overlap(a_coll: collider_info, b_coll: collider_info) bool {
     }
     return false;
 }
-pub fn shape_separation(a_coll: collider_info, b_coll: collider_info, info: render.triangle_debug_info, num: usize) vec3 {
+pub fn shape_separation(a_coll: convex_collider, b_coll: convex_collider, info: render.triangle_debug_info, num: usize) vec3 {
     var tet: [4]vec3 = undefined;
     var dir = vec3{ .x = 1 };
     tet[0] = support(a_coll, b_coll, dir);
@@ -350,34 +343,34 @@ pub fn shape_separation(a_coll: collider_info, b_coll: collider_info, info: rend
     if (len == 1) render.debug_draw_triangle(.{ tet[0], tet[0].add(vec3.RIGHT.mult(0.05)), tet[0].add(vec3.UP.mult(0.05)) }, info);
     return cp;
 }
-pub fn shape_separation2(a_coll: collider_info, b_coll: collider_info, info: render.triangle_debug_info, num: usize) vec3 {
-    var tet: [4]vec3 = undefined;
-    var len: usize = 0;
-    var v = vec3{ .x = 1 };
-    var dir = v.neg();
-    var it: u32 = 0;
-    var W: gjk_state = undefined;
-    W.len = 0;
-    while (it < num) {
-        defer it += 1;
+// pub fn shape_separation2(a_coll: convex_collider, b_coll: convex_collider, info: render.triangle_debug_info, num: usize) vec3 {
+//     var tet: [4]vec3 = undefined;
+//     var len: usize = 0;
+//     var v = vec3{ .x = 1 };
+//     var dir = v.neg();
+//     var it: u32 = 0;
+//     var W: gjk_state = undefined;
+//     W.len = 0;
+//     while (it < num) {
+//         defer it += 1;
 
-        const new_point = support(a_coll, b_coll, dir);
-        if (redundant_point(tet, len, new_point) or v.dot(v) - v.dot(new_point) <= eps) break;
-        tet, len = union_w(W.tet, W.len, new_point);
-        W = dist(tet, len);
-        v = W.cp;
-        dir = W.dir;
-        if (W.len == 4 or v.length_sq() < eps) break;
-    }
-    std.debug.print("{} {}\n", .{ len, it });
-    for (0..len) |i| {
-        for (i + 1..len) |j| {
-            render.debug_draw_triangle(.{ tet[i], tet[j], tet[j] }, info);
-        }
-    }
-    if (len == 1) render.debug_draw_triangle(.{ tet[0], tet[0].add(vec3.RIGHT.mult(0.05)), tet[0].add(vec3.UP.mult(0.05)) }, info);
-    return v;
-}
+//         const new_point = support(a_coll, b_coll, dir);
+//         if (redundant_point(tet, len, new_point) or v.dot(v) - v.dot(new_point) <= eps) break;
+//         tet, len = union_w(W.tet, W.len, new_point);
+//         W = dist(tet, len);
+//         v = W.cp;
+//         dir = W.dir;
+//         if (W.len == 4 or v.length_sq() < eps) break;
+//     }
+//     std.debug.print("{} {}\n", .{ len, it });
+//     for (0..len) |i| {
+//         for (i + 1..len) |j| {
+//             render.debug_draw_triangle(.{ tet[i], tet[j], tet[j] }, info);
+//         }
+//     }
+//     if (len == 1) render.debug_draw_triangle(.{ tet[0], tet[0].add(vec3.RIGHT.mult(0.05)), tet[0].add(vec3.UP.mult(0.05)) }, info);
+//     return v;
+// }
 fn dist(tet: [4]vec3, len: usize) gjk_state {
     var new_state: gjk_state = undefined;
     if (len == 1) {
@@ -499,123 +492,131 @@ fn redundant_point(tet: [4]vec3, len: usize, p: vec3) bool {
     return false;
 }
 
-fn S3D(tet: [4]vec3, tet_len: usize) w_lambda {
-    _ = tet_len;
-    var W: [4]vec3 = undefined;
-    var lambda: [4]f32 = undefined;
-    var len: usize = undefined;
-    const M: [16]f32 = .{
-        tet[0].x, tet[1].x, tet[2].x, tet[3].x,
-        tet[0].y, tet[1].y, tet[2].y, tet[3].y,
-        tet[0].z, tet[1].z, tet[2].z, tet[3].z,
-        1.0,      1.0,      1.0,      1.0,
+pub const ACTUAL_GJK_IMPLEMENTATION_BASED_ON_PAPER = struct {
+    const w_lambda = struct {
+        [4]f32,
+        [4]vec3,
+        usize,
     };
-    const C_4 = .{
-        zeng.mat3_determinant_col_major(zeng.mat4_minor3x3(M, 4, 0)),
-        zeng.mat3_determinant_col_major(zeng.mat4_minor3x3(M, 4, 1)),
-        zeng.mat3_determinant_col_major(zeng.mat4_minor3x3(M, 4, 2)),
-        zeng.mat3_determinant_col_major(zeng.mat4_minor3x3(M, 4, 3)),
-    };
-    const det_M = C_4[0] + C_4[1] + C_4[2] + C_4[3];
-    if (compare_signs(det_M, C_4[0]) and compare_signs(det_M, C_4[1]) and compare_signs(det_M, C_4[2]) and compare_signs(det_M, C_4[3])) {
-        lambda = .{ C_4[0] / det_M, C_4[1] / det_M, C_4[2] / det_M, C_4[3] / det_M };
-        W = tet;
-        len = 4;
-    } else {
-        var d = std.math.floatMax(f32);
-        for (1..4) |j| {
-            if (compare_signs(det_M, -C_4[j])) {
-                const ex_tet, const ex_len = excluding(tet, len, j);
-                const lambda_, const W_, const len_ = S2D(ex_tet, ex_len);
-                const d_ = linear_combine(W_, lambda_, len_).length_sq();
-                if (d_ < d) {
-                    W = W_;
-                    lambda = lambda_;
-                    len = len_;
-                    d = d_;
+
+    fn S3D(tet: [4]vec3, tet_len: usize) w_lambda {
+        _ = tet_len;
+        var W: [4]vec3 = undefined;
+        var lambda: [4]f32 = undefined;
+        var len: usize = undefined;
+        const M: [16]f32 = .{
+            tet[0].x, tet[1].x, tet[2].x, tet[3].x,
+            tet[0].y, tet[1].y, tet[2].y, tet[3].y,
+            tet[0].z, tet[1].z, tet[2].z, tet[3].z,
+            1.0,      1.0,      1.0,      1.0,
+        };
+        const C_4 = .{
+            zeng.mat3_determinant_col_major(zeng.mat4_minor3x3(M, 4, 0)),
+            zeng.mat3_determinant_col_major(zeng.mat4_minor3x3(M, 4, 1)),
+            zeng.mat3_determinant_col_major(zeng.mat4_minor3x3(M, 4, 2)),
+            zeng.mat3_determinant_col_major(zeng.mat4_minor3x3(M, 4, 3)),
+        };
+        const det_M = C_4[0] + C_4[1] + C_4[2] + C_4[3];
+        if (compare_signs(det_M, C_4[0]) and compare_signs(det_M, C_4[1]) and compare_signs(det_M, C_4[2]) and compare_signs(det_M, C_4[3])) {
+            lambda = .{ C_4[0] / det_M, C_4[1] / det_M, C_4[2] / det_M, C_4[3] / det_M };
+            W = tet;
+            len = 4;
+        } else {
+            var d = std.math.floatMax(f32);
+            for (1..4) |j| {
+                if (compare_signs(det_M, -C_4[j])) {
+                    const ex_tet, const ex_len = excluding(tet, len, j);
+                    const lambda_, const W_, const len_ = S2D(ex_tet, ex_len);
+                    const d_ = linear_combine(W_, lambda_, len_).length_sq();
+                    if (d_ < d) {
+                        W = W_;
+                        lambda = lambda_;
+                        len = len_;
+                        d = d_;
+                    }
                 }
             }
         }
+        return .{ lambda, W, len };
     }
-    return .{ lambda, W, len };
-}
-fn S2D(tet: [4]vec3, len: usize) w_lambda {
-    _ = tet; // autofix
-    _ = len; // autofix
-    return undefined;
-}
-fn S1D(tet: [4]vec3, len: usize) w_lambda {
-    _ = tet; // autofix
-    _ = len; // autofix
-    return undefined;
-}
+    fn S2D(tet: [4]vec3, len: usize) w_lambda {
+        _ = tet; // autofix
+        _ = len; // autofix
+        return undefined;
+    }
+    fn S1D(tet: [4]vec3, len: usize) w_lambda {
+        _ = tet; // autofix
+        _ = len; // autofix
+        return undefined;
+    }
 
-fn signed_volumes(tet: [4]vec3, len: usize) w_lambda {
-    if (len == 4) {
-        return S3D(tet, len);
-    } else if (len == 3) {
-        return S2D(tet, len);
-    } else if (len == 2) {
-        return S1D(tet, len);
-    } else {
-        return .{ .coords = .{ 1, undefined, undefined, undefined }, .tet = tet, .len = 1 };
-    }
-}
-
-fn gjk(a_coll: collider_info, b_coll: collider_info, v_0: vec3) vec3 {
-    var v = v_0;
-    var tet: [4]vec3 = .{ undefined, undefined, undefined, undefined };
-    var tet_len: usize = 0;
-    var W: [4]vec3 = .{ undefined, undefined, undefined, undefined };
-    var W_len = 0;
-    var it: u32 = 0;
-    while (it < 99) {
-        defer it += 1;
-        const new_support = support(a_coll, b_coll, v.neg());
-        if (redundant_point(tet, W_len, new_support) or v.dot(v) - v.dot(new_support) <= eps * eps) break;
-        tet, tet_len = union_w(W, W_len, new_support);
-        W, const lambda, W_len = signed_volumes(tet, tet_len);
-        v = linear_combine(W, lambda, W_len);
-        if (W_len == 4 or v.length_sq() < eps) break;
-    }
-    return v;
-}
-
-fn union_w(W: [4]vec3, W_len: usize, new_point: vec3) struct { [4]vec3, usize } {
-    var ret: [4]vec3 = undefined;
-    var ret_len: usize = undefined;
-    var idx = W_len;
-    while (idx > 0) {
-        defer idx -= 1;
-        ret[idx] = W[idx - 1];
-    }
-    ret[0] = new_point;
-    ret_len = W_len + 1;
-    return .{ ret, ret_len };
-}
-fn linear_combine(W: [4]vec3, lambda: [4]f32, len: usize) vec3 {
-    var result = vec3.ZERO;
-    for (0..len) |i| {
-        result = result.add(W[i].mult(lambda[i]));
-    }
-    return result;
-}
-fn compare_signs(a: f32, b: f32) bool {
-    if (a > 0 and b > 0) return true;
-    if (a < 0 and b < 0) return true;
-    return false;
-}
-fn excluding(tet: [4]vec3, len: usize, index: usize) struct { [4]vec3, usize } {
-    var out: [4]vec3 = undefined;
-    var out_len: usize = 0;
-    for (0..len) |i| {
-        if (i != index) {
-            out[out_len] = tet[i];
-            out_len += 1;
+    fn signed_volumes(tet: [4]vec3, len: usize) w_lambda {
+        if (len == 4) {
+            return S3D(tet, len);
+        } else if (len == 3) {
+            return S2D(tet, len);
+        } else if (len == 2) {
+            return S1D(tet, len);
+        } else {
+            return .{ .coords = .{ 1, undefined, undefined, undefined }, .tet = tet, .len = 1 };
         }
     }
-    return .{ out, out_len };
-}
+
+    fn gjk(a_coll: convex_collider, b_coll: convex_collider, v_0: vec3) vec3 {
+        var v = v_0;
+        var tet: [4]vec3 = .{ undefined, undefined, undefined, undefined };
+        var tet_len: usize = 0;
+        var W: [4]vec3 = .{ undefined, undefined, undefined, undefined };
+        var W_len = 0;
+        var it: u32 = 0;
+        while (it < 99) {
+            defer it += 1;
+            const new_support = support(a_coll, b_coll, v.neg());
+            if (redundant_point(tet, W_len, new_support) or v.dot(v) - v.dot(new_support) <= eps * eps) break;
+            tet, tet_len = union_w(W, W_len, new_support);
+            W, const lambda, W_len = signed_volumes(tet, tet_len);
+            v = linear_combine(W, lambda, W_len);
+            if (W_len == 4 or v.length_sq() < eps) break;
+        }
+        return v;
+    }
+
+    fn union_w(W: [4]vec3, W_len: usize, new_point: vec3) struct { [4]vec3, usize } {
+        var ret: [4]vec3 = undefined;
+        var ret_len: usize = undefined;
+        var idx = W_len;
+        while (idx > 0) {
+            defer idx -= 1;
+            ret[idx] = W[idx - 1];
+        }
+        ret[0] = new_point;
+        ret_len = W_len + 1;
+        return .{ ret, ret_len };
+    }
+    fn linear_combine(W: [4]vec3, lambda: [4]f32, len: usize) vec3 {
+        var result = vec3.ZERO;
+        for (0..len) |i| {
+            result = result.add(W[i].mult(lambda[i]));
+        }
+        return result;
+    }
+    fn compare_signs(a: f32, b: f32) bool {
+        if (a > 0 and b > 0) return true;
+        if (a < 0 and b < 0) return true;
+        return false;
+    }
+    fn excluding(tet: [4]vec3, len: usize, index: usize) struct { [4]vec3, usize } {
+        var out: [4]vec3 = undefined;
+        var out_len: usize = 0;
+        for (0..len) |i| {
+            if (i != index) {
+                out[out_len] = tet[i];
+                out_len += 1;
+            }
+        }
+        return .{ out, out_len };
+    }
+};
 
 pub const raycast_result = struct {
     normal: vec3,
@@ -637,8 +638,7 @@ pub fn ray_cast_triangle(ro: vec3, rd: vec3, v0: vec3, v1: vec3, v2: vec3, resul
     if (u < 0.0 or v < 0.0 or (u + v) > 1.0) return false;
     return true;
 }
-
-pub fn ray_cast(ro: vec3, rd: vec3, physics_data: []collider_info, result: *raycast_result) bool {
+pub fn ray_cast(ro: vec3, rd: vec3, physics_data: []convex_collider, result: *raycast_result) bool {
     _ = ro;
     _ = rd;
     _ = physics_data;
@@ -681,9 +681,9 @@ pub fn quantize(s: f32, GRIDSIZE: f32) isize {
     return @intFromFloat(@round(s / GRIDSIZE));
 }
 pub const ivec3 = struct { isize, isize, isize };
-pub fn construct_spatial_hash_grid(colliders: std.ArrayList(collider_info), spatial_hash_grid: *std.AutoHashMap(ivec3, std.ArrayList(*collider_info)), allocator: std.mem.Allocator) void {
+pub fn construct_spatial_hash_grid(colliders: std.ArrayList(convex_collider), spatial_hash_grid: *std.AutoHashMap(ivec3, std.ArrayList(*convex_collider)), allocator: std.mem.Allocator) void {
     for (colliders.items) |*collider| {
-        const right, const left, const up, const down, const forward, const backward = collider_bounds(collider.*);
+        const right, const left, const up, const down, const forward, const backward = collider_bound_indices(collider.*);
 
         var i: isize = left;
         while (i <= right) {
@@ -698,7 +698,7 @@ pub fn construct_spatial_hash_grid(colliders: std.ArrayList(collider_info), spat
                     defer k += 1;
 
                     const get_or_put_result = spatial_hash_grid.getOrPut(.{ i, j, k }) catch unreachable;
-                    if (!get_or_put_result.found_existing) get_or_put_result.value_ptr.* = std.ArrayList(*collider_info).initCapacity(allocator, 0) catch unreachable;
+                    if (!get_or_put_result.found_existing) get_or_put_result.value_ptr.* = std.ArrayList(*convex_collider).initCapacity(allocator, 0) catch unreachable;
 
                     get_or_put_result.value_ptr.append(allocator, collider) catch unreachable;
                 }
@@ -707,7 +707,7 @@ pub fn construct_spatial_hash_grid(colliders: std.ArrayList(collider_info), spat
     }
 }
 
-pub fn collider_bounds(collider: collider_info) struct { isize, isize, isize, isize, isize, isize } {
+pub fn collider_bound_indices(collider: convex_collider) struct { isize, isize, isize, isize, isize, isize } {
     const _right = collider._support(zeng.vec3.RIGHT).x + TOL;
     const _left = collider._support(zeng.vec3.RIGHT.neg()).x - TOL;
     const _up = collider._support(zeng.vec3.UP).y + TOL;

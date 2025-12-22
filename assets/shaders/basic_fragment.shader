@@ -60,18 +60,18 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0)
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }  
 
-float ShadowCalculation(vec4 fragPosLightSpace)
+float shadow_map_calculation(vec4 fragPosLightSpace)
 {
     // perform perspective divide
     vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
     // transform to [0,1] range
     projCoords = projCoords * 0.5 + 0.5;
     // get closest depth value from light's perspective (using [0,1] range fragPosLight as coords)
-    float closestDepth = texture(shadow_map, projCoords.xy).r; 
+    float closestDepth = texture(shadow_map, projCoords.xy).r;
     // get depth of current fragment from light's perspective
     float currentDepth = projCoords.z;
     // check whether current frag pos is in shadow
-    float shadow = currentDepth - 0.005 > closestDepth  ? 1.0 : 0.0;
+    float shadow = currentDepth - 0.01 > closestDepth ? 1.0 : 0.0;
 
     if(projCoords.z > 1.0)
         shadow = 0.0;
@@ -82,22 +82,29 @@ float ShadowCalculation(vec4 fragPosLightSpace)
 void main()
 {
     vec3 combined_albedo = texture(albedo_texture, f_tex_coord).xyz * albedo;
+    float opacity = texture(albedo_texture, f_tex_coord).a;
 
     vec3 N = normalize(f_normal);
     vec3 V = normalize(cam_pos - world_pos);
+
+    float fresnel = pow(1.0 - dot(N, V), 5.0);
+
+    float dist = length(cam_pos - world_pos);
 
     vec3 F0 = vec3(0.04);
     F0 = mix(F0, combined_albedo, metallic);
 
     // reflectance equation
     vec3 Lo = vec3(0.0);
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 1; ++i)
     {
         // calculate per-light radiance
-        vec3 L = normalize(light_positions[i] - world_pos);
+        // vec3 L = normalize(light_positions[i] - world_pos);
+        vec3 L = vec3(0, 1, 0);
         vec3 H = normalize(V + L);
         float distance    = length(light_positions[i] - world_pos);
-        float attenuation = 1.0 / (distance * distance);
+        // float attenuation = 1.0 / (distance * distance);
+        float attenuation = 1.0;
         vec3 radiance     = light_colors[i] * attenuation;
         
         // cook-torrance brdf
@@ -118,13 +125,24 @@ void main()
         Lo += (kD * combined_albedo / PI + specular) * radiance * NdotL; 
     }   
   
-    float shadow = ShadowCalculation(FragPosLightSpace);  
+    float shadow_map = shadow_map_calculation(FragPosLightSpace);  
 
-    vec3 ambient = vec3(0.03) * combined_albedo * ao;
-    vec3 color = ambient + Lo * (1.0 - shadow);
-    // vec3 color = ambient + vec3(shadow);
+    vec3 ambient = vec3(0.15) * combined_albedo * ao;
+    vec3 color = ambient + Lo * (1.0 - shadow_map); // + vec3(3.0) * max(0, fresnel);
+    color = combined_albedo;
 
+    // dist = dist * 0.001;
+    // dist = dist / (dist + 1.0);
+    float fog_density = 0.2f;
+    // float fog_t = 1.0 - exp(-dist * fog_density);
+    // float fog_t = clamp(sqrt(dist)/4.0, 0.0, 1.0);
+    float fog_t = 1.0 - (20.0/(dist*dist));
+    fog_t = clamp(fog_t, 0.0, 1.0);
+    vec3 fog_color = vec3(0.01);//vec3(0.3,0.2,0.3);
+    color = mix(color, fog_color, fog_t);
 
-    color = color / (color + vec3(1.0)); // tone mapping
-    FragColor = vec4(color, 1.0);
+    // color = color / (color + vec3(1.0)); // tone mapping
+    float avg = (color.x + color.y + color.z)/3.0;
+    // color = color * 1.5 / (avg + 1.0);
+    FragColor = vec4(color, opacity);
 }

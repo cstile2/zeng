@@ -1,7 +1,6 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
-    std.debug.print("hello world\n", .{});
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -28,7 +27,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     const exe = b.addExecutable(.{
-        .name = "colsengine",
+        .name = "exe",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -39,16 +38,12 @@ pub fn build(b: *std.Build) !void {
             },
         }),
     });
-    b.installArtifact(exe);
 
-    // compile the library as a DLL
     const hot_reload_dll = b.addLibrary(.{
         .name = "hot_reload",
         .root_module = hot_reload_module,
         .linkage = .dynamic,
     });
-    b.installArtifact(hot_reload_dll);
-    const hot_reload_dll_install = b.addInstallArtifact(hot_reload_dll, .{});
 
     zeng_module.linkSystemLibrary("ole32", .{});
     zeng_module.linkSystemLibrary("uuid", .{});
@@ -56,7 +51,6 @@ pub fn build(b: *std.Build) !void {
     zeng_module.linkSystemLibrary("opengl32", .{});
     zeng_module.linkSystemLibrary("gdi32", .{});
     zeng_module.linkSystemLibrary("ws2_32", .{});
-
     zeng_module.addIncludePath(b.path("c_libs/"));
     zeng_module.addCSourceFile(.{ .file = b.path("c_libs/stb_image.c") });
 
@@ -64,7 +58,11 @@ pub fn build(b: *std.Build) !void {
     const exe_run_command = b.step("run", "Run the program");
     exe_run_command.dependOn(&exe_run.step);
 
+    const exe_install = b.addInstallArtifact(exe, .{});
+    const exe_build_command = b.step("exe", "build the program");
+    exe_build_command.dependOn(&exe_install.step);
+
+    const hot_reload_dll_install = b.addInstallArtifact(hot_reload_dll, .{});
     const dll_build_command = b.step("hot", "compile hot reload code");
-    dll_build_command.dependOn(&hot_reload_dll.step);
     dll_build_command.dependOn(&hot_reload_dll_install.step);
 }

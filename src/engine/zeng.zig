@@ -5,6 +5,12 @@ pub const ecs = @import("ecs.zig");
 pub const rpc = @import("rpc.zig");
 pub const net = @import("networking.zig");
 pub const gl = @import("gl");
+pub const loader = @import("loader.zig");
+pub const render = @import("render.zig");
+pub const aud = @import("audio.zig");
+pub const phy = @import("physics.zig");
+pub const ui = @import("ui.zig");
+pub const Player = @import("user/player.zig");
 pub const c = @cImport({
     @cInclude("initguid.h");
     @cInclude("windows.h");
@@ -15,11 +21,10 @@ pub const c = @cImport({
     @cInclude("clay.h");
     @cInclude("winsock2.h");
 });
-pub const loader = @import("loader.zig");
-pub const render = @import("render.zig");
-pub const aud = @import("audio.zig");
-pub const phy = @import("physics.zig");
-pub const Player = @import("user/player.zig");
+pub const dungeon_deck = @import("user/dungeon_deck.zig");
+
+pub const auto_fill_t = struct {};
+pub const auto_fill = auto_fill_t{};
 
 // Engine structs
 pub const vec2 = struct {
@@ -251,6 +256,9 @@ pub const vec4 = packed struct {
     pub fn to_vec3(this: vec4) vec3 {
         return vec3{ .x = this.x, .y = this.y, .z = this.z };
     }
+    pub fn div(self: vec4, f: f32) vec4 {
+        return .{ .x = self.x / f, .y = self.y / f, .z = self.z / f, .w = self.w / f };
+    }
 };
 
 // Engine components
@@ -259,6 +267,10 @@ pub const mesh = struct {
     indices_length: i32,
     indices_type: gl.GLenum,
     material: material,
+};
+pub const sprite3D = struct {
+    texture: u32,
+    size: vec2,
 };
 pub const camera = struct {
     projection_matrix: [16]f32,
@@ -338,17 +350,16 @@ pub const shadow_map_res = struct {
     shadow_height: c_int,
     shader_program: u32,
     camera_matrix: [16]f32,
+    projection_matrix: [16]f32,
 
     pub fn init(allocator: std.mem.Allocator) @This() {
         var ret: @This() = undefined;
-        ret.shadow_width = 2048;
-        ret.shadow_height = 2048;
+        ret.shadow_width = 1028;
+        ret.shadow_height = 1028;
         ret.shader_program = loader.load_shader(allocator, "assets/shaders/light_map_vertex.shader", "assets/shaders/light_map_fragment.shader");
 
-        const light_view = mat_tran(mat_axis_angle(zeng.vec3.RIGHT, -3.14159 / 2.0), .{ .y = 10 });
-        const projection = mat_ortho(-10, 10, -10, 10, 0, 20);
-
-        ret.camera_matrix = zeng.mat_mult(projection, zeng.mat_invert(light_view));
+        ret.camera_matrix = mat_tran(mat_axis_angle(zeng.vec3.RIGHT, -3.14159 / 3.0), .{ .y = -5 });
+        ret.projection_matrix = mat_ortho(-100, 100, -100, 100, 0, 40);
 
         zeng.gl.genFramebuffers(1, &ret.depth_map_frame_buffer_object);
 
@@ -377,8 +388,14 @@ pub const shadow_map_res = struct {
     pub fn shadow_pass(this: *@This(), q: *ecs.query(.{ world_matrix, mesh })) void {
         gl.useProgram(this.shader_program);
         const light_space_matrix_location = gl.getUniformLocation(this.shader_program, "lightSpaceMatrix");
-        gl.uniformMatrix4fv(light_space_matrix_location, 1, gl.FALSE, &this.camera_matrix);
+
+        const mat = zeng.mat_mult(this.projection_matrix, zeng.mat_invert(this.camera_matrix));
+
+        gl.uniformMatrix4fv(light_space_matrix_location, 1, gl.FALSE, &mat);
         const model_location = gl.getUniformLocation(this.shader_program, "model");
+
+        gl.disable(gl.CULL_FACE);
+        defer gl.enable(gl.CULL_FACE);
 
         gl.viewport(0, 0, this.shadow_width, this.shadow_height);
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.depth_map_frame_buffer_object);
@@ -397,6 +414,19 @@ pub const shadow_map_res = struct {
         // RenderScene();
         gl.bindFramebuffer(gl.FRAMEBUFFER, 0);
     }
+    // the plan: cascaded shadow maps to cover HUGE area, and raymarch contact shadows for refinement
+};
+pub const mouse_state_res = struct {
+    mouse_position: vec2,
+    mouse_pressed: bool,
+    mouse_released: bool,
+};
+pub const sprite3D_render_res = struct {
+    rect_mesh: mesh,
+};
+
+pub const delete_event = struct {
+    entity_id: ecs.entity_id,
 };
 
 pub const sphere_collider = struct {
@@ -520,9 +550,15 @@ pub const COMPONENT_TYPES = [_]type{
     frame_interpolator,
     net_id_component,
     name_component,
+    sprite3D,
+
+    dungeon_deck.fire_ball_component,
+    dungeon_deck.health_component,
+    dungeon_deck.card_caster,
+    dungeon_deck.ghost_component,
 };
 
-pub const Datablob = struct {
+pub const asset_registry = struct {
     map: std.StringHashMap(*anyopaque),
 
     pub fn get(this: *@This(), str: []const u8, T: type) *T {
@@ -533,6 +569,17 @@ pub const Datablob = struct {
     }
     pub fn put(this: *@This(), str: []const u8, ptr: *anyopaque) void {
         this.map.put(str, ptr) catch unreachable;
+    }
+
+    pub fn fetch(this: *@This(), str: []const u8, T: type) *T {
+        // its worth noting that godot treats the file as a source and the actual asset as separate from this source, and this comes with some benefits
+        const result = this.map.getOrPut(str) catch unreachable;
+
+        if (result.found_existing) {
+            return @ptrCast(@alignCast(result.value_ptr.*));
+        } else {
+            unreachable; // need to fetch sound files to sound infos and images to textures, etc...
+        }
     }
 };
 
@@ -558,6 +605,15 @@ pub fn find_component_of_type_actual(world: *ecs.world, parent: ecs.entity_id, c
     }
 
     return null;
+}
+pub fn recursive_delete_entities(entity: ecs.entity_id, world: *ecs.world) void {
+    if (!world.is_alive(entity)) return;
+    if (world.get(entity, zeng.children)) |entity_children| {
+        for (entity_children.items) |child| {
+            recursive_delete_entities(child, world);
+        }
+    }
+    world.despawn(entity);
 }
 
 pub fn binary_search(inputs: []const f32, time: f32) usize {
@@ -698,15 +754,19 @@ pub const mat_identity = [16]f32{
     0, 0, 0, 1,
 };
 
+/// gets the x basis vector of a matrix
 pub fn mat_right(t: [16]f32) vec3 {
     return vec3{ .x = t[0], .y = t[1], .z = t[2] };
 }
+/// gets the y basis vector of a matrix
 pub fn mat_up(t: [16]f32) vec3 {
     return vec3{ .x = t[4], .y = t[5], .z = t[6] };
 }
+/// gets the z basis vector of a matrix
 pub fn mat_forward(t: [16]f32) vec3 {
     return vec3{ .x = t[8], .y = t[9], .z = t[10] };
 }
+/// translates the origin point of a matrix according to v
 pub fn mat_tran(a: [16]f32, v: vec3) [16]f32 {
     var b = a;
     b[12] += v.x;
@@ -714,13 +774,32 @@ pub fn mat_tran(a: [16]f32, v: vec3) [16]f32 {
     b[14] += v.z;
     return b;
 }
-pub fn mat_scal(a: [16]f32, v: vec3) [16]f32 {
+/// scales an axis-aligned matrix basis according to v
+pub fn mat_scal_aligned(a: [16]f32, v: vec3) [16]f32 {
     var b = a;
     b[0] *= v.x; // Scale the x-axis
     b[5] *= v.y; // Scale the y-axis
     b[10] *= v.z; // Scale the z-axis
     return b;
 }
+/// scales the basis vectors of a matrix according to v
+pub fn mat_scal(a: [16]f32, v: vec3) [16]f32 {
+    var b = a;
+    b[0] *= v.x; // Scale the x-axis
+    b[1] *= v.x; // Scale the x-axis
+    b[2] *= v.x; // Scale the x-axis
+
+    b[4] *= v.y; // Scale the y-axis
+    b[5] *= v.y; // Scale the y-axis
+    b[6] *= v.y; // Scale the y-axis
+
+    b[8] *= v.z; // Scale the z-axis
+    b[9] *= v.z; // Scale the z-axis
+    b[10] *= v.z; // Scale the z-axis
+
+    return b;
+}
+/// multiplies 2 4X4 matrices
 pub fn mat_mult(b: [16]f32, a: [16]f32) [16]f32 {
     var result: [16]f32 = undefined;
 
@@ -736,6 +815,7 @@ pub fn mat_mult(b: [16]f32, a: [16]f32) [16]f32 {
 
     return result;
 }
+/// multiplies a vector3 (assuming w=0) by a 4x4 matrix
 pub fn mat_mult_vec3(m: [16]f32, v: vec3) vec3 {
     return vec3{
         .x = m[0] * v.x + m[4] * v.y + m[8] * v.z + m[12],
@@ -743,6 +823,7 @@ pub fn mat_mult_vec3(m: [16]f32, v: vec3) vec3 {
         .z = m[2] * v.x + m[6] * v.y + m[10] * v.z + m[14],
     };
 }
+/// multiplies a vector4 by a 4x4 matrix
 pub fn mat_mult_vec4(m: [16]f32, v: vec4) vec4 {
     return vec4{
         .x = m[0] * v.x + m[4] * v.y + m[8] * v.z + m[12] * v.w,
@@ -751,6 +832,7 @@ pub fn mat_mult_vec4(m: [16]f32, v: vec4) vec4 {
         .w = m[3] * v.x + m[7] * v.y + m[11] * v.z + m[15] * v.w,
     };
 }
+/// inverts a 4X4 matrix
 pub fn mat_invert(m: [16]f32) [16]f32 {
     var inv: [16]f32 = undefined;
 
@@ -897,14 +979,17 @@ pub fn mat_invert(m: [16]f32) [16]f32 {
 
     return invOut;
 }
+/// gets the origin point of a matrix
 pub fn mat_position(t: [16]f32) vec3 {
     return vec3{ .x = t[12], .y = t[13], .z = t[14] };
 }
+/// sets the origin point of a matrix
 pub fn mat_position_set(t: *[16]f32, v: vec3) void {
     t[12] = v.x;
     t[13] = v.y;
     t[14] = v.z;
 }
+/// creates a perspective projection 4x4 matrix
 pub fn mat_perspective_projection(fov: f32, aspect_ratio: f32, near: f32, far: f32) [16]f32 {
     const f = 1.0 / @tan(fov / 2.0);
     const range_inv = 1.0 / (near - far);
@@ -933,6 +1018,7 @@ pub fn mat_perspective_projection(fov: f32, aspect_ratio: f32, near: f32, far: f
 
     return result;
 }
+/// creates an orthographic projection 4x4 matrix
 pub fn mat_ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) [16]f32 {
     // Column-major layout (OpenGL style)
     // indices:  m[col*4 + row]
@@ -949,6 +1035,7 @@ pub fn mat_ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f
 
     return m;
 }
+/// creates a matrix that represents a rotation along 'axis' by 'angle' radians
 pub fn mat_axis_angle(axis: vec3, angle: f32) [16]f32 {
     const cosine = @cos(angle);
     const s = @sin(angle);
@@ -982,9 +1069,11 @@ pub fn mat_axis_angle(axis: vec3, angle: f32) [16]f32 {
 
     return result;
 }
+/// TODO
 pub fn mat3_determinant_col_major(m: [9]f32) f32 {
     return m[0] * (m[4] * m[8] - m[5] * m[7]) - m[3] * (m[1] * m[8] - m[2] * m[7]) + m[6] * (m[1] * m[5] - m[2] * m[4]);
 }
+/// TODO
 pub fn mat4_minor3x3(m: [16]f32, i: usize, j: usize) [9]f32 {
     var result: [9]f32 = undefined;
     var dst_index: usize = 0;
@@ -1002,6 +1091,7 @@ pub fn mat4_minor3x3(m: [16]f32, i: usize, j: usize) [9]f32 {
 
     return result;
 }
+/// creates a matrix from each basis vector and an origin point
 pub fn mat4_from_vectors(right: vec3, up: vec3, forward: vec3, position: vec3) [16]f32 {
     return [16]f32{
         right.x,    right.y,    right.z,    0.0,
@@ -1010,6 +1100,7 @@ pub fn mat4_from_vectors(right: vec3, up: vec3, forward: vec3, position: vec3) [
         position.x, position.y, position.z, 1.0,
     };
 }
+/// sets the basis vectors to the ones provided
 pub fn mat_rebasis(mat: [16]f32, right: vec3, up: vec3, forward: vec3) [16]f32 {
     return [16]f32{
         right.x,   right.y,   right.z,   0.0,
@@ -1018,6 +1109,7 @@ pub fn mat_rebasis(mat: [16]f32, right: vec3, up: vec3, forward: vec3) [16]f32 {
         mat[12],   mat[13],   mat[14],   1.0,
     };
 }
+/// converts a matrix into its corresponding quaternion TODO: check if robust
 pub fn mat_to_quat(mat: [16]f32) quat {
     const m00 = mat[0];
     const m01 = mat[4];
@@ -1081,11 +1173,13 @@ pub fn gl_log_errors() void {
 }
 
 // Application
-pub const __graphics_module = struct {
+pub const graphics_t = struct {
     width: u16 = 0,
     height: u16 = 0,
 
+    /// handle to window
     hwnd: [*c]c.struct_HWND__,
+    /// handle to device context
     hdc: [*c]c.struct_HDC__,
 
     pub fn init(this: *@This()) void {
@@ -1146,9 +1240,6 @@ pub const __graphics_module = struct {
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         gl.enable(gl.FRAMEBUFFER_SRGB);
-
-        zeng.timer_warmup();
-        zeng.old_time = zeng.timer_get();
     }
     pub fn deinit(this: *@This()) void {
         _ = this;
@@ -1160,14 +1251,7 @@ pub fn window_resize_handler(width: u32, height: u32) void {
     const cam = global_world_ptr.get(global_camera_entity, zeng.camera).?;
     cam.projection_matrix = zeng.mat_perspective_projection(cam.fov, @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height)), 0.01, 1000.0);
 }
-fn key_callback(window: zeng.glfw.Window, key: zeng.glfw.Key, scancode: i32, action: zeng.glfw.Action, mods: zeng.glfw.Mods) void {
-    _ = key; // autofix
-    _ = window; // autofix
-    _ = scancode; // autofix
-    _ = action; // autofix
-    _ = mods; // autofix
-}
-pub fn swap_buffers(__graphics: __graphics_module) void {
+pub fn swap_buffers(__graphics: graphics_t) void {
     _ = zeng.c.SwapBuffers(__graphics.hdc);
 }
 
@@ -1200,6 +1284,26 @@ pub const resource_fetcher = struct {
         }
         @call(.auto, func, params) catch unreachable;
     }
+    pub fn run_system_args(self: *resource_fetcher, comptime func: anytype, arg_tuple: anytype) void {
+        const t = @typeInfo(@TypeOf(func));
+
+        const typ = comptime utils.type_array_to_tuple_type(utils.fn_parameter_type_array(t));
+        var params: typ = undefined;
+
+        inline for (&params, arg_tuple) |*param, argument| {
+            if (@TypeOf(argument) == zeng.auto_fill_t) {
+                if (@hasDecl(@TypeOf(param.*.*), "TYPES")) {
+                    const component_list = comptime @TypeOf(param.*.*).TYPES;
+                    param.* = self.fresh_query(component_list);
+                } else {
+                    param.* = self.res.get(@TypeOf(param.*.*));
+                }
+            } else {
+                param.* = argument;
+            }
+        }
+        @call(.auto, func, params) catch unreachable;
+    }
     pub fn fresh_query(self: *resource_fetcher, component_list: anytype) *ecs.query(component_list) {
         const q_ptr, const undef = self.res.get_create(ecs.query(component_list));
         if (undef) {
@@ -1218,7 +1322,7 @@ pub const resources_t = struct {
     map: std.AutoArrayHashMap(usize, *anyopaque),
     allocator: std.mem.Allocator,
 
-    pub fn init(this: *@This(), allocator: std.mem.Allocator, __graphics: *__graphics_module) void {
+    pub fn init(this: *@This(), allocator: std.mem.Allocator, __graphics: *graphics_t) void {
         this.map = std.AutoArrayHashMap(usize, *anyopaque).init(allocator);
         this.allocator = allocator;
         _ = c.SetWindowLongPtrW(__graphics.hwnd, c.GWLP_USERDATA, @intCast(@intFromPtr(this)));
@@ -1267,16 +1371,7 @@ pub const resources_t = struct {
 };
 
 // Commands
-pub fn GET_PROC_CODE(comptime func: anytype) u32 {
-    var count: u32 = 0;
-    for (rpc.REMOTE_PROCEDURES) |proc| {
-        if (@as(*const anyopaque, @ptrCast(&proc)) == @as(*const anyopaque, @ptrCast(&func))) {
-            return count;
-        }
-        count += 1;
-    }
-    @compileError("invalid procedure");
-}
+
 pub fn GET_MSG_CODE(T: type) u32 {
     var count: u32 = 0;
     for (rpc.REMOTE_MESSAGE_TYPES) |msg_type| {
@@ -1288,7 +1383,7 @@ pub fn GET_MSG_CODE(T: type) u32 {
     @compileError("invalid remote message type!");
 }
 pub const commands = struct {
-    pub const Command = struct {
+    pub const command = struct {
         stuff: [256]u8,
         size: u32,
         id: u64,
@@ -1300,22 +1395,13 @@ pub const commands = struct {
         empty,
     };
     allocator: std.mem.Allocator,
-    queued_commands: [1024]Command = undefined,
+    queued_commands: [1024]command = undefined,
     queued_commands_curr: u32 = 0,
 
     remote_messages_send_queue: [4000]remote_message,
     remote_messages_send_queue_len: u16,
 
-    // reliable_resend_queue: std.ArrayList(remote_message),
-    // reliable_message_seqs: std.AutoHashMap(usize, remote_message),
-    // reliable_resend_queue: [100]remote_message,
-
-    // curr_seq: usize = 1,
-
     time: f64 = 0.0,
-
-    // last_recieved_seq: usize = 0,
-    // ack_bits: u32 = 0,
 
     random: std.Random,
 
@@ -1332,7 +1418,7 @@ pub const commands = struct {
 
     // command implementation
     fn add_insertion_command(self: *commands, payload: anytype) void {
-        self.queued_commands[self.queued_commands_curr] = Command{ .size = @sizeOf(@TypeOf(payload)), .id = comptime ecs.COMP_TYPE_TO_ID(@TypeOf(payload)), .kind = .insert, .stuff = undefined };
+        self.queued_commands[self.queued_commands_curr] = command{ .size = @sizeOf(@TypeOf(payload)), .id = comptime ecs.COMP_TYPE_TO_ID(@TypeOf(payload)), .kind = .insert, .stuff = undefined };
         @memcpy(@as([*]u8, @ptrCast(&self.queued_commands[self.queued_commands_curr].stuff)), @as([*]const u8, @ptrCast(&payload))[0..@sizeOf(@TypeOf(payload))]);
         self.queued_commands_curr += 1;
     }
@@ -1363,36 +1449,13 @@ pub const commands = struct {
         self.queued_commands_curr = 0;
     }
 
-    // networking
-    /// queues a remote procedure call to be sent to destination at the end of the current frame.
-    pub fn remote_call(self: *commands, socket: net.socket_t, address: net.Address, comptime procedure: anytype, _args: anytype) void {
-        const procedure_code: u32 = comptime GET_PROC_CODE(procedure);
-
-        const args: blk: {
-            if (@typeInfo(std.meta.ArgsTuple(@TypeOf(procedure))).Struct.fields.len > 0) {
-                break :blk std.meta.ArgsTuple(@TypeOf(procedure));
-            } else {
-                break :blk @TypeOf(_args);
-            }
-        } = _args;
-
-        var payload_array = self.allocator.alloc(u8, 4 + @sizeOf(@TypeOf(args))) catch unreachable;
-        var payload_curr: u32 = 0;
-        zeng.loader.serialize_to_bytes(procedure_code, payload_array, &payload_curr);
-        zeng.loader.serialize_to_bytes(args, payload_array, &payload_curr);
-
-        self.remote_messages_send_queue[self.remote_messages_send_queue_len] = remote_message{ .payload = payload_array[0..payload_curr], .sender_socket = socket, .target_address = address };
-        self.remote_messages_send_queue_len += 1;
-    }
-
     pub const reliability_channel = enum {
         unreliable,
         reliable,
     };
 
     pub fn get_sim_send_time(self: *commands) f64 {
-        // const jittered_delay = self.random.float(f32) * 0.06 + 0.15; // 60ms + 150ms
-        const jittered_delay = self.random.float(f32) * 0.05 + 0.1; // 60ms + 150ms
+        const jittered_delay = self.random.float(f32) * 0.05 + 0.1; // 50ms + 100ms = 150ms
         return self.time + jittered_delay;
     }
 
@@ -1422,15 +1485,19 @@ pub inline fn timer_calc_delta(a: i64, b: i64) f64 {
 // Engine Frame Housekeeping
 pub var quit = false;
 var old_time: i64 = 0;
+pub fn frame_timer_warmup() void {
+    zeng.timer_warmup();
+    old_time = zeng.timer_get();
+}
 pub fn start_of_frame() void {
-    var msg: c.MSG = undefined;
-    while (c.PeekMessageW(&msg, null, 0, 0, c.PM_REMOVE) != 0) {
-        if (msg.message == c.WM_QUIT) {
+    var message: c.MSG = undefined;
+    while (c.PeekMessageW(&message, null, 0, 0, c.PM_REMOVE) != 0) {
+        if (message.message == c.WM_QUIT) {
             quit = true;
             break;
         }
-        _ = c.TranslateMessage(&msg);
-        _ = c.DispatchMessageW(&msg);
+        _ = c.TranslateMessage(&message);
+        _ = c.DispatchMessageW(&message);
     }
 }
 pub fn end_of_frame(res: *resources_t) void {
@@ -1572,8 +1639,8 @@ pub fn set_cursor(cursor_type: cursor_type_enum) void {
 
 pub var global_mouse_pos: [2]i16 = .{ 0, 0 };
 pub var key_press_messages: std.ArrayList(u8) = undefined;
-pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lParam: c.LPARAM) callconv(.c) c.LRESULT {
-    switch (msg) {
+pub fn windows_message_handler(hwnd: c.HWND, message: c.UINT, wParam: c.WPARAM, lParam: c.LPARAM) callconv(.c) c.LRESULT {
+    switch (message) {
         c.WM_DESTROY => {
             c.PostQuitMessage(0);
             return 0;
@@ -1642,8 +1709,8 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
             const long_ptr = c.GetWindowLongPtrW(hwnd, c.GWLP_USERDATA);
             if (long_ptr > 0) {
                 var res = @as(*zeng.resources_t, @ptrFromInt(@as(usize, @bitCast(long_ptr))));
-                res.get(zeng.__graphics_module).width = @intCast(width);
-                res.get(zeng.__graphics_module).height = @intCast(height);
+                res.get(zeng.graphics_t).width = @intCast(width);
+                res.get(zeng.graphics_t).height = @intCast(height);
                 zeng.window_resize_handler(@intCast(width), @intCast(height));
             }
             return 0;
@@ -1657,14 +1724,16 @@ pub fn windows_message_handler(hwnd: c.HWND, msg: c.UINT, wParam: c.WPARAM, lPar
         //     }
         //     return c.DefWindowProcW(hwnd, msg, wParam, lParam);
         // },
-        else => return c.DefWindowProcW(hwnd, msg, wParam, lParam),
+        else => return c.DefWindowProcW(hwnd, message, wParam, lParam),
     }
 }
 pub const L = std.unicode.utf8ToUtf16LeStringLiteral;
 pub fn get_proc_address(user32: c.HMODULE, name: [:0]const u8) ?gl.FunctionPointer {
     // Try wglGetProcAddress first
     const addr = c.wglGetProcAddress(name.ptr);
-    if (addr != null) return @ptrCast(addr);
+    if (addr != null) {
+        return @ptrCast(addr);
+    }
 
     // Fallback to opengl32.dll exports
     return @ptrCast(c.GetProcAddress(user32, name.ptr));
@@ -1687,35 +1756,36 @@ pub fn unlock_cursor() void {
 }
 
 // Communication Data Structures
-pub fn events(T: type) type {
+pub fn msg(T: type) type {
     return struct {
-        const is_events = void{};
-
-        array: std.ArrayList(T),
+        list: std.ArrayList(T),
         addresses: ?std.ArrayList(net.peer_info_t) = null,
         allocator: std.mem.Allocator,
 
         pub fn init(allocator: std.mem.Allocator, networked: bool) @This() {
-            var ret = @This(){ .array = std.ArrayList(T).initCapacity(allocator, 0) catch unreachable, .allocator = allocator };
+            var ret = @This(){ .list = std.ArrayList(T).initCapacity(allocator, 0) catch unreachable, .allocator = allocator };
             if (networked) ret.addresses = std.ArrayList(net.peer_info_t).initCapacity(allocator, 0) catch unreachable;
             return ret;
         }
         pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-            self.array.deinit(allocator);
+            self.list.deinit(allocator);
         }
         pub fn send(this: *@This(), event: T) void {
-            this.array.append(this.allocator, event) catch unreachable;
-            (this.addresses orelse return).append(this.allocator, std.mem.zeroes(net.peer_info_t)) catch unreachable;
+            this.list.append(this.allocator, event) catch unreachable;
+            std.debug.assert(this.addresses == null);
         }
         pub fn send_with_address(this: *@This(), allocator: std.mem.Allocator, event: T, address: net.peer_info_t) void {
-            this.array.append(allocator, event) catch unreachable;
+            this.list.append(allocator, event) catch unreachable;
             this.addresses.?.append(allocator, address) catch unreachable;
         }
         pub fn items(this: *@This()) []T {
-            return this.array.items;
+            return this.list.items;
+        }
+        pub fn address_items(this: *@This()) []net.peer_info_t {
+            return this.addresses.?.items;
         }
         pub fn clear(this: *@This(), allocator: std.mem.Allocator) void {
-            this.array.clearAndFree(allocator);
+            this.list.clearAndFree(allocator);
             if (this.addresses != null) this.addresses.?.clearAndFree(allocator);
         }
     };

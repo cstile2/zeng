@@ -1,8 +1,9 @@
 const zeng = @import("zeng.zig");
 const std = @import("std");
 const ecs = @import("ecs.zig");
+const ui = @import("ui.zig");
 
-pub fn draw_text(string: []const u8, ui_ren: *zeng.text_render_res, x: f32, y: f32, ctx: zeng.__graphics_module) void {
+pub fn draw_text(string: []const u8, ui_ren: *zeng.text_render_res, x: f32, y: f32, ctx: zeng.graphics_t) void {
     zeng.gl.disable(zeng.gl.DEPTH_TEST);
     defer zeng.gl.enable(zeng.gl.DEPTH_TEST);
 
@@ -23,6 +24,33 @@ pub fn draw_text(string: []const u8, ui_ren: *zeng.text_render_res, x: f32, y: f
         horizontal += 1;
     }
 }
+pub fn draw_sdf_font_text(string: []const u8, font_info: ui.font_info, mesh: zeng.mesh, x: f32, y: f32, scale: f32, ctx: zeng.graphics_t) void {
+    zeng.gl.disable(zeng.gl.DEPTH_TEST);
+    defer zeng.gl.enable(zeng.gl.DEPTH_TEST);
+
+    zeng.gl.disable(zeng.gl.CULL_FACE);
+
+    zeng.gl.useProgram(font_info.shader_program);
+    zeng.gl.bindVertexArray(mesh.vao_gpu);
+    zeng.gl.bindTexture(zeng.gl.TEXTURE_2D, font_info.tex);
+
+    zeng.gl.uniform2f(zeng.gl.getUniformLocation(font_info.shader_program, "screen_res"), @floatFromInt(ctx.width), @floatFromInt(ctx.height));
+    zeng.gl.uniform2f(zeng.gl.getUniformLocation(font_info.shader_program, "image_dimensions"), @floatFromInt(font_info.tex_width), @floatFromInt(font_info.tex_height));
+    zeng.gl.uniform1f(zeng.gl.getUniformLocation(font_info.shader_program, "scale"), scale);
+
+    var horizontal: f32 = 0;
+    for (string) |char| {
+        const _char = char - 32;
+        const curr_info = font_info.character_infos[_char];
+
+        zeng.gl.uniform2f(zeng.gl.getUniformLocation(font_info.shader_program, "slice_position"), @floatFromInt(curr_info.x), @floatFromInt(curr_info.y));
+        zeng.gl.uniform2f(zeng.gl.getUniformLocation(font_info.shader_program, "slice_dimensions"), @floatFromInt(curr_info.width), @floatFromInt(curr_info.height));
+        zeng.gl.uniform2f(zeng.gl.getUniformLocation(font_info.shader_program, "screenspace_dims"), @floatFromInt(curr_info.width), @floatFromInt(curr_info.height));
+        zeng.gl.uniform2f(zeng.gl.getUniformLocation(font_info.shader_program, "screenspace_pos"), x + (horizontal + curr_info.xoffset) * scale, y + curr_info.yoffset * scale);
+        zeng.gl.drawElements(zeng.gl.TRIANGLES, mesh.indices_length, mesh.indices_type, null);
+        horizontal += curr_info.xadvance;
+    }
+}
 pub fn draw_mesh(entity_mesh: zeng.mesh, entity_transform: zeng.world_matrix, projection_matrix: [16]f32, inv_camera_matrix: [16]f32, camera_position: zeng.vec3, light_space_matrix: [16]f32, shadow_map: *zeng.shadow_map_res) void {
 
     // use shader program > bind VAO > bind texture
@@ -41,6 +69,8 @@ pub fn draw_mesh(entity_mesh: zeng.mesh, entity_transform: zeng.world_matrix, pr
     zeng.gl.activeTexture(zeng.gl.TEXTURE1);
     zeng.gl.bindTexture(zeng.gl.TEXTURE_2D, shadow_map.depth_map_texture);
 
+    zeng.gl.activeTexture(zeng.gl.TEXTURE0);
+
     var clip_matrix = zeng.mat_mult(projection_matrix, zeng.mat_mult(inv_camera_matrix, entity_transform));
     const world_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "world");
     const clip_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "clip");
@@ -54,7 +84,7 @@ pub fn draw_mesh(entity_mesh: zeng.mesh, entity_transform: zeng.world_matrix, pr
     const lights_locations_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "light_positions");
     zeng.gl.uniform3fv(lights_locations_location, 4, @ptrCast(&[4]zeng.vec3{ zeng.vec3{ .y = 15 }, zeng.vec3{}, zeng.vec3{}, zeng.vec3{} }));
     const lights_colors_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "light_colors");
-    zeng.gl.uniform3fv(lights_colors_location, 4, @ptrCast(&[4]zeng.vec3{ zeng.vec3.ONE.mult(120), zeng.vec3{}, zeng.vec3{}, zeng.vec3{} }));
+    zeng.gl.uniform3fv(lights_colors_location, 4, @ptrCast(&[4]zeng.vec3{ zeng.vec3.ONE.mult(12), zeng.vec3{}, zeng.vec3{}, zeng.vec3{} }));
 
     const metallic = entity_mesh.material.parameter_map.get("metallic").?.float_1;
     const metallic_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "metallic");
@@ -74,7 +104,6 @@ pub fn draw_mesh(entity_mesh: zeng.mesh, entity_transform: zeng.world_matrix, pr
 }
 var noise_tex: ?u32 = null;
 pub fn draw_animated_skinned_mesh(world: *ecs.world, entity_mesh: zeng.skinned_mesh, entity_transform: zeng.world_matrix, projection_matrix: [16]f32, inv_camera_matrix: [16]f32, camera_position: zeng.vec3) void {
-    zeng.gl.disable(zeng.gl.CULL_FACE);
     zeng.gl.useProgram(entity_mesh.material.shader_program);
     zeng.gl.bindVertexArray(entity_mesh.vao_gpu);
 
@@ -140,7 +169,7 @@ pub const color = struct {
     pub const LIME = color{ .r = 0.0, .g = 1.0, .b = 0.5 };
     pub const CLEAR = color{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 };
 };
-pub fn draw_rect(__graphics: zeng.__graphics_module, ui_ren: *zeng.rect_render_res, x: f32, y: f32, w: f32, h: f32, _color: color) void {
+pub fn draw_rect(__graphics: zeng.graphics_t, ui_ren: *zeng.rect_render_res, x: f32, y: f32, w: f32, h: f32, _color: color) void {
     zeng.gl.useProgram(ui_ren.shader_program);
     zeng.gl.bindVertexArray(ui_ren.vao);
 

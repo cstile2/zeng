@@ -246,9 +246,9 @@ pub fn recieve_net_messages(socket: socket_t, res: *zeng.resources_t, allocator:
                 var _curr: u32 = curr;
                 zeng.loader.deserialize_from_bytes(msg_type, @as([*]u8, @ptrCast(&payload)), headerless_bytes[0..], &_curr, 0);
 
-                if (res.get(zeng.events(msg_type)).addresses != null) {
+                if (res.get(zeng.msg(msg_type)).addresses != null) {
                     const address = net.peer_info_t{ .sockaddr = sender_addr, .socklen = sender_addr_len };
-                    res.get(zeng.events(msg_type)).send_with_address(allocator, payload, address);
+                    res.get(zeng.msg(msg_type)).send_with_address(allocator, payload, address);
                 } else unreachable;
             }
         }
