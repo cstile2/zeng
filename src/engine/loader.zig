@@ -611,7 +611,7 @@ pub fn create_cube_mesh_collider() struct { [108]f32, [36]u32 } {
 
     return .{ vertices, indices };
 }
-pub fn create_triangle_mesh() struct { u32, u32 } {
+pub fn create_debug_triangle_mesh() struct { u32, u32 } {
     const vertices = [9]f32{
         0.0,  1.0,  0.0,
         -1.0, -1.0, 0.0,
@@ -1106,7 +1106,7 @@ pub fn deep_copy_skeleton(s: zeng.skeleton, allocator: std.mem.Allocator) zeng.s
 
     return ret;
 }
-pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, names_map: std.AutoHashMap(usize, []const u8), parent_child_map: std.AutoArrayHashMap(usize, std.ArrayList(usize)), top_level_children: std.AutoHashMap(usize, void), skeleton_slice: []zeng.skeleton, skinmesh_to_skeleton: std.AutoHashMap(usize, usize), world: *ecs.world, allocator: std.mem.Allocator) ecs.entity_id {
+pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, names_map: std.AutoHashMap(usize, []const u8), parent_child_map: std.AutoArrayHashMap(usize, std.ArrayList(usize)), top_level_children: std.AutoHashMap(usize, void), skeleton_slice: []zeng.skeleton, skinmesh_to_skeleton: std.AutoHashMap(usize, usize), world: *ecs.world_t, allocator: std.mem.Allocator) ecs.entity_id {
     var skeleton_entity_list = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
     for (skeleton_slice) |skel| {
         const skeleton_copy_entity = world.spawn(.{deep_copy_skeleton(skel, allocator)});
@@ -1116,8 +1116,9 @@ pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, names_map:
     var gltf_id_to_entity_id = std.AutoArrayHashMap(usize, ?std.ArrayList(ecs.entity_id)).init(allocator);
     var root_child_list = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
     for (mesh_slice) |mesh_like| {
+        var entity_id: ecs.entity_id = undefined;
         if (mesh_like.node == .skinned_mesh) {
-            const entity_id = world.spawn(.{
+            entity_id = world.spawn(.{
                 zeng.mat_identity,
                 zeng.local_matrix{ .transform = mesh_like.matrix },
                 blk: {
@@ -1133,7 +1134,7 @@ pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, names_map:
             // gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
             add_to_group(mesh_like.gltf_id, entity_id, &gltf_id_to_entity_id, allocator);
         } else if (mesh_like.node == .static_mesh) {
-            const entity_id = world.spawn(.{
+            entity_id = world.spawn(.{
                 zeng.mat_identity,
                 zeng.local_matrix{ .transform = mesh_like.matrix },
                 mesh_like.node.static_mesh,
@@ -1145,16 +1146,17 @@ pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, names_map:
             // gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
             add_to_group(mesh_like.gltf_id, entity_id, &gltf_id_to_entity_id, allocator);
         } else if (mesh_like.node == .empty) {
-            const entity_id = world.spawn(.{
+            entity_id = world.spawn(.{
                 zeng.mat_identity,
                 zeng.local_matrix{ .transform = mesh_like.matrix },
             });
-            if (names_map.get(mesh_like.gltf_id)) |name| {
-                world.add(name, entity_id);
-            }
+
             if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
             // gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
             add_to_group(mesh_like.gltf_id, entity_id, &gltf_id_to_entity_id, allocator);
+        }
+        if (names_map.get(mesh_like.gltf_id)) |name| {
+            world.add(name, entity_id);
         }
     }
 
@@ -1745,7 +1747,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
 pub const gltf_import_options = struct {
     generate_colliders: bool = true,
 };
-pub fn auto_import(asset_reg: *zeng.asset_registry, world: *ecs.world, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, default_texture: u32, allocator: std.mem.Allocator) ecs.entity_id {
+pub fn auto_import(asset_reg: *zeng.asset_registry, world: *ecs.world_t, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, default_texture: u32, allocator: std.mem.Allocator) ecs.entity_id {
     const gltf_extraction_type = @typeInfo(@TypeOf(gltf_extract_resources)).@"fn".return_type.?;
     const full_file_path = std.fmt.allocPrint(allocator, "{s}/{s}.gltf", .{ folder_name, file_name }) catch unreachable;
 

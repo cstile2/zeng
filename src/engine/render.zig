@@ -40,6 +40,7 @@ pub fn draw_sdf_font_text(string: []const u8, font_info: ui.font_info, mesh: zen
 
     var horizontal: f32 = 0;
     for (string) |char| {
+        if (char < 32) continue;
         const _char = char - 32;
         const curr_info = font_info.character_infos[_char];
 
@@ -103,7 +104,7 @@ pub fn draw_mesh(entity_mesh: zeng.mesh, entity_transform: zeng.world_matrix, pr
     zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, entity_mesh.indices_type, null);
 }
 var noise_tex: ?u32 = null;
-pub fn draw_animated_skinned_mesh(world: *ecs.world, entity_mesh: zeng.skinned_mesh, entity_transform: zeng.world_matrix, projection_matrix: [16]f32, inv_camera_matrix: [16]f32, camera_position: zeng.vec3) void {
+pub fn draw_animated_skinned_mesh(world: *ecs.world_t, entity_mesh: zeng.skinned_mesh, entity_transform: zeng.world_matrix, projection_matrix: [16]f32, inv_camera_matrix: [16]f32, camera_position: zeng.vec3) void {
     zeng.gl.useProgram(entity_mesh.material.shader_program);
     zeng.gl.bindVertexArray(entity_mesh.vao_gpu);
 

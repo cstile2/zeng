@@ -33,7 +33,7 @@ pub const server_tick_offset = struct {
 pub const missed_input = struct {
     SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
 };
-pub const input_chunck = struct {
+pub const input_chunk = struct {
     arr: [30]input_message,
 };
 pub const variable_input_message = struct {
@@ -65,7 +65,7 @@ pub const REMOTE_MESSAGE_TYPES = .{
     client_tick,
     server_tick_offset,
     missed_input,
-    input_chunck,
+    input_chunk,
     world_update,
     hitmarker,
 };

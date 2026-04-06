@@ -3,8 +3,7 @@ const std = @import("std");
 const ecs = @import("ecs.zig");
 const zeng = @import("zeng.zig");
 const rpc = @import("rpc.zig");
-// const main = @import("main.zig");
-
+const utils = @import("utils.zig");
 const FIONBIO: u32 = 0x8004667e;
 
 pub const remote_message = struct {
@@ -149,7 +148,7 @@ pub fn track_packet_from_recieve(headerful_bytes: []const u8, tracker: *packet_a
     return headerful_bytes[curr..];
 }
 
-pub fn remote_event(commands: *zeng.commands, tracker: *packet_ack_tracker_t, socket: net.socket_t, peer: net.peer_info_t, event: anytype, channel: zeng.commands.reliability_channel) void {
+pub fn send_remote_event(commands: *zeng.commands, tracker: *packet_ack_tracker_t, socket: net.socket_t, peer: net.peer_info_t, event: anytype, channel: zeng.commands.reliability_channel) void {
     const payload_array = commands.allocator.alloc(u8, @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
     var curr_byte: u32 = 0;
     zeng.loader.serialize_to_bytes(comptime zeng.GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);

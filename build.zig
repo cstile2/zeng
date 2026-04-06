@@ -38,7 +38,6 @@ pub fn build(b: *std.Build) !void {
             },
         }),
     });
-
     const hot_reload_dll = b.addLibrary(.{
         .name = "hot_reload",
         .root_module = hot_reload_module,
@@ -55,7 +54,7 @@ pub fn build(b: *std.Build) !void {
     zeng_module.addCSourceFile(.{ .file = b.path("c_libs/stb_image.c") });
 
     const exe_run = b.addRunArtifact(exe);
-    const exe_run_command = b.step("run", "Run the program");
+    const exe_run_command = b.step("run", "run the program");
     exe_run_command.dependOn(&exe_run.step);
 
     const exe_install = b.addInstallArtifact(exe, .{});
@@ -63,6 +62,6 @@ pub fn build(b: *std.Build) !void {
     exe_build_command.dependOn(&exe_install.step);
 
     const hot_reload_dll_install = b.addInstallArtifact(hot_reload_dll, .{});
-    const dll_build_command = b.step("hot", "compile hot reload code");
+    const dll_build_command = b.step("hot", "build the hot reload code");
     dll_build_command.dependOn(&hot_reload_dll_install.step);
 }

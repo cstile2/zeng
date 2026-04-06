@@ -23,7 +23,9 @@ pub const health_component = struct {
 pub const card_caster = struct {
     fire_ball_prototype: fire_ball_component,
 };
-pub const ghost_component = struct {};
+pub const ghost_component = struct {
+    timer: f32,
+};
 pub const playing_card = struct {
     play_fn: *const fn () void,
 };
@@ -41,39 +43,56 @@ pub const entity_collider_res = struct {
     }
 };
 
+pub fn shoot_fireball(pos: zeng.vec3, vel: zeng.vec3, res: *zeng.resources_t, fire_ball_prototype: fire_ball_component) void {
+    aud.play_sound(res.get(zeng.asset_registry).get("sounds/fireball.wav", aud.audio_sample_info).*, .one_shot);
+
+    const world = res.get(ecs.world_t);
+
+    var fire_ball = fire_ball_prototype;
+    fire_ball.velocity = vel;
+
+    _ = world.spawn(.{
+        zeng.mat_scal(zeng.mat_tran(zeng.mat_identity, pos), zeng.vec3.ONE.mult(0.2)),
+        zeng.sprite3D{ .size = undefined, .texture = undefined },
+        fire_ball,
+    });
+}
+
 pub fn playing_card_fire_ball(res: *zeng.resources_t) void {
-    const commands = res.get(zeng.commands);
-    const world = res.get(ecs.world);
+    // const commands = res.get(zeng.commands);
+    const world = res.get(ecs.world_t);
     const main_cam_info = res.get(zeng.main_camera_res);
     const main_player_info = res.get(zeng.main_player_res);
     const player_card_caster = world.get(main_player_info.id, card_caster).?;
     const cam_matrix = world.get(main_cam_info.id, zeng.world_matrix).?;
 
-    var fire_ball = player_card_caster.fire_ball_prototype;
-    fire_ball.velocity = zeng.mat_forward(cam_matrix.*).mult(-10.0);
+    shoot_fireball(zeng.mat_position(cam_matrix.*).add(zeng.mat_forward(cam_matrix.*).mult(-0.5)), zeng.mat_forward(cam_matrix.*).mult(-10.0), res, player_card_caster.fire_ball_prototype);
 
-    commands.spawn(.{
-        zeng.mat_scal(cam_matrix.*, zeng.vec3.ONE.mult(0.2)),
-        zeng.sprite3D{ .size = undefined, .texture = undefined },
-        fire_ball,
-    });
+    // var fire_ball = player_card_caster.fire_ball_prototype;
+    // fire_ball.velocity = zeng.mat_forward(cam_matrix.*).mult(-10.0);
+
+    // commands.spawn(.{
+    //     zeng.mat_scal(cam_matrix.*, zeng.vec3.ONE.mult(0.2)),
+    //     zeng.sprite3D{ .size = undefined, .texture = undefined },
+    //     fire_ball,
+    // });
 }
 pub fn playing_card_bouncify(res: *zeng.resources_t) void {
-    const world = res.get(ecs.world);
+    const world = res.get(ecs.world_t);
     const main_player_info = res.get(zeng.main_player_res);
     const player_card_caster = world.get(main_player_info.id, card_caster).?;
 
     player_card_caster.fire_ball_prototype.bouncy = true;
 }
 pub fn playing_card_inc_lifetime(res: *zeng.resources_t) void {
-    const world = res.get(ecs.world);
+    const world = res.get(ecs.world_t);
     const main_player_info = res.get(zeng.main_player_res);
     const player_card_caster = world.get(main_player_info.id, card_caster).?;
 
     player_card_caster.fire_ball_prototype.time_till_despawn *= 1.5;
 }
 pub fn playing_card_bounce_more_damage(res: *zeng.resources_t) void {
-    const world = res.get(ecs.world);
+    const world = res.get(ecs.world_t);
     const main_player_info = res.get(zeng.main_player_res);
     const player_card_caster = world.get(main_player_info.id, card_caster).?;
 
@@ -120,7 +139,7 @@ pub fn fire_ball_system(q: *ecs.query(.{ zeng.world_matrix, fire_ball_component 
         }
     }
 }
-pub fn sync_entity_colliders_system(entity_colliders: *entity_collider_res, world: *ecs.world) !void {
+pub fn sync_entity_colliders_system(entity_colliders: *entity_collider_res, world: *ecs.world_t) !void {
     var delete_commands = std.ArrayList(ecs.entity_id).initCapacity(std.heap.c_allocator, 0) catch unreachable;
     defer delete_commands.deinit(std.heap.c_allocator);
 
@@ -162,21 +181,29 @@ pub fn cast_system(mouse_state: *zeng.mouse_state_res, asset_reg: *zeng.asset_re
             aud.play_sound(asset_reg.get("sounds/spell.wav", aud.audio_sample_info).*, .one_shot);
             playing_card_inc_lifetime(res);
         } else {
-            aud.play_sound(asset_reg.get("sounds/fireball.wav", aud.audio_sample_info).*, .one_shot);
             playing_card_fire_ball(res);
         }
     }
 }
-pub fn ghost_system(q: *ecs.query(.{ ghost_component, zeng.world_matrix }), world: *ecs.world, main_player: *zeng.main_player_res, time: *zeng.time_res) !void {
+pub fn ghost_system(q: *ecs.query(.{ ghost_component, zeng.world_matrix }), world: *ecs.world_t, main_player: *zeng.main_player_res, time: *zeng.time_res, res: *zeng.resources_t) !void {
     const player_matrix = world.get(main_player.id, zeng.world_matrix).?;
     const player_pos = zeng.mat_position(player_matrix.*);
 
     var it = q.iterator();
     while (it.next()) |curr| {
-        _, const entity_matrix = curr;
+        const entity_ghost: *ghost_component, const entity_matrix = curr;
 
         const ghost_pos = zeng.mat_position(entity_matrix.*);
         const delta = player_pos.sub(ghost_pos);
+
+        entity_ghost.timer -= time.fixed_dt;
+        if (entity_ghost.timer <= 0.0) {
+            entity_ghost.timer = 3.0;
+
+            const mypos = zeng.mat_position(entity_matrix.*);
+            const delta_vec = delta.normalized();
+            shoot_fireball(mypos.add(delta_vec.mult(2.0)), delta_vec.mult(10.0), res, .{ .velocity = undefined, .bouncy = true, .time_till_despawn = 5.0 });
+        }
 
         entity_matrix.* = zeng.mat_rebasis(entity_matrix.*, zeng.vec3.UP.cross(delta.neg().slide(zeng.vec3.UP)).normalized(), zeng.vec3.UP, delta.neg().slide(zeng.vec3.UP).normalized());
         entity_matrix.* = zeng.mat_tran(entity_matrix.*, delta.normalized().mult(time.fixed_dt));

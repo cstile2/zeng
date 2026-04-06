@@ -210,17 +210,18 @@ pub fn ui_pos(pos: vec2, node: *ui.ui_node) void {
         offset += dim(child, d).* + node.gap;
     }
 }
-pub fn ui_draw(drawer: *const box_drawer_t, ctx: zeng.graphics_t, node: *ui.ui_node, text_renderer: *zeng.text_render_res) void {
+pub fn ui_draw(drawer: *const box_drawer_t, ctx: zeng.graphics_t, node: *ui.ui_node, mesh: zeng.mesh, font: font_info) void {
     const color = node.color orelse zeng.render.color.WHITE;
 
     drawer.draw_img(ctx, node.pos.x, node.pos.y, node.width, node.height, color, node.img orelse 0, node.radius);
     if (node.text) |t| {
-        zeng.render.draw_text(t, text_renderer, node.pos.x, node.pos.y, ctx);
+        // zeng.render.draw_text(t, text_renderer, node.pos.x, node.pos.y, ctx);
+        zeng.render.draw_sdf_font_text(t, font, mesh, node.pos.x, node.pos.y - 5, 0.42, ctx);
     }
 
     if (node.children != null) {
         for (node.children.?.items) |child| {
-            ui_draw(drawer, ctx, child, text_renderer);
+            ui_draw(drawer, ctx, child, mesh, font);
         }
     }
 }

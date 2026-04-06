@@ -128,21 +128,21 @@ void main()
     float shadow_map = shadow_map_calculation(FragPosLightSpace);  
 
     vec3 ambient = vec3(0.15) * combined_albedo * ao;
-    vec3 color = ambient + Lo * (1.0 - shadow_map); // + vec3(3.0) * max(0, fresnel);
-    color = combined_albedo;
+    vec3 color = ambient + Lo * (1.0 - shadow_map);
+    // color = combined_albedo;
 
     // dist = dist * 0.001;
     // dist = dist / (dist + 1.0);
-    float fog_density = 0.2f;
+    // float fog_density = 0.2f;
     // float fog_t = 1.0 - exp(-dist * fog_density);
     // float fog_t = clamp(sqrt(dist)/4.0, 0.0, 1.0);
-    float fog_t = 1.0 - (20.0/(dist*dist));
-    fog_t = clamp(fog_t, 0.0, 1.0);
-    vec3 fog_color = vec3(0.01);//vec3(0.3,0.2,0.3);
-    color = mix(color, fog_color, fog_t);
+    // float fog_t = 1.0 - (20.0/(dist*dist));
+    // fog_t = clamp(fog_t, 0.0, 1.0);
+    // vec3 fog_color = vec3(0.01);//vec3(0.3,0.2,0.3);
+    // color = mix(color, fog_color, fog_t);
 
     // color = color / (color + vec3(1.0)); // tone mapping
-    float avg = (color.x + color.y + color.z)/3.0;
+    // float avg = (color.x + color.y + color.z)/3.0;
     // color = color * 1.5 / (avg + 1.0);
     FragColor = vec4(color, opacity);
 }

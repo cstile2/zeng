@@ -300,7 +300,7 @@ pub const cpu_mesh = struct {
 };
 pub const skeleton_pose = struct { []zeng.quat, []zeng.vec3, []zeng.vec3 };
 
-pub var global_world_ptr: *ecs.world = undefined;
+pub var global_world_ptr: *ecs.world_t = undefined;
 pub var global_player_entity: ecs.entity_id = undefined;
 pub var global_camera_entity: ecs.entity_id = undefined;
 pub var global_mouse_pressed = false;
@@ -311,9 +311,6 @@ pub const time_res = struct {
     dt: f32,
     fixed_delta_time: f64,
     fixed_dt: f32,
-};
-pub const input_res = struct {
-    t_down_last_frame: bool,
 };
 pub const main_camera_res = struct {
     id: ecs.entity_id,
@@ -529,6 +526,7 @@ pub const client_info = struct {
 };
 
 pub const name_component = []const u8;
+pub const auto_animate_component = struct {};
 
 pub const COMPONENT_TYPES = [_]type{
     zeng.mesh,
@@ -556,6 +554,8 @@ pub const COMPONENT_TYPES = [_]type{
     dungeon_deck.health_component,
     dungeon_deck.card_caster,
     dungeon_deck.ghost_component,
+
+    auto_animate_component,
 };
 
 pub const asset_registry = struct {
@@ -583,7 +583,7 @@ pub const asset_registry = struct {
     }
 };
 
-pub fn find_component_of_type(world: *ecs.world, parent: ecs.entity_id, component_type: type, q_children: *ecs.query(.{zeng.children})) ?ecs.entity_id {
+pub fn find_component_of_type(world: *ecs.world_t, parent: ecs.entity_id, component_type: type, q_children: *ecs.query(.{zeng.children})) ?ecs.entity_id {
     if (world.get(parent, component_type) != null) return parent;
 
     const childrens = world.get(parent, zeng.children) orelse return null;
@@ -594,7 +594,7 @@ pub fn find_component_of_type(world: *ecs.world, parent: ecs.entity_id, componen
 
     return null;
 }
-pub fn find_component_of_type_actual(world: *ecs.world, parent: ecs.entity_id, component_type: type, q_children: *ecs.query(.{zeng.children})) ?*component_type {
+pub fn find_component_of_type_actual(world: *ecs.world_t, parent: ecs.entity_id, component_type: type, q_children: *ecs.query(.{zeng.children})) ?*component_type {
     const guy = world.get(parent, component_type);
     if (guy != null) return guy.?;
 
@@ -606,7 +606,7 @@ pub fn find_component_of_type_actual(world: *ecs.world, parent: ecs.entity_id, c
 
     return null;
 }
-pub fn recursive_delete_entities(entity: ecs.entity_id, world: *ecs.world) void {
+pub fn recursive_delete_entities(entity: ecs.entity_id, world: *ecs.world_t) void {
     if (!world.is_alive(entity)) return;
     if (world.get(entity, zeng.children)) |entity_children| {
         for (entity_children.items) |child| {
@@ -1263,28 +1263,28 @@ pub fn get_new_netid() u32 {
 }
 
 // Iterators + Resources
-pub const resource_fetcher = struct {
+pub const resource_fetcher_t = struct {
     res: *resources_t,
-    world: *ecs.world,
+    world: *ecs.world_t,
     allocator: std.mem.Allocator,
 
-    pub fn run_system(self: *resource_fetcher, comptime func: anytype) void {
+    pub fn run_system(this: *resource_fetcher_t, comptime func: anytype) void {
         const t = @typeInfo(@TypeOf(func));
 
         const typ = comptime utils.type_array_to_tuple_type(utils.fn_parameter_type_array(t));
         var params: typ = undefined;
 
         inline for (&params) |*param| {
-            if (@hasDecl(@TypeOf(param.*.*), "TYPES")) {
+            if (@typeInfo(@TypeOf(param.*.*)) == .@"struct" and @hasDecl(@TypeOf(param.*.*), "TYPES")) {
                 const component_list = comptime @TypeOf(param.*.*).TYPES;
-                param.* = self.fresh_query(component_list);
+                param.* = this.fresh_query(component_list);
             } else {
-                param.* = self.res.get(@TypeOf(param.*.*));
+                param.* = this.res.get(@TypeOf(param.*.*));
             }
         }
         @call(.auto, func, params) catch unreachable;
     }
-    pub fn run_system_args(self: *resource_fetcher, comptime func: anytype, arg_tuple: anytype) void {
+    pub fn run_system_args(this: *resource_fetcher_t, comptime func: anytype, arg_tuple: anytype) void {
         const t = @typeInfo(@TypeOf(func));
 
         const typ = comptime utils.type_array_to_tuple_type(utils.fn_parameter_type_array(t));
@@ -1294,9 +1294,9 @@ pub const resource_fetcher = struct {
             if (@TypeOf(argument) == zeng.auto_fill_t) {
                 if (@hasDecl(@TypeOf(param.*.*), "TYPES")) {
                     const component_list = comptime @TypeOf(param.*.*).TYPES;
-                    param.* = self.fresh_query(component_list);
+                    param.* = this.fresh_query(component_list);
                 } else {
-                    param.* = self.res.get(@TypeOf(param.*.*));
+                    param.* = this.res.get(@TypeOf(param.*.*));
                 }
             } else {
                 param.* = argument;
@@ -1304,15 +1304,15 @@ pub const resource_fetcher = struct {
         }
         @call(.auto, func, params) catch unreachable;
     }
-    pub fn fresh_query(self: *resource_fetcher, component_list: anytype) *ecs.query(component_list) {
-        const q_ptr, const undef = self.res.get_create(ecs.query(component_list));
+    pub fn fresh_query(this: *resource_fetcher_t, component_list: anytype) *ecs.query(component_list) {
+        const q_ptr, const undef = this.res.get_create(ecs.query(component_list));
         if (undef) {
-            // an undefined query was allocated
-            q_ptr.* = try ecs.query(component_list).create(self.world, self.allocator);
+            // no query was found, so an uninitialized query was allocated
+            q_ptr.* = ecs.query(component_list).create_and_gather(this.world, this.allocator);
         } else {
             // query was found, but we want to refresh it
-            try q_ptr.destroy();
-            q_ptr.* = try ecs.query(component_list).create(self.world, self.allocator);
+            q_ptr.deinit();
+            q_ptr.* = ecs.query(component_list).create_and_gather(this.world, this.allocator);
         }
         return q_ptr;
     }
@@ -1328,25 +1328,25 @@ pub const resources_t = struct {
         _ = c.SetWindowLongPtrW(__graphics.hwnd, c.GWLP_USERDATA, @intCast(@intFromPtr(this)));
         this.insert_ptr(__graphics);
     }
-    pub fn deinit(self: *resources_t) void {
-        self.map.deinit();
+    pub fn deinit(this: *resources_t) void {
+        this.map.deinit();
     }
 
-    pub fn insert(self: *resources_t, p: anytype) void {
-        const new_guy = self.allocator.create(@TypeOf(p)) catch unreachable;
+    pub fn insert(this: *resources_t, p: anytype) void {
+        const new_guy = this.allocator.create(@TypeOf(p)) catch unreachable;
         new_guy.* = p;
 
-        const a = self.map.getOrPut(utils.type_id(@TypeOf(p))) catch unreachable;
+        const a = this.map.getOrPut(utils.type_id(@TypeOf(p))) catch unreachable;
         if (a.found_existing) {
             const ref = @as(*@TypeOf(p), @ptrCast(@alignCast(a.value_ptr.*)));
-            self.allocator.destroy(ref);
+            this.allocator.destroy(ref);
         }
         a.value_ptr.* = @ptrCast(new_guy);
     }
-    pub fn insert_ptr(self: *resources_t, p: anytype) void {
+    pub fn insert_ptr(this: *resources_t, p: anytype) void {
         const erased = @as(*anyopaque, @ptrCast(p));
         const type_id = utils.type_id(@typeInfo(@TypeOf(p)).pointer.child);
-        self.map.put(type_id, erased) catch unreachable;
+        this.map.put(type_id, erased) catch unreachable;
     }
     pub fn get(resources: *resources_t, p: type) *p {
         if (!resources.map.contains(utils.type_id(p))) {
@@ -1355,15 +1355,15 @@ pub const resources_t = struct {
         }
         return @ptrCast(@alignCast(resources.map.getPtr(utils.type_id(p)).?.*));
     }
-    pub fn get_create(self: *resources_t, p: type) struct { *p, bool } {
+    pub fn get_create(this: *resources_t, p: type) struct { *p, bool } {
         var gotten: *p = undefined;
         var undef = false;
-        if (self.map.contains(utils.type_id(p))) {
-            gotten = @ptrCast(@alignCast(self.map.get(utils.type_id(p)).?));
+        if (this.map.contains(utils.type_id(p))) {
+            gotten = @ptrCast(@alignCast(this.map.get(utils.type_id(p)).?));
         } else {
             undef = true;
-            const new_guy = self.allocator.create(p) catch unreachable;
-            self.map.put(utils.type_id(p), @ptrCast(new_guy)) catch unreachable;
+            const new_guy = this.allocator.create(p) catch unreachable;
+            this.map.put(utils.type_id(p), @ptrCast(new_guy)) catch unreachable;
             gotten = new_guy;
         }
         return .{ gotten, undef };
@@ -1426,7 +1426,7 @@ pub const commands = struct {
         self.queued_commands[self.queued_commands_curr].kind = t;
         self.queued_commands_curr += 1;
     }
-    pub fn process_commands(self: *commands, world: *ecs.world) void {
+    pub fn process_commands(self: *commands, world: *ecs.world_t) void {
         var curr: u32 = 0;
         var current_ent: ecs.entity_id = undefined;
 
@@ -1463,6 +1463,15 @@ pub const commands = struct {
         for (self.remote_messages_send_queue[0..self.remote_messages_send_queue_len]) |mes| {
             self.allocator.free(mes.payload);
         }
+    }
+};
+pub const remote_eventer = struct {
+    commands: *zeng.commands,
+    tracker: *net.packet_ack_tracker_t,
+    main_sockeet: net.socket_t,
+
+    pub fn send(this: *@This(), peer: net.peer_info_t, message: anytype, channel: zeng.commands.reliability_channel) void {
+        zeng.net.send_remote_event(this.commands, this.tracker, this.main_sockeet, peer, message, channel);
     }
 };
 
@@ -1624,7 +1633,6 @@ pub const mouse_button = enum {
 pub fn get_mouse_button(b: mouse_button) bool {
     return mouse_button_down[@intFromEnum(b)];
 }
-
 pub const cursor_type_enum = enum(usize) {
     arrow = 32512,
     pointer = 32649,

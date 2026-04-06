@@ -24,7 +24,7 @@ pub const player = struct {
 };
 
 /// Spawn a player prefab
-pub fn create_player(asset_reg: *asset_registry, world: *ecs.world, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator, net_id_c: zeng.net_id_component) ecs.entity_id {
+pub fn create_player(asset_reg: *asset_registry, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator, net_id_c: zeng.net_id_component) ecs.entity_id {
     // _ = asset_reg;
     // _ = skin_shader;
     // _ = uv_checker_tex;
@@ -51,7 +51,7 @@ pub fn create_player(asset_reg: *asset_registry, world: *ecs.world, skin_shader:
     return player_gltf;
 }
 /// Spawn a host player prefab in a server
-pub fn construct_main_server_player(asset_reg: *zeng.asset_registry, world: *ecs.world, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator) ecs.entity_id {
+pub fn construct_main_server_player(asset_reg: *zeng.asset_registry, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator) ecs.entity_id {
     const result = zeng.Player.create_player(asset_reg, world, skin_shader, static_shader, uv_checker_tex, fet, top_children, allocator, .{ .net_id = zeng.get_new_netid(), .remote_peer = null });
     world.add(zeng.input_implement{ .move_fn = zeng.input_implement.default_move_fn, .jump_fn = zeng.input_implement.default_jump }, result);
     world.get(result, zeng.world_matrix).?.* = zeng.mat_tran(world.get(result, zeng.world_matrix).?.*, zeng.vec3{ .y = 100.0, .x = 20.0 });
@@ -73,7 +73,7 @@ fn matrix_from_euler(x: f64, y: f64) zeng.world_matrix {
 }
 
 /// Allows the player to shoot their gun
-pub fn shoot_system(main_socket: net.socket_t, asset_reg: *zeng.asset_registry, q: *ecs.query(.{ rpc.input_message, zeng.world_matrix, zeng.net_id_component }), peer_map: *std.AutoHashMap(net.peer_info_t, zeng.client_info), world: *ecs.world, commands: *zeng.commands, tracker: *net.packet_ack_tracker_t, hitmarker_events: *zeng.msg(rpc.hitmarker)) !void {
+pub fn shoot_system(net_events: *zeng.remote_eventer, asset_reg: *zeng.asset_registry, q: *ecs.query(.{ rpc.input_message, zeng.world_matrix, zeng.net_id_component }), peer_map: *std.AutoHashMap(net.peer_info_t, zeng.client_info), world: *ecs.world_t, hitmarker_events: *zeng.msg(rpc.hitmarker)) !void {
     var remote_player_entity_list = std.ArrayList(ecs.entity_id).initCapacity(std.heap.c_allocator, 0) catch unreachable;
     defer remote_player_entity_list.deinit(std.heap.c_allocator);
 
@@ -104,7 +104,7 @@ pub fn shoot_system(main_socket: net.socket_t, asset_reg: *zeng.asset_registry, 
 
                 if (did_hit) {
                     if (entity_netid.remote_peer) |net_id_remote_peer| { // if this entity is owned by another computer, then send that computer a hitmarker event
-                        net.remote_event(commands, tracker, main_socket, net_id_remote_peer, rpc.hitmarker{}, .reliable);
+                        net_events.send(net_id_remote_peer, rpc.hitmarker{}, .reliable);
                     } else {
                         hitmarker_events.send(.{});
                     }
@@ -153,7 +153,6 @@ pub fn player_simulate_and_animate_system(asset_reg: *asset_registry, time: *tim
 
 /// Collision detection for players - designed to be run multiple times per frame for latency compensation
 pub fn simulate_collision(plyr: *player, world_matrix: *zeng.world_matrix, spatial_hash_grid: *std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.convex_collider)), tri_ev: *zeng.msg([3]zeng.vec3), debug: *debug_res) void {
-    _ = tri_ev;
     var capsule_collider = phy.convex_collider{ .data = undefined, .matrix = world_matrix.*, .support = phy.dual_point };
     const old_grounded = plyr.grounded;
     var closest_dist = std.math.floatMax(f32);
@@ -202,6 +201,7 @@ pub fn simulate_collision(plyr: *player, world_matrix: *zeng.world_matrix, spati
 
             std.debug.assert(curr_collider.tag == .support_based); // just for now
 
+            _ = tri_ev;
             // const coll_data = @as(*const phy.mesh_triangle_data, @ptrCast(@alignCast(curr_collider.data)));
             // tri_ev.send(.{
             //     zeng.mat_mult_vec4(curr_collider.matrix, coll_data.positions[coll_data.indices[0]].to_vec4(1.0)).to_vec3(),
@@ -239,7 +239,61 @@ pub fn simulate_collision(plyr: *player, world_matrix: *zeng.world_matrix, spati
     }
 }
 /// Player movement and logic - designed to be multiple times per frame for latency compensation
-pub fn simulate_player(_player: *player, input: *const rpc.input_message, matrix: *zeng.world_matrix, time: *time_res) void {
+// pub fn simulate_player(_player: *player, input: *const rpc.input_message, matrix: *zeng.world_matrix, time: *time_res) void {
+//     const rotated_matrix = matrix_from_euler(input.rot_x, input.rot_y);
+
+//     if (input.jump and _player.grounded) {
+//         _player.velocity = _player.velocity.add(zeng.vec3{ .y = 6 });
+//         _player.grounded = false;
+//         _player.ground_normal = zeng.vec3.UP;
+//     }
+
+//     const acc: f32 = 60.0;
+//     const basis_right = zeng.mat_right(rotated_matrix).slide(_player.ground_normal).normalized();
+//     const basis_forward = basis_right.cross(_player.ground_normal);
+//     var move_vect = basis_right.mult(input.move_vect.x).add(basis_forward.mult(input.move_vect.y));
+
+//     var tilt = zeng.vec3.ZERO;
+//     if (_player.grounded) {
+//         if (input.move_vect.length() > 0.1) {
+//             if (_player.velocity.length_sq() > 0.01) {
+//                 const g = move_vect.sub(_player.velocity.normalized()).clamp(1.0);
+//                 const h = g.mult(2.0).add(move_vect).normalized();
+//                 var h_v = h.project(_player.velocity);
+//                 const h_h = h.sub(h_v);
+//                 if (_player.velocity.length() > 3.8 and h_v.dot(_player.velocity) > 0.0) h_v = zeng.vec3.ZERO;
+//                 tilt = h_v.add(h_h);
+//                 _player.velocity = _player.velocity.add(h_v.add(h_h).mult(acc * time.fixed_dt));
+//             } else {
+//                 _player.velocity = _player.velocity.add(move_vect.mult(acc * time.fixed_dt));
+//             }
+//         } else {
+//             tilt = _player.velocity.neg().clamp(1.0);
+//             _player.velocity = _player.velocity.add(_player.velocity.neg().clamp(acc * time.fixed_dt));
+//         }
+//     } else {
+//         _player.velocity = _player.velocity.add(zeng.vec3.UP.mult(-9.8 * time.fixed_dt));
+//         _player.ground_normal = zeng.vec3.UP;
+//         _player.velocity = _player.velocity.add(move_vect.mult(acc * 0.1 * time.fixed_dt));
+//         _player.velocity = _player.velocity.slide(zeng.vec3.UP).add(_player.velocity.project(zeng.vec3.UP));
+//     }
+//     _player.tilt = _player.tilt.lerp(tilt, 8.0 * time.fixed_dt);
+//     matrix.* = zeng.mat_tran(matrix.*, _player.velocity.mult(time.fixed_dt));
+
+//     if (_player.velocity.slide(zeng.vec3.UP).length() > 0.05) {
+//         _player.old_velocity = _player.old_velocity.slerp(_player.velocity.slide(zeng.vec3.UP).normalized(), 8 * time.fixed_dt);
+//     }
+//     if (_player.old_velocity.slide(zeng.vec3.UP).length() > 0.05) {
+//         const _up = (zeng.vec3.UP.add(_player.tilt.mult(0.3))).normalized();
+//         matrix.* = zeng.mat_rebasis(matrix.*, _up.cross(_player.old_velocity.slide(_up)).normalized(), _up, _player.old_velocity.slide(_up).normalized());
+//     }
+
+//     if (zeng.mat_position(matrix.*).y < -30.0) {
+//         zeng.mat_position_set(matrix, .{ .y = 20.0, .x = -5.0 });
+//         _player.velocity = zeng.vec3.ZERO;
+//     }
+// }
+pub fn simulate_player2(_player: *player, input: *const rpc.input_message, matrix: *zeng.world_matrix, time: *time_res) void {
     const rotated_matrix = matrix_from_euler(input.rot_x, input.rot_y);
 
     if (input.jump and _player.grounded) {
@@ -247,60 +301,6 @@ pub fn simulate_player(_player: *player, input: *const rpc.input_message, matrix
         _player.grounded = false;
         _player.ground_normal = zeng.vec3.UP;
     }
-
-    const acc: f32 = 60.0;
-    const basis_right = zeng.mat_right(rotated_matrix).slide(_player.ground_normal).normalized();
-    const basis_forward = basis_right.cross(_player.ground_normal);
-    var move_vect = basis_right.mult(input.move_vect.x).add(basis_forward.mult(input.move_vect.y));
-
-    var tilt = zeng.vec3.ZERO;
-    if (_player.grounded) {
-        if (input.move_vect.length() > 0.1) {
-            if (_player.velocity.length_sq() > 0.01) {
-                const g = move_vect.sub(_player.velocity.normalized()).clamp(1.0);
-                const h = g.mult(2.0).add(move_vect).normalized();
-                var h_v = h.project(_player.velocity);
-                const h_h = h.sub(h_v);
-                if (_player.velocity.length() > 3.8 and h_v.dot(_player.velocity) > 0.0) h_v = zeng.vec3.ZERO;
-                tilt = h_v.add(h_h);
-                _player.velocity = _player.velocity.add(h_v.add(h_h).mult(acc * time.fixed_dt));
-            } else {
-                _player.velocity = _player.velocity.add(move_vect.mult(acc * time.fixed_dt));
-            }
-        } else {
-            tilt = _player.velocity.neg().clamp(1.0);
-            _player.velocity = _player.velocity.add(_player.velocity.neg().clamp(acc * time.fixed_dt));
-        }
-    } else {
-        _player.velocity = _player.velocity.add(zeng.vec3.UP.mult(-9.8 * time.fixed_dt));
-        _player.ground_normal = zeng.vec3.UP;
-        _player.velocity = _player.velocity.add(move_vect.mult(acc * 0.1 * time.fixed_dt));
-        _player.velocity = _player.velocity.slide(zeng.vec3.UP).add(_player.velocity.project(zeng.vec3.UP));
-    }
-    _player.tilt = _player.tilt.lerp(tilt, 8.0 * time.fixed_dt);
-    matrix.* = zeng.mat_tran(matrix.*, _player.velocity.mult(time.fixed_dt));
-
-    if (_player.velocity.slide(zeng.vec3.UP).length() > 0.05) {
-        _player.old_velocity = _player.old_velocity.slerp(_player.velocity.slide(zeng.vec3.UP).normalized(), 8 * time.fixed_dt);
-    }
-    if (_player.old_velocity.slide(zeng.vec3.UP).length() > 0.05) {
-        const _up = (zeng.vec3.UP.add(_player.tilt.mult(0.3))).normalized();
-        matrix.* = zeng.mat_rebasis(matrix.*, _up.cross(_player.old_velocity.slide(_up)).normalized(), _up, _player.old_velocity.slide(_up).normalized());
-    }
-
-    if (zeng.mat_position(matrix.*).y < -30.0) {
-        zeng.mat_position_set(matrix, .{ .y = 20.0, .x = -5.0 });
-        _player.velocity = zeng.vec3.ZERO;
-    }
-}
-pub fn simulate_player2(_player: *player, input: *const rpc.input_message, matrix: *zeng.world_matrix, time: *time_res) void {
-    const rotated_matrix = matrix_from_euler(input.rot_x, input.rot_y);
-
-    // if (input.jump and _player.grounded) {
-    //     _player.velocity = _player.velocity.add(zeng.vec3{ .y = 6 });
-    //     _player.grounded = false;
-    //     _player.ground_normal = zeng.vec3.UP;
-    // }
 
     const max_speed: f32 = 3.0;
     const acc: f32 = 60.0;
