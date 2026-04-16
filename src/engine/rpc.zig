@@ -2,7 +2,7 @@ const rpc = @This();
 const std = @import("std");
 const zeng = @import("zeng.zig");
 const net = @import("networking.zig");
-const Player = @import("user/player.zig");
+const player = @import("user/player.zig");
 
 pub const player_spawn_message = struct {
     SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
@@ -20,7 +20,7 @@ pub const input_message = struct {
 };
 pub const state_correction = struct {
     tick: isize,
-    state: Player.player,
+    state: player.player_component,
     world_matrix: zeng.world_matrix,
 };
 pub const client_tick = struct {
@@ -57,15 +57,15 @@ pub const hitmarker = struct {
     SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
 };
 
-pub const REMOTE_MESSAGE_TYPES = .{
-    player_spawn_message,
-    snapshot_message,
-    input_message,
-    state_correction,
-    client_tick,
-    server_tick_offset,
-    missed_input,
-    input_chunk,
-    world_update,
-    hitmarker,
-};
+// pub const REMOTE_MESSAGE_TYPES = [_]type{
+//     player_spawn_message,
+//     snapshot_message,
+//     input_message,
+//     state_correction,
+//     client_tick,
+//     server_tick_offset,
+//     missed_input,
+//     input_chunk,
+//     world_update,
+//     hitmarker,
+// };

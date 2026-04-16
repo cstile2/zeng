@@ -150,7 +150,7 @@ pub fn query(comptime component_list: anytype) type {
             return (this.relevant_tables.get(unstable.archetype_hash) orelse return null).get(T, unstable.row);
         }
         pub fn iterator(this: *@This()) query_iterator(component_list) {
-            return .{ .q = this, .index = 0, .current_table = 0, .q_table_values = this.relevant_tables.values() };
+            return .{ ._parent_query = this, ._current_table_index = 0, ._current_table = 0, ._parent_query_relevant_tables = this.relevant_tables.values() };
         }
     };
 }
@@ -189,56 +189,56 @@ pub fn query_iterator(comptime types: anytype) type {
     } });
 
     return struct {
-        q: *const query(types),
-        q_table_values: []*const archetype_table,
-        index: usize,
-        current_table: usize,
-        HACKY_CURR_ENTITY_ID: entity_id = undefined,
+        _parent_query: *const query(types),
+        _parent_query_relevant_tables: []*const archetype_table,
+        _current_table_index: usize,
+        _current_table: usize,
+        current_entity_id: entity_id = undefined,
         pub const TYPES: @TypeOf(types) = types;
         pub fn next(this: *@This()) ?ptrs_to_components {
-            if (this.q_table_values.len == 0) return null;
-            while (this.index >= this.q_table_values[this.current_table].count) {
-                if (this.current_table + 1 < this.q_table_values.len) {
-                    this.current_table += 1;
-                    this.index = 0;
+            if (this._parent_query_relevant_tables.len == 0) return null;
+            while (this._current_table_index >= this._parent_query_relevant_tables[this._current_table].count) {
+                if (this._current_table + 1 < this._parent_query_relevant_tables.len) {
+                    this._current_table += 1;
+                    this._current_table_index = 0;
                 } else return null;
             }
 
-            var current_columns = this.q.ordered_component_columns.items[this.current_table];
+            var current_columns = this._parent_query.ordered_component_columns.items[this._current_table];
 
             var component_ptrs: ptrs_to_components = undefined;
             inline for (&component_ptrs, comptime 0..) |*component_ptr, i| {
-                component_ptr.* = current_columns[i].get(this.index, @TypeOf(component_ptr.*.*));
+                component_ptr.* = current_columns[i].get(this._current_table_index, @TypeOf(component_ptr.*.*));
             }
-            this.HACKY_CURR_ENTITY_ID = this.q_table_values[this.current_table].public_ids[this.index];
+            this.current_entity_id = this._parent_query_relevant_tables[this._current_table].public_ids[this._current_table_index];
 
-            this.index += 1;
+            this._current_table_index += 1;
             return component_ptrs;
         }
         pub fn next_entity(this: *@This()) ?ptrs_to_components_struct {
-            if (this.q_table_values.len == 0) return null;
-            while (this.index >= this.q_table_values[this.current_table].count) {
-                if (this.current_table + 1 < this.q_table_values.len) {
-                    this.current_table += 1;
-                    this.index = 0;
+            if (this._parent_query_relevant_tables.len == 0) return null;
+            while (this._current_table_index >= this._parent_query_relevant_tables[this._current_table].count) {
+                if (this._current_table + 1 < this._parent_query_relevant_tables.len) {
+                    this._current_table += 1;
+                    this._current_table_index = 0;
                 } else return null;
             }
 
-            var current_columns = this.q.ordered_component_columns.items[this.current_table];
+            var current_columns = this._parent_query.ordered_component_columns.items[this._current_table];
 
             var component_ptrs: ptrs_to_components = undefined;
             inline for (&component_ptrs, comptime 0..) |*component_ptr, i| {
-                component_ptr.* = current_columns[i].get(this.index, @TypeOf(component_ptr.*.*));
+                component_ptr.* = current_columns[i].get(this._current_table_index, @TypeOf(component_ptr.*.*));
             }
-            this.HACKY_CURR_ENTITY_ID = this.q_table_values[this.current_table].public_ids[this.index];
+            this.current_entity_id = this._parent_query_relevant_tables[this._current_table].public_ids[this._current_table_index];
 
-            this.index += 1;
+            this._current_table_index += 1;
             return component_ptrs;
         }
 
         pub fn reset(this: *@This()) void {
-            this.index = 0;
-            this.current_table = 0;
+            this._current_table_index = 0;
+            this._current_table = 0;
         }
     };
 }

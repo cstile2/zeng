@@ -10,7 +10,7 @@ pub const render = @import("render.zig");
 pub const aud = @import("audio.zig");
 pub const phy = @import("physics.zig");
 pub const ui = @import("ui.zig");
-pub const Player = @import("user/player.zig");
+pub const player_module = @import("user/player.zig");
 pub const c = @cImport({
     @cInclude("initguid.h");
     @cInclude("windows.h");
@@ -326,19 +326,16 @@ pub const rect_render_res = struct {
     vao: u32,
     indices_len: c_int,
 };
-pub const networking_res = struct {
-    main_socket: zeng.net.socket_t,
-    server_address: zeng.net.Address,
-    is_server: bool = undefined,
-};
 pub const debug_res = @import("render.zig").triangle_debug_info;
 pub const cube_tracker_res = struct {
     map: std.AutoHashMap(phy.ivec3, void),
     cube_mesh: zeng.mesh,
     cube_mesh_data: *const anyopaque,
 };
-pub const main_player_res = struct {
-    id: ecs.entity_id,
+pub const player_distinguishing_res = struct {
+    main_player_id: ecs.entity_id,
+    is_server: bool,
+    is_client: bool,
 };
 pub const shadow_map_res = struct {
     depth_map_frame_buffer_object: u32,
@@ -536,9 +533,9 @@ pub const COMPONENT_TYPES = [_]type{
     sphere_collider,
     fly_component,
     follow_component,
-    zeng.children,
+    zeng.children_component,
     zeng.local_matrix,
-    zeng.Player.player,
+    zeng.player_module.player_component,
     animation_component,
     zeng.skeleton,
     input_implement,
@@ -558,7 +555,7 @@ pub const COMPONENT_TYPES = [_]type{
     auto_animate_component,
 };
 
-pub const asset_registry = struct {
+pub const asset_registry_t = struct {
     map: std.StringHashMap(*anyopaque),
 
     pub fn get(this: *@This(), str: []const u8, T: type) *T {
@@ -583,10 +580,10 @@ pub const asset_registry = struct {
     }
 };
 
-pub fn find_component_of_type(world: *ecs.world_t, parent: ecs.entity_id, component_type: type, q_children: *ecs.query(.{zeng.children})) ?ecs.entity_id {
+pub fn find_component_of_type(world: *ecs.world_t, parent: ecs.entity_id, component_type: type, q_children: *ecs.query(.{zeng.children_component})) ?ecs.entity_id {
     if (world.get(parent, component_type) != null) return parent;
 
-    const childrens = world.get(parent, zeng.children) orelse return null;
+    const childrens = world.get(parent, zeng.children_component) orelse return null;
     for (childrens.items) |child| {
         const res = find_component_of_type(world, child, component_type, q_children);
         if (res != null) return res;
@@ -594,11 +591,11 @@ pub fn find_component_of_type(world: *ecs.world_t, parent: ecs.entity_id, compon
 
     return null;
 }
-pub fn find_component_of_type_actual(world: *ecs.world_t, parent: ecs.entity_id, component_type: type, q_children: *ecs.query(.{zeng.children})) ?*component_type {
+pub fn find_component_of_type_actual(world: *ecs.world_t, parent: ecs.entity_id, component_type: type, q_children: *ecs.query(.{zeng.children_component})) ?*component_type {
     const guy = world.get(parent, component_type);
     if (guy != null) return guy.?;
 
-    const childrens = world.get(parent, zeng.children) orelse return null;
+    const childrens = world.get(parent, zeng.children_component) orelse return null;
     for (childrens.items) |child| {
         const res = find_component_of_type_actual(world, child, component_type, q_children);
         if (res != null) return res;
@@ -608,7 +605,7 @@ pub fn find_component_of_type_actual(world: *ecs.world_t, parent: ecs.entity_id,
 }
 pub fn recursive_delete_entities(entity: ecs.entity_id, world: *ecs.world_t) void {
     if (!world.is_alive(entity)) return;
-    if (world.get(entity, zeng.children)) |entity_children| {
+    if (world.get(entity, zeng.children_component)) |entity_children| {
         for (entity_children.items) |child| {
             recursive_delete_entities(child, world);
         }
@@ -687,7 +684,7 @@ pub fn apply_pose_to_skeleton(_skeleton: *zeng.skeleton, pose: zeng.skeleton_pos
         curr += 1;
     }
 }
-pub fn matrix_use_rotations(matrix: *zeng.world_matrix, x: f64, y: f64) void {
+pub fn matrix_set_euler_rotations(matrix: *zeng.world_matrix, x: f64, y: f64) void {
     const rot_mat_hor = zeng.mat_axis_angle(zeng.vec3.UP, @floatCast(x));
     const rot_mat_vert = zeng.mat_axis_angle(zeng.vec3.RIGHT, @floatCast(y));
     matrix.* = zeng.mat_tran(zeng.mat_mult(rot_mat_hor, rot_mat_vert), zeng.mat_position(matrix.*));
@@ -1372,17 +1369,28 @@ pub const resources_t = struct {
 
 // Commands
 
+// pub fn GET_MSG_CODE(T: type) u32 {
+//     var count: u32 = 0;
+//     for (rpc.REMOTE_MESSAGE_TYPES) |msg_type| {
+//         if (msg_type == T) {
+//             return count;
+//         }
+//         count += 1;
+//     }
+//     @compileError("invalid remote message type!");
+// }
+pub const generated_types = @import("generated_types.zig");
 pub fn GET_MSG_CODE(T: type) u32 {
     var count: u32 = 0;
-    for (rpc.REMOTE_MESSAGE_TYPES) |msg_type| {
+    for (generated_types.net_event_types) |msg_type| {
         if (msg_type == T) {
             return count;
         }
         count += 1;
     }
-    @compileError("invalid remote message type!");
+    @compileError("invalid remote message type! " ++ @typeName(T));
 }
-pub const commands = struct {
+pub const commands_t = struct {
     pub const command = struct {
         stuff: [256]u8,
         size: u32,
@@ -1406,7 +1414,7 @@ pub const commands = struct {
     random: std.Random,
 
     /// queues the spawning of an entity until sometime later in this frame
-    pub fn spawn(self: *commands, payload: anytype) void {
+    pub fn spawn(self: *commands_t, payload: anytype) void {
         self.add_command_type(.spawn);
         inline for (payload) |elem| {
             self.add_insertion_command(elem);
@@ -1417,16 +1425,16 @@ pub const commands = struct {
     pub fn remove() void {}
 
     // command implementation
-    fn add_insertion_command(self: *commands, payload: anytype) void {
+    fn add_insertion_command(self: *commands_t, payload: anytype) void {
         self.queued_commands[self.queued_commands_curr] = command{ .size = @sizeOf(@TypeOf(payload)), .id = comptime ecs.COMP_TYPE_TO_ID(@TypeOf(payload)), .kind = .insert, .stuff = undefined };
         @memcpy(@as([*]u8, @ptrCast(&self.queued_commands[self.queued_commands_curr].stuff)), @as([*]const u8, @ptrCast(&payload))[0..@sizeOf(@TypeOf(payload))]);
         self.queued_commands_curr += 1;
     }
-    fn add_command_type(self: *commands, t: command_type) void {
+    fn add_command_type(self: *commands_t, t: command_type) void {
         self.queued_commands[self.queued_commands_curr].kind = t;
         self.queued_commands_curr += 1;
     }
-    pub fn process_commands(self: *commands, world: *ecs.world_t) void {
+    pub fn process_commands(self: *commands_t, world: *ecs.world_t) void {
         var curr: u32 = 0;
         var current_ent: ecs.entity_id = undefined;
 
@@ -1454,24 +1462,41 @@ pub const commands = struct {
         reliable,
     };
 
-    pub fn get_sim_send_time(self: *commands) f64 {
+    pub fn get_sim_send_time(self: *commands_t) f64 {
         const jittered_delay = self.random.float(f32) * 0.05 + 0.1; // 50ms + 100ms = 150ms
         return self.time + jittered_delay;
     }
 
-    pub fn destroy(self: *commands) void {
+    pub fn destroy(self: *commands_t) void {
         for (self.remote_messages_send_queue[0..self.remote_messages_send_queue_len]) |mes| {
             self.allocator.free(mes.payload);
         }
     }
 };
-pub const remote_eventer = struct {
-    commands: *zeng.commands,
+pub const events_t = struct {
+    commands: *zeng.commands_t,
     tracker: *net.packet_ack_tracker_t,
-    main_sockeet: net.socket_t,
+    main_socket: net.socket_t,
+    res: *resources_t,
 
-    pub fn send(this: *@This(), peer: net.peer_info_t, message: anytype, channel: zeng.commands.reliability_channel) void {
-        zeng.net.send_remote_event(this.commands, this.tracker, this.main_sockeet, peer, message, channel);
+    pub fn send(this: *@This(), peer: net.peer_info_t, event: anytype, channel: zeng.commands_t.reliability_channel) void {
+        const payload_array = this.commands.allocator.alloc(u8, @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
+        var curr_byte: u32 = 0;
+        zeng.loader.serialize_to_bytes(comptime zeng.GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
+        zeng.loader.serialize_to_bytes(event, payload_array, &curr_byte);
+
+        const _msg = remote_message{ .seq = if (channel == .reliable) this.tracker.new_seq_number() else 0, .resend_timer = net.resend_interval_sec, .payload = this.commands.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = this.main_socket, .target_address = peer, .time_to_send = this.commands.get_sim_send_time(), .channel = channel };
+        if (channel == .reliable) {
+            this.tracker.mine.insert(_msg.seq).* = .{ .acked = false, .timestamp = zeng.timer_get(), .rem_message = _msg };
+        }
+
+        this.commands.remote_messages_send_queue[this.commands.remote_messages_send_queue_len] = _msg;
+        this.commands.remote_messages_send_queue_len += 1;
+    }
+    pub fn send_local(this: *@This(), message: anytype) void {
+        const T = msg(@TypeOf(message));
+        const msg_queue = this.res.get(T);
+        msg_queue.queue_message(message);
     }
 };
 
@@ -1766,6 +1791,28 @@ pub fn unlock_cursor() void {
 // Communication Data Structures
 pub fn msg(T: type) type {
     return struct {
+        pub const msg_iterator = struct {
+            parent: *msg(T),
+            curr_index: usize,
+
+            pub fn iterate_no_consume(this: *@This()) ?T {
+                if (this.curr_index >= this.parent.items().len) return null;
+                this.curr_index += 1;
+                return this.parent.items()[this.curr_index - 1];
+            }
+            pub fn iterate(this: *@This()) ?T {
+                if (this.curr_index >= this.parent.items().len) {
+                    this.parent.clear(this.parent.allocator);
+                    return null;
+                }
+                this.curr_index += 1;
+                return this.parent.items()[this.curr_index - 1];
+            }
+            pub fn get_sender(this: *@This()) net.peer_info_t {
+                return this.parent.address_items()[this.curr_index - 1];
+            }
+        };
+
         list: std.ArrayList(T),
         addresses: ?std.ArrayList(net.peer_info_t) = null,
         allocator: std.mem.Allocator,
@@ -1777,12 +1824,13 @@ pub fn msg(T: type) type {
         }
         pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
             self.list.deinit(allocator);
+            if (self.addresses != null) self.addresses.?.deinit(allocator);
         }
-        pub fn send(this: *@This(), event: T) void {
+        pub fn queue_message(this: *@This(), event: T) void {
             this.list.append(this.allocator, event) catch unreachable;
-            std.debug.assert(this.addresses == null);
+            // std.debug.assert(this.addresses == null);
         }
-        pub fn send_with_address(this: *@This(), allocator: std.mem.Allocator, event: T, address: net.peer_info_t) void {
+        pub fn queue_message_with_sender_metadata(this: *@This(), allocator: std.mem.Allocator, event: T, address: net.peer_info_t) void {
             this.list.append(allocator, event) catch unreachable;
             this.addresses.?.append(allocator, address) catch unreachable;
         }
@@ -1795,6 +1843,10 @@ pub fn msg(T: type) type {
         pub fn clear(this: *@This(), allocator: std.mem.Allocator) void {
             this.list.clearAndFree(allocator);
             if (this.addresses != null) this.addresses.?.clearAndFree(allocator);
+        }
+
+        pub fn iterator(this: *@This()) msg_iterator {
+            return .{ .curr_index = 0, .parent = this };
         }
     };
 }
@@ -1814,25 +1866,25 @@ pub fn ring_buffer(T: type) type {
 }
 
 // Parent-Child Hierarchy
-pub const children = struct {
+pub const children_component = struct {
     items: []ecs.entity_id,
 };
 pub const local_matrix = struct {
     transform: zeng.world_matrix = zeng.mat_identity,
 };
-pub fn sync_transforms_children(id: ecs.entity_id, q_transform: *ecs.query(.{zeng.world_matrix}), q_children: *ecs.query(.{children}), q_local_transform: *ecs.query(.{local_matrix})) void {
+pub fn sync_transforms_children(id: ecs.entity_id, q_transform: *ecs.query(.{zeng.world_matrix}), q_children: *ecs.query(.{children_component}), q_local_transform: *ecs.query(.{local_matrix})) void {
     const global = q_transform.get(id, zeng.world_matrix) orelse return;
-    const childrens = q_transform.get(id, children) orelse return;
+    const childrens = q_transform.get(id, children_component) orelse return;
     for (childrens.items) |_c| {
         sync_transforms_recursive(global.*, _c, q_transform, q_children, q_local_transform);
     }
 }
-pub fn sync_transforms_recursive(parent_global: zeng.world_matrix, id: ecs.entity_id, q_transform: *ecs.query(.{zeng.world_matrix}), q_children: *ecs.query(.{children}), q_local_transform: *ecs.query(.{local_matrix})) void {
+pub fn sync_transforms_recursive(parent_global: zeng.world_matrix, id: ecs.entity_id, q_transform: *ecs.query(.{zeng.world_matrix}), q_children: *ecs.query(.{children_component}), q_local_transform: *ecs.query(.{local_matrix})) void {
     const local = q_local_transform.get(id, local_matrix) orelse return;
     const global = q_transform.get(id, zeng.world_matrix) orelse return;
     global.* = zeng.mat_mult(parent_global, local.transform);
 
-    const childrens = q_transform.get(id, children) orelse return;
+    const childrens = q_transform.get(id, children_component) orelse return;
     for (childrens.items) |_c| {
         sync_transforms_recursive(global.*, _c, q_transform, q_children, q_local_transform);
     }

@@ -13,7 +13,7 @@ pub const remote_message = struct {
     sender_socket: net.socket_t,
     target_address: net.peer_info_t,
     resend_timer: f64,
-    channel: zeng.commands.reliability_channel = .unreliable,
+    channel: zeng.commands_t.reliability_channel = .unreliable,
 };
 pub const resend_interval_sec = 1.0;
 
@@ -148,21 +148,7 @@ pub fn track_packet_from_recieve(headerful_bytes: []const u8, tracker: *packet_a
     return headerful_bytes[curr..];
 }
 
-pub fn send_remote_event(commands: *zeng.commands, tracker: *packet_ack_tracker_t, socket: net.socket_t, peer: net.peer_info_t, event: anytype, channel: zeng.commands.reliability_channel) void {
-    const payload_array = commands.allocator.alloc(u8, @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
-    var curr_byte: u32 = 0;
-    zeng.loader.serialize_to_bytes(comptime zeng.GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
-    zeng.loader.serialize_to_bytes(event, payload_array, &curr_byte);
-
-    const msg = remote_message{ .seq = if (channel == .reliable) tracker.new_seq_number() else 0, .resend_timer = net.resend_interval_sec, .payload = commands.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = socket, .target_address = peer, .time_to_send = commands.get_sim_send_time(), .channel = channel };
-    if (channel == .reliable) {
-        tracker.mine.insert(msg.seq).* = .{ .acked = false, .timestamp = zeng.timer_get(), .rem_message = msg };
-    }
-
-    commands.remote_messages_send_queue[commands.remote_messages_send_queue_len] = msg;
-    commands.remote_messages_send_queue_len += 1;
-}
-pub fn send_net_messages(commands: *zeng.commands, delta_time: f64, tracker: *packet_ack_tracker_t) void {
+pub fn send_net_messages(commands: *zeng.commands_t, delta_time: f64, tracker: *packet_ack_tracker_t) void {
     _ = delta_time;
 
     var curr_seq: usize = tracker.their_last_recieved_of_my_sequence + 1;
@@ -238,7 +224,8 @@ pub fn recieve_net_messages(socket: socket_t, res: *zeng.resources_t, allocator:
         @memcpy(@as([*]u8, @ptrCast(&event_code)), headerless_bytes[curr .. curr + @sizeOf(u32)]);
         curr += @sizeOf(u32);
 
-        inline for (rpc.REMOTE_MESSAGE_TYPES) |msg_type| {
+        const generated_types = @import("generated_types.zig");
+        inline for (generated_types.net_event_types) |msg_type| {
             if (event_code == comptime zeng.GET_MSG_CODE(msg_type)) {
                 var payload: msg_type = undefined;
 
@@ -247,7 +234,7 @@ pub fn recieve_net_messages(socket: socket_t, res: *zeng.resources_t, allocator:
 
                 if (res.get(zeng.msg(msg_type)).addresses != null) {
                     const address = net.peer_info_t{ .sockaddr = sender_addr, .socklen = sender_addr_len };
-                    res.get(zeng.msg(msg_type)).send_with_address(allocator, payload, address);
+                    res.get(zeng.msg(msg_type)).queue_message_with_sender_metadata(allocator, payload, address);
                 } else unreachable;
             }
         }
@@ -274,75 +261,4 @@ pub fn do_setup(address_string: []const u8, port: u16, is_server: bool) !struct 
 pub fn undo_setup(socket: socket_t) void {
     _ = std.os.windows.ws2_32.closesocket(socket);
     _ = zeng.c.WSACleanup();
-}
-
-// for reference
-pub fn Server() !void {
-    const my_address = try std.net.Address.parseIp("0.0.0.0", 55555);
-    const my_socket = try std.os.socket(std.os.AF.INET, std.os.SOCK.DGRAM, std.os.IPPROTO.UDP);
-    defer std.os.close(my_socket);
-    try WINDOWS_set_socket_non_blocking(my_socket);
-
-    try std.os.bind(my_socket, &my_address.any, my_address.getOsSockLen());
-    var client_addr: std.os.sockaddr = undefined;
-    var client_addr_len: std.os.socklen_t = @sizeOf(std.os.sockaddr);
-
-    const message = "Hello, Client!";
-
-    var buf: [1024]u8 = undefined;
-    main_loop: while (true) {
-        var recv_result: std.os.RecvFromError!usize = 1;
-        get_messages_loop: while (true) {
-            recv_result = std.os.recvfrom(my_socket, &buf, 0, &client_addr, &client_addr_len);
-            if (recv_result) |len| {
-                std.debug.print("recieved: '{s}'\n", .{buf[0..len]});
-                _ = try std.os.sendto(my_socket, message, 0, &client_addr, client_addr_len);
-            } else |err| {
-                switch (err) {
-                    std.os.RecvFromError.WouldBlock => {
-                        break :get_messages_loop;
-                    },
-                    std.os.RecvFromError.ConnectionResetByPeer => {
-                        std.debug.print("connection was reset by peer\n", .{});
-                        break :main_loop;
-                    },
-                    else => return err,
-                }
-            }
-        }
-        std.time.sleep(std.time.ns_per_s);
-    }
-}
-pub fn Client() !void {
-    const server_address = try std.net.Address.parseIp("127.0.0.1", 55555);
-    const my_socket = try std.os.socket(std.os.AF.INET, std.os.SOCK.DGRAM, std.os.IPPROTO.UDP);
-    defer std.os.close(my_socket);
-    try WINDOWS_set_socket_non_blocking(my_socket);
-
-    const message = "Hello, Server!";
-    _ = try std.os.sendto(my_socket, message, 0, &server_address.any, server_address.getOsSockLen()); // binds an ephemeral port to this socket and sends the info to the server
-
-    var buf: [1024]u8 = undefined;
-    main_loop: while (true) {
-        var recv_result: std.os.RecvFromError!usize = 1;
-        get_messages_loop: while (true) {
-            recv_result = std.os.recv(my_socket, &buf, 0);
-            if (recv_result) |len| {
-                std.debug.print("recieved: '{s}'\n", .{buf[0..len]});
-                _ = try std.os.sendto(my_socket, message, 0, &server_address.any, server_address.getOsSockLen());
-            } else |err| {
-                switch (err) {
-                    std.os.RecvFromError.WouldBlock => {
-                        break :get_messages_loop;
-                    },
-                    std.os.RecvFromError.ConnectionResetByPeer => {
-                        std.debug.print("connection was reset by peer\n", .{});
-                        break :main_loop;
-                    },
-                    else => return err,
-                }
-            }
-        }
-        std.time.sleep(std.time.ns_per_s);
-    }
 }

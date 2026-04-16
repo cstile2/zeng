@@ -10,10 +10,10 @@ const gl = zeng.gl;
 const c = zeng.c;
 
 const debug_res = zeng.debug_res;
-const asset_registry = zeng.asset_registry;
+const asset_registry = zeng.asset_registry_t;
 const time_res = zeng.time_res;
 
-pub const player = struct {
+pub const player_component = struct {
     velocity: zeng.vec3,
     old_velocity: zeng.vec3 = zeng.vec3.ZERO,
     ground_normal: zeng.vec3,
@@ -25,44 +25,50 @@ pub const player = struct {
 
 /// Spawn a player prefab
 pub fn create_player(asset_reg: *asset_registry, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator, net_id_c: zeng.net_id_component) ecs.entity_id {
-    // _ = asset_reg;
-    // _ = skin_shader;
-    // _ = uv_checker_tex;
-    // _ = static_shader;
     const player_gltf = zeng.loader.auto_import(asset_reg, world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, uv_checker_tex, allocator);
-    // const player_gltf = world.spawn(.{zeng.mat_tran(zeng.mat_identity, .{ .y = 20 })});
-    world.add(player{ .velocity = zeng.vec3.ZERO, .ground_normal = zeng.vec3.UP, .grounded = false, .animation_controller = undefined, .camera = undefined }, player_gltf);
+    world.add(player_component{ .velocity = zeng.vec3.ZERO, .ground_normal = zeng.vec3.UP, .grounded = false, .animation_controller = undefined, .camera = undefined }, player_gltf);
     world.add(rpc.input_message{ .tick = 0, .jump = false, .move_vect = zeng.vec2.ZERO, .rot_x = 0.0, .rot_y = 0.0, .shoot = false }, player_gltf);
     world.add(net_id_c, player_gltf);
 
-    world.get(world.get(player_gltf, zeng.children).?.items[0], zeng.local_matrix).?.transform = zeng.mat_tran(zeng.mat_identity, .{ .y = -0.84 });
+    world.get(world.get(player_gltf, zeng.children_component).?.items[0], zeng.local_matrix).?.transform = zeng.mat_tran(zeng.mat_identity, .{ .y = -0.84 });
 
     // find the first instance of a skinned mesh component > retrieve the entity with that skeleton > add animation component to the player skeleton entity > ...
     // attach skeleton entity to the animation_controller on player > add netid to player
-    if (zeng.find_component_of_type(world, player_gltf, zeng.skinned_mesh, fet.fresh_query(.{zeng.children}))) |player_random_skinned_mesh| {
+    if (zeng.find_component_of_type(world, player_gltf, zeng.skinned_mesh, fet.fresh_query(.{zeng.children_component}))) |player_random_skinned_mesh| {
         const player_skeleton_entity = world.get(player_random_skinned_mesh, zeng.skinned_mesh).?.skeleton;
         world.add(zeng.animation_component{ .time = 0.0, .current_animation = 0 }, player_skeleton_entity);
-        world.get(player_gltf, player).?.animation_controller = player_skeleton_entity;
+        world.get(player_gltf, player_component).?.animation_controller = player_skeleton_entity;
     }
-
-    world.get(player_gltf, zeng.children).?.items.len = 0;
 
     top_children.append(allocator, player_gltf) catch unreachable;
     return player_gltf;
 }
 /// Spawn a host player prefab in a server
-pub fn construct_main_server_player(asset_reg: *zeng.asset_registry, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator) ecs.entity_id {
-    const result = zeng.Player.create_player(asset_reg, world, skin_shader, static_shader, uv_checker_tex, fet, top_children, allocator, .{ .net_id = zeng.get_new_netid(), .remote_peer = null });
+pub fn construct_local_player(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator) ecs.entity_id {
+    const result = zeng.player_module.create_player(asset_reg, world, skin_shader, static_shader, uv_checker_tex, fet, top_children, allocator, .{ .net_id = zeng.get_new_netid(), .remote_peer = null });
     world.add(zeng.input_implement{ .move_fn = zeng.input_implement.default_move_fn, .jump_fn = zeng.input_implement.default_jump }, result);
     world.get(result, zeng.world_matrix).?.* = zeng.mat_tran(world.get(result, zeng.world_matrix).?.*, zeng.vec3{ .y = 100.0, .x = 20.0 });
     world.add(@as(zeng.frame_interpolator, undefined), result);
-    // var found_entity = zeng.find_component_of_type(world, result, zeng.skinned_mesh, fet.fresh_query(.{zeng.children}));
-    // while (found_entity) |_| {
-    //     world.remove(zeng.skinned_mesh, found_entity.?);
-    //     found_entity = zeng.find_component_of_type(world, result, zeng.skinned_mesh, fet.fresh_query(.{zeng.children}));
-    // }
+    var found_entity = zeng.find_component_of_type(world, result, zeng.skinned_mesh, fet.fresh_query(.{zeng.children_component}));
+    while (found_entity) |_| {
+        world.remove(zeng.skinned_mesh, found_entity.?);
+        found_entity = zeng.find_component_of_type(world, result, zeng.skinned_mesh, fet.fresh_query(.{zeng.children_component}));
+    }
     zeng.global_player_entity = result;
     return result;
+}
+pub fn construct_replicated_player(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator) ecs.entity_id {
+    const remote_player_entity = zeng.player_module.create_player(asset_reg, world, skin_shader, static_shader, uv_checker_tex, fet, top_children, allocator, .{ .net_id = zeng.get_new_netid(), .remote_peer = null });
+
+    world.get(world.get(remote_player_entity, zeng.children_component).?.items[0], zeng.local_matrix).?.transform = zeng.mat_tran(zeng.mat_identity, .{ .y = -0.84 });
+
+    const remote_player_random_skinned_mesh = zeng.find_component_of_type(world, remote_player_entity, zeng.skinned_mesh, fet.fresh_query(.{zeng.children_component})).?;
+    const remote_player_skeleton_entity = world.get(remote_player_random_skinned_mesh, zeng.skinned_mesh).?.skeleton;
+    world.add(zeng.animation_component{ .time = 0.0, .current_animation = 0 }, remote_player_skeleton_entity);
+    world.add(zeng.snapshot_interpolator{ .buffer = undefined }, remote_player_entity);
+
+    top_children.append(allocator, remote_player_entity) catch unreachable;
+    return remote_player_entity;
 }
 
 /// Helper function for euler angles
@@ -73,7 +79,10 @@ fn matrix_from_euler(x: f64, y: f64) zeng.world_matrix {
 }
 
 /// Allows the player to shoot their gun
-pub fn shoot_system(net_events: *zeng.remote_eventer, asset_reg: *zeng.asset_registry, q: *ecs.query(.{ rpc.input_message, zeng.world_matrix, zeng.net_id_component }), peer_map: *std.AutoHashMap(net.peer_info_t, zeng.client_info), world: *ecs.world_t, hitmarker_events: *zeng.msg(rpc.hitmarker)) !void {
+pub fn shoot_system(player_distinguishing: *zeng.player_distinguishing_res, net_events: *zeng.events_t, players_query: *ecs.query(.{ rpc.input_message, zeng.world_matrix, zeng.net_id_component }), peer_map: *std.AutoHashMap(net.peer_info_t, zeng.client_info), world: *ecs.world_t) !void {
+    if (world.get(player_distinguishing.main_player_id, rpc.input_message).?.shoot) shoot_presentation_trigger = true;
+    if (!player_distinguishing.is_server) return;
+
     var remote_player_entity_list = std.ArrayList(ecs.entity_id).initCapacity(std.heap.c_allocator, 0) catch unreachable;
     defer remote_player_entity_list.deinit(std.heap.c_allocator);
 
@@ -82,16 +91,13 @@ pub fn shoot_system(net_events: *zeng.remote_eventer, asset_reg: *zeng.asset_reg
         remote_player_entity_list.append(std.heap.c_allocator, peer_map_entry.value_ptr.player) catch unreachable;
     }
     remote_player_entity_list.append(std.heap.c_allocator, zeng.global_player_entity) catch unreachable;
-
-    var it = q.iterator();
-    while (it.next()) |curr| {
+    var players_it = players_query.iterator();
+    while (players_it.next()) |curr| {
         const entity_input: *rpc.input_message, const entity_matrix, const entity_netid: *zeng.net_id_component = curr;
 
         if (entity_input.shoot) {
-            aud.play_sound(asset_reg.get("sounds/gun_shot.wav", aud.audio_sample_info).*, .one_shot);
-
             for (remote_player_entity_list.items) |remote_player_entity| {
-                if (entity_matrix == world.get(remote_player_entity, zeng.world_matrix)) continue;
+                if (remote_player_entity == players_it.current_entity_id) continue;
                 const a_coll = phy.convex_collider{ .data = undefined, .matrix = world.get(remote_player_entity, zeng.world_matrix).?.*, .support = &phy.player_capsule, .tag = .support_based };
                 const b_coll = phy.convex_collider{ .data = undefined, .matrix = entity_matrix.*, .support = &phy.point, .tag = .support_based };
 
@@ -106,7 +112,7 @@ pub fn shoot_system(net_events: *zeng.remote_eventer, asset_reg: *zeng.asset_reg
                     if (entity_netid.remote_peer) |net_id_remote_peer| { // if this entity is owned by another computer, then send that computer a hitmarker event
                         net_events.send(net_id_remote_peer, rpc.hitmarker{}, .reliable);
                     } else {
-                        hitmarker_events.send(.{});
+                        net_events.send_local(rpc.hitmarker{});
                     }
 
                     world.get(remote_player_entity, zeng.world_matrix).?.* = zeng.mat_identity;
@@ -115,8 +121,10 @@ pub fn shoot_system(net_events: *zeng.remote_eventer, asset_reg: *zeng.asset_reg
         }
     }
 }
+pub var shoot_presentation_trigger: bool = false;
+
 /// Runs player collision once per tick
-pub fn player_collision_system(player_q: *ecs.query(.{ player, zeng.world_matrix }), debug: *debug_res, tri_ev: *zeng.msg([3]zeng.vec3), spatial_hash_grid: *std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.convex_collider))) !void {
+pub fn player_collision_system(player_q: *ecs.query(.{ player_component, zeng.world_matrix }), debug: *debug_res, tri_ev: *zeng.msg([3]zeng.vec3), spatial_hash_grid: *std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.convex_collider))) !void {
     var player_it = player_q.iterator();
     while (player_it.next()) |player_curr| {
         const plyr, const world_matrix = player_curr;
@@ -124,7 +132,7 @@ pub fn player_collision_system(player_q: *ecs.query(.{ player, zeng.world_matrix
     }
 }
 /// Runs player movement simulation and visual animations once per tick
-pub fn player_simulate_and_animate_system(asset_reg: *asset_registry, time: *time_res, player_q: *ecs.query(.{ player, rpc.input_message, zeng.world_matrix }), animator_q: *ecs.query(.{ zeng.skeleton, zeng.animation_component })) !void {
+pub fn player_simulate_and_animate_system(asset_reg: *asset_registry, time: *time_res, player_q: *ecs.query(.{ player_component, rpc.input_message, zeng.world_matrix }), animator_q: *ecs.query(.{ zeng.skeleton, zeng.animation_component })) !void {
     const animation_A = asset_reg.get_maybe("assets/gltf/people/KingShiny.gltf/animations/Idle", zeng.loader.animation).?;
     const animation_B = asset_reg.get_maybe("assets/gltf/people/KingShiny.gltf/animations/Run", zeng.loader.animation).?;
 
@@ -132,7 +140,7 @@ pub fn player_simulate_and_animate_system(asset_reg: *asset_registry, time: *tim
     while (player_it.next()) |player_curr| {
         const _player, const input: *rpc.input_message, const matrix = player_curr;
 
-        simulate_player2(_player, input, matrix, time);
+        simulate_player(_player, input, matrix, time);
 
         const anim = animator_q.get(_player.animation_controller, zeng.animation_component).?;
         const skel = animator_q.get(_player.animation_controller, zeng.skeleton).?;
@@ -152,7 +160,7 @@ pub fn player_simulate_and_animate_system(asset_reg: *asset_registry, time: *tim
 }
 
 /// Collision detection for players - designed to be run multiple times per frame for latency compensation
-pub fn simulate_collision(plyr: *player, world_matrix: *zeng.world_matrix, spatial_hash_grid: *std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.convex_collider)), tri_ev: *zeng.msg([3]zeng.vec3), debug: *debug_res) void {
+pub fn simulate_collision(plyr: *player_component, world_matrix: *zeng.world_matrix, spatial_hash_grid: *std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.convex_collider)), tri_ev: *zeng.msg([3]zeng.vec3), debug: *debug_res) void {
     var capsule_collider = phy.convex_collider{ .data = undefined, .matrix = world_matrix.*, .support = phy.dual_point };
     const old_grounded = plyr.grounded;
     var closest_dist = std.math.floatMax(f32);
@@ -293,7 +301,7 @@ pub fn simulate_collision(plyr: *player, world_matrix: *zeng.world_matrix, spati
 //         _player.velocity = zeng.vec3.ZERO;
 //     }
 // }
-pub fn simulate_player2(_player: *player, input: *const rpc.input_message, matrix: *zeng.world_matrix, time: *time_res) void {
+pub fn simulate_player(_player: *player_component, input: *const rpc.input_message, matrix: *zeng.world_matrix, time: *time_res) void {
     const rotated_matrix = matrix_from_euler(input.rot_x, input.rot_y);
 
     if (input.jump and _player.grounded) {
@@ -302,7 +310,7 @@ pub fn simulate_player2(_player: *player, input: *const rpc.input_message, matri
         _player.ground_normal = zeng.vec3.UP;
     }
 
-    const max_speed: f32 = 3.0;
+    const max_speed: f32 = 5.0;
     const acc: f32 = 60.0;
     const basis_right = zeng.mat_right(rotated_matrix).slide(_player.ground_normal).normalized();
     const basis_forward = basis_right.cross(_player.ground_normal);

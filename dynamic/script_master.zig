@@ -19,10 +19,6 @@ pub fn get_item(res: *zeng.resources_t, T: type) *T {
 
 export fn update(res: *zeng.resources_t) callconv(.c) void {
     _ = res;
-    // const _player = get_item(res, zeng.main_player_res);
-    // const world = get_item(res, zeng.ecs.world);
-    // const player = world.get(_player.id, zeng.Player.player).?;
-    // player.velocity.y += 18;
 }
 
 pub export fn get_game_api() *const hot_reload_procedures {

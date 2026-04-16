@@ -1173,14 +1173,14 @@ pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, names_map:
                     }
                 }
 
-                world.add(zeng.children{ .items = children_slice_component.items }, parent_e_id);
+                world.add(zeng.children_component{ .items = children_slice_component.items }, parent_e_id);
             }
         }
     }
 
     const model_root = world.spawn(.{
         zeng.mat_identity,
-        zeng.children{ .items = root_child_list.items },
+        zeng.children_component{ .items = root_child_list.items },
     });
 
     return model_root;
@@ -1747,7 +1747,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
 pub const gltf_import_options = struct {
     generate_colliders: bool = true,
 };
-pub fn auto_import(asset_reg: *zeng.asset_registry, world: *ecs.world_t, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, default_texture: u32, allocator: std.mem.Allocator) ecs.entity_id {
+pub fn auto_import(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, default_texture: u32, allocator: std.mem.Allocator) ecs.entity_id {
     const gltf_extraction_type = @typeInfo(@TypeOf(gltf_extract_resources)).@"fn".return_type.?;
     const full_file_path = std.fmt.allocPrint(allocator, "{s}/{s}.gltf", .{ folder_name, file_name }) catch unreachable;
 

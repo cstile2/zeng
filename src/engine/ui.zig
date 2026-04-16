@@ -216,7 +216,7 @@ pub fn ui_draw(drawer: *const box_drawer_t, ctx: zeng.graphics_t, node: *ui.ui_n
     drawer.draw_img(ctx, node.pos.x, node.pos.y, node.width, node.height, color, node.img orelse 0, node.radius);
     if (node.text) |t| {
         // zeng.render.draw_text(t, text_renderer, node.pos.x, node.pos.y, ctx);
-        zeng.render.draw_sdf_font_text(t, font, mesh, node.pos.x, node.pos.y - 5, 0.42, ctx);
+        zeng.render.draw_text(t, font, mesh, node.pos.x, node.pos.y - 5, 0.42, ctx);
     }
 
     if (node.children != null) {
