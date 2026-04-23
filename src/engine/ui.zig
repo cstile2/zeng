@@ -107,48 +107,48 @@ pub const SizeMode = enum {
 };
 
 pub fn ui_hug_children(node: *ui.ui_node) void {
-    const d = get_dim(node);
+    const d = get_node_direction_value(node);
     for (node.children.?.items) |child| {
         ui_hug_children(child);
     }
     if ((node.width_size_mode == .fit and d == false) or (node.height_size_mode == .fit and d == true)) {
-        dim(node, d).* = node.padding * 2;
+        get_node_dimension_ptr(node, d).* = node.padding * 2;
         for (node.children.?.items, 0..) |child, i| {
-            dim(node, d).* += dim(child, d).*;
-            if (i >= 1) dim(node, d).* += node.gap;
+            get_node_dimension_ptr(node, d).* += get_node_dimension_ptr(child, d).*;
+            if (i >= 1) get_node_dimension_ptr(node, d).* += node.gap;
         }
     }
     if ((node.width_size_mode == .fit and d == true) or (node.height_size_mode == .fit and d == false)) {
-        dim(node, !d).* = 0;
+        get_node_dimension_ptr(node, !d).* = 0;
         for (node.children.?.items) |child| {
-            dim(node, !d).* = @max(dim(node, !d).*, dim(child, !d).*);
+            get_node_dimension_ptr(node, !d).* = @max(get_node_dimension_ptr(node, !d).*, get_node_dimension_ptr(child, !d).*);
         }
-        dim(node, !d).* += node.padding * 2;
+        get_node_dimension_ptr(node, !d).* += node.padding * 2;
     }
 }
 pub fn ui_grow(node: *ui.ui_node) void {
-    const d = get_dim(node);
+    const d = get_node_direction_value(node);
     if (node.growable.?.items.len > 0) {
-        var remaining_width = dim(node, d).*;
+        var remaining_width = get_node_dimension_ptr(node, d).*;
         remaining_width -= 2 * node.padding;
 
         for (node.children.?.items) |child| {
-            remaining_width -= dim(child, d).*;
+            remaining_width -= get_node_dimension_ptr(child, d).*;
         }
         remaining_width -= @as(f32, @floatFromInt(@max(1, node.children.?.items.len) - 1)) * node.gap;
 
         while (remaining_width > 0.00001) {
-            var smallest: f32 = dim(node.growable.?.items[0], d).*;
+            var smallest: f32 = get_node_dimension_ptr(node.growable.?.items[0], d).*;
             var second_smallest = std.math.floatMax(f32);
             var width_to_add = remaining_width;
 
             for (node.growable.?.items) |child| {
-                if (dim(child, d).* < smallest) {
+                if (get_node_dimension_ptr(child, d).* < smallest) {
                     second_smallest = smallest;
-                    smallest = dim(child, d).*;
+                    smallest = get_node_dimension_ptr(child, d).*;
                 }
-                if (dim(child, d).* > smallest) {
-                    second_smallest = @min(second_smallest, dim(child, d).*);
+                if (get_node_dimension_ptr(child, d).* > smallest) {
+                    second_smallest = @min(second_smallest, get_node_dimension_ptr(child, d).*);
                     width_to_add = second_smallest - smallest;
                 }
             }
@@ -156,14 +156,14 @@ pub fn ui_grow(node: *ui.ui_node) void {
             width_to_add = @min(width_to_add, remaining_width / @as(f32, @floatFromInt(node.growable.?.items.len)));
 
             for (node.growable.?.items) |child| {
-                if (dim(child, d).* == smallest) {
-                    dim(child, d).* += width_to_add;
+                if (get_node_dimension_ptr(child, d).* == smallest) {
+                    get_node_dimension_ptr(child, d).* += width_to_add;
                     remaining_width -= width_to_add;
                 }
             }
         }
     }
-    var remaining_height = dim(node, !d).*;
+    var remaining_height = get_node_dimension_ptr(node, !d).*;
     remaining_height -= 2 * node.padding;
 
     // handle matching aspect ratio
@@ -172,42 +172,42 @@ pub fn ui_grow(node: *ui.ui_node) void {
     if (node.width_size_mode == .match and node.height_size_mode == .match) unreachable;
 
     for (node.children.?.items) |child| {
-        if (mim(child, !d) == .grow) {
-            dim(child, !d).* += remaining_height - dim(child, !d).*;
+        if (node_size_mode_direction_value(child, !d) == .grow) {
+            get_node_dimension_ptr(child, !d).* += remaining_height - get_node_dimension_ptr(child, !d).*;
         }
         ui_grow(child);
     }
 }
 pub fn ui_pos(pos: vec2, node: *ui.ui_node) void {
-    const d = get_dim(node);
+    const d = get_node_direction_value(node);
     if (!node.pos_absolute) node.pos = pos;
     const padded_size = vec2{ .x = node.width - node.padding * 2, .y = node.height - node.padding * 2 };
 
     var total: f32 = 0;
     for (node.children.?.items, 0..) |child, i| {
         if (i > 0) total += node.gap;
-        total += dim(child, d).*;
+        total += get_node_dimension_ptr(child, d).*;
     }
     var centered_pos_0: f32 = 0;
-    if (node.align_children_para == 1) centered_pos_0 = (vim(padded_size, d) - total) / 2;
-    if (node.align_children_para == 2) centered_pos_0 = (vim(padded_size, d) - total);
+    if (node.align_children_para == 1) centered_pos_0 = (node_position_coord_value(padded_size, d) - total) / 2;
+    if (node.align_children_para == 2) centered_pos_0 = (node_position_coord_value(padded_size, d) - total);
     const _offset: f32 = node.padding + centered_pos_0;
     var offset: f32 = _offset;
 
     for (node.children.?.items) |child| {
         var centered_pos: f32 = 0;
         if (node.align_children_perp == 1) {
-            centered_pos = (vim(padded_size, !d) - dim(child, !d).*) / 2;
+            centered_pos = (node_position_coord_value(padded_size, !d) - get_node_dimension_ptr(child, !d).*) / 2;
         } else if (node.align_children_perp == 2) {
-            centered_pos = vim(padded_size, !d) - dim(child, !d).*;
+            centered_pos = node_position_coord_value(padded_size, !d) - get_node_dimension_ptr(child, !d).*;
         }
 
         var v: vec2 = undefined;
-        Vim(&v, d).* = pim(node, d).* + offset;
-        Vim(&v, !d).* = pim(node, !d).* + centered_pos + node.padding;
+        vector_coord_ptr(&v, d).* = node_position_coord_ptr(node, d).* + offset;
+        vector_coord_ptr(&v, !d).* = node_position_coord_ptr(node, !d).* + centered_pos + node.padding;
         ui_pos(v, child);
 
-        offset += dim(child, d).* + node.gap;
+        offset += get_node_dimension_ptr(child, d).* + node.gap;
     }
 }
 pub fn ui_draw(drawer: *const box_drawer_t, ctx: zeng.graphics_t, node: *ui.ui_node, mesh: zeng.mesh, font: font_info) void {
@@ -230,23 +230,25 @@ pub fn ui_layout(pos: vec2, node: *ui.ui_node) void {
     ui_grow(node);
     ui_pos(pos, node);
 }
-pub fn dim(node: *ui.ui_node, d: bool) *f32 {
+
+// helper functions to aid the logic when x and y are handled the same way
+pub fn get_node_dimension_ptr(node: *ui.ui_node, d: bool) *f32 {
     return if (d) &node.height else &node.width;
 }
-pub fn get_dim(node: *ui.ui_node) bool {
+pub fn get_node_direction_value(node: *ui.ui_node) bool {
     if (node.direction == .bottom_to_top or node.direction == .top_to_bottom) return true;
     return false;
 }
-pub fn pim(node: *ui.ui_node, d: bool) *f32 {
+pub fn node_position_coord_ptr(node: *ui.ui_node, d: bool) *f32 {
     return if (d) &node.pos.y else &node.pos.x;
 }
-pub fn vim(v: vec2, d: bool) f32 {
+pub fn node_position_coord_value(v: vec2, d: bool) f32 {
     return if (d) v.y else v.x;
 }
-pub fn Vim(v: *vec2, d: bool) *f32 {
+pub fn vector_coord_ptr(v: *vec2, d: bool) *f32 {
     return if (d) &v.y else &v.x;
 }
-pub fn mim(node: *ui.ui_node, d: bool) ui.SizeMode {
+pub fn node_size_mode_direction_value(node: *ui.ui_node, d: bool) ui.SizeMode {
     return if (d) node.height_size_mode else node.width_size_mode;
 }
 
@@ -275,7 +277,7 @@ pub fn n(node: ui.ui_node, children: []const *ui.ui_node) *ui.ui_node {
 
     for (children) |child| {
         ptr.children.?.append(global_node_allocator, child) catch unreachable;
-        if ((get_dim(ptr) == false and child.width_size_mode == .grow) or (get_dim(ptr) == true and child.height_size_mode == .grow)) ptr.growable.?.append(global_node_allocator, child) catch unreachable;
+        if ((get_node_direction_value(ptr) == false and child.width_size_mode == .grow) or (get_node_direction_value(ptr) == true and child.height_size_mode == .grow)) ptr.growable.?.append(global_node_allocator, child) catch unreachable;
     }
     return ptr;
 }

@@ -7,7 +7,7 @@ pub const gentype = struct {
 pub const zeng = @import("zeng.zig");
 
 pub const net_event_types = [_]type{
-    rpc.missed_input,
+    rpc.speed_client_up,
     rpc.state_correction,
     rpc.player_spawn_message,
     rpc.world_update,
@@ -17,4 +17,6 @@ pub const net_event_types = [_]type{
     rpc.server_tick_offset,
     [3]zeng.vec3,
     zeng.delete_event,
+    zeng.phy.debug_draw_stuff,
+    rpc.got_hit,
 };

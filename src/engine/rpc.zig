@@ -13,10 +13,13 @@ pub const snapshot_message = struct {
 pub const input_message = struct {
     tick: isize,
     jump: bool,
+    sprint: bool,
     move_vect: zeng.vec2,
     rot_x: f64,
     rot_y: f64,
     shoot: bool,
+    aiming: bool,
+    shoot_origin: zeng.vec3,
 };
 pub const state_correction = struct {
     tick: isize,
@@ -30,7 +33,7 @@ pub const server_tick_offset = struct {
     server_time: f64,
     client_time: f64,
 };
-pub const missed_input = struct {
+pub const speed_client_up = struct {
     SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
 };
 pub const input_chunk = struct {
@@ -55,6 +58,9 @@ pub const world_update = struct {
 };
 pub const hitmarker = struct {
     SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
+};
+pub const got_hit = struct {
+    source_position: zeng.vec3,
 };
 
 // pub const REMOTE_MESSAGE_TYPES = [_]type{

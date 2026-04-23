@@ -2,14 +2,15 @@ const std = @import("std");
 const zeng = @import("zeng.zig");
 const render = @import("render.zig");
 const ecs = @import("ecs.zig");
+const phy = @This();
 
 const vec3 = zeng.vec3;
 const vec2 = zeng.vec2;
 
-pub const mesh_collider_data = struct {
-    positions: []vec3,
-    indices: []u32,
-};
+// pub const mesh_collider_data = struct {
+//     positions: []vec3,
+//     indices: []u32,
+// };
 
 pub const mesh_triangle_data = struct {
     indices: [3]u32,
@@ -70,7 +71,7 @@ pub fn triangle(dir: vec3, coll: convex_collider) vec3 {
     return max_pos;
 }
 pub fn player_capsule(dir: vec3, coll: convex_collider) vec3 {
-    return dual_point(dir, coll).add(dir.normalized().mult(0.35));
+    return dual_point(dir, coll).add(dir.normalized().mult_scalar(0.35));
 }
 pub fn mesh_triangle(dir: vec3, coll: convex_collider) vec3 {
     const tri_data = @as(*const mesh_triangle_data, @ptrCast(@alignCast(coll.data)));
@@ -97,7 +98,7 @@ fn support(a_coll: convex_collider, b_coll: convex_collider, dir: vec3) vec3 {
     );
 }
 fn support_flat(a_coll: convex_collider, b_coll: convex_collider, direction: vec2, basis_right: vec3, basis_up: vec3) vec3 {
-    const real_direction = basis_right.mult(direction.x).add(basis_up.mult(direction.y));
+    const real_direction = basis_right.mult_scalar(direction.x).add(basis_up.mult_scalar(direction.y));
     return support(a_coll, b_coll, real_direction);
 }
 fn max_index(arr: anytype) usize {
@@ -297,7 +298,7 @@ pub fn shape_overlap(a_coll: convex_collider, b_coll: convex_collider) bool {
     }
     return false;
 }
-pub fn shape_separation(a_coll: convex_collider, b_coll: convex_collider, info: render.triangle_debug_info, num: usize) vec3 {
+pub fn shape_separation(a_coll: convex_collider, b_coll: convex_collider, num: usize) vec3 {
     var tet: [4]vec3 = undefined;
     var dir = vec3{ .x = 1 };
     tet[0] = support(a_coll, b_coll, dir);
@@ -335,12 +336,12 @@ pub fn shape_separation(a_coll: convex_collider, b_coll: convex_collider, info: 
     // std.debug.print("{}\n", .{dir});
     // std.debug.print("{} {} {}\n", .{ len, it, cp.length() });
     // std.debug.print("{} {}\n", .{ len, it });
-    for (0..len) |i| {
-        for (i + 1..len) |j| {
-            render.debug_draw_triangle(.{ tet[i], tet[j], tet[j] }, info);
-        }
-    }
-    if (len == 1) render.debug_draw_triangle(.{ tet[0], tet[0].add(vec3.RIGHT.mult(0.05)), tet[0].add(vec3.UP.mult(0.05)) }, info);
+    // for (0..len) |i| {
+    //     for (i + 1..len) |j| {
+    //         render.debug_draw_triangle(.{ tet[i], tet[j], tet[j] }, info);
+    //     }
+    // }
+    // if (len == 1) render.debug_draw_triangle(.{ tet[0], tet[0].add(vec3.RIGHT.mult(0.05)), tet[0].add(vec3.UP.mult(0.05)) }, info);
     return cp;
 }
 // pub fn shape_separation2(a_coll: convex_collider, b_coll: convex_collider, info: render.triangle_debug_info, num: usize) vec3 {
@@ -403,7 +404,7 @@ fn solve_simplex2(p: vec3, a: vec3, b: vec3) gjk_state {
     const t = (p.sub(a)).dot(ab) / ab.dot(ab);
     if (t <= 0) return .{ .cp = a, .tet = .{ a, undefined, undefined, undefined }, .len = 1, .dir = a.neg() };
     if (t >= 1) return .{ .cp = b, .tet = .{ b, undefined, undefined, undefined }, .len = 1, .dir = b.neg() };
-    return .{ .cp = a.add(ab.mult(t)), .tet = .{ a, b, undefined, undefined }, .len = 2, .dir = a.add(ab.mult(t)).neg() };
+    return .{ .cp = a.add(ab.mult_scalar(t)), .tet = .{ a, b, undefined, undefined }, .len = 2, .dir = a.add(ab.mult_scalar(t)).neg() };
 }
 fn solve_simplex3(a: vec3, b: vec3, c: vec3, o: vec3) gjk_state {
     // const tet = [3]vec3{ a, b, c };
@@ -596,7 +597,7 @@ pub const ACTUAL_GJK_IMPLEMENTATION_BASED_ON_PAPER = struct {
     fn linear_combine(W: [4]vec3, lambda: [4]f32, len: usize) vec3 {
         var result = vec3.ZERO;
         for (0..len) |i| {
-            result = result.add(W[i].mult(lambda[i]));
+            result = result.add(W[i].mult_scalar(lambda[i]));
         }
         return result;
     }
@@ -618,12 +619,17 @@ pub const ACTUAL_GJK_IMPLEMENTATION_BASED_ON_PAPER = struct {
     }
 };
 
-pub const raycast_result = struct {
+pub const raycast_result_t = struct {
     normal: vec3,
     t: f32,
     entity_id: ecs.entity_id,
+    position: vec3,
+    hitting: bool,
 };
-pub fn ray_cast_triangle(ro: vec3, rd: vec3, v0: vec3, v1: vec3, v2: vec3, result: *raycast_result) bool {
+pub fn ray_cast_triangle(ro: vec3, rd: vec3, v0: vec3, v1: vec3, v2: vec3) raycast_result_t {
+    var result: raycast_result_t = undefined;
+    result.hitting = false;
+
     const v1v0 = v1.sub(v0);
     const v2v0 = v2.sub(v0);
     const rov0 = ro.sub(v0);
@@ -634,56 +640,168 @@ pub fn ray_cast_triangle(ro: vec3, rd: vec3, v0: vec3, v1: vec3, v2: vec3, resul
     const v: f32 = d * vec3.dot(q, v1v0);
     result.t = d * vec3.dot(n.neg(), rov0);
     result.normal = n;
-    if (result.t < 0.0) return false;
-    if (u < 0.0 or v < 0.0 or (u + v) > 1.0) return false;
-    return true;
+    result.position = ro.add(rd.mult_scalar(result.t));
+
+    if (result.t < 0.0) {
+        return result;
+    }
+    if (u < 0.0 or v < 0.0 or (u + v) > 1.0) {
+        return result;
+    }
+
+    result.hitting = true;
+    return result;
 }
-pub fn ray_cast(ro: vec3, rd: vec3, physics_data: []convex_collider, result: *raycast_result) bool {
-    _ = ro;
-    _ = rd;
-    _ = physics_data;
-    _ = result;
-    // result.t = std.math.floatMax(f32);
-    // var hit = false;
-    // for (physics_data) |coll| {
-    //     if (coll.tag == .mesh) {
-    //         const mesh_data = @as(*const mesh_collider_data, @alignCast(@ptrCast(coll.data))).*;
+pub fn ray_cast_group(ro: vec3, rd: vec3, physics_data: anytype) raycast_result_t {
+    var result: raycast_result_t = undefined;
+    result.hitting = false;
+    result.t = std.math.floatMax(f32);
 
-    //         var curr_tri: usize = 0;
-    //         while (curr_tri < mesh_data.indices.len) {
-    //             defer curr_tri += 3;
+    for (physics_data) |coll| {
+        if (coll.tag == .support_based and coll.support == &@import("physics.zig").mesh_triangle) {
+            const mesh_data = @as(*const mesh_triangle_data, @ptrCast(@alignCast(coll.data)));
 
-    //             const a = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 0]].to_vec4(1.0)).to_vec3();
-    //             const b = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 1]].to_vec4(1.0)).to_vec3();
-    //             const c = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 2]].to_vec4(1.0)).to_vec3();
+            var curr_tri: usize = 0;
+            while (curr_tri < mesh_data.indices.len) {
+                defer curr_tri += 3;
 
-    //             var res: raycast_result = undefined;
-    //             const is_hitting = ray_cast_triangle(ro, rd, a, b, c, &res);
-    //             if (is_hitting) {
-    //                 if (res.t < result.t) result.* = res;
-    //                 hit = true;
-    //             }
-    //         }
-    //     }
-    //     if (coll.tag == .support_based and coll.support == &@import("physics.zig").mesh_triangle) {
-    //         std.debug.print("hello\n", .{});
-    //     }
-    // }
-    // return hit;
+                const a = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 0]].to_vec4(1.0)).to_vec3();
+                const b = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 1]].to_vec4(1.0)).to_vec3();
+                const c = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 2]].to_vec4(1.0)).to_vec3();
 
-    return false; // this function needs to be reworked to use some kind of spatial acceleration structure, probably spatial hash grid that we already have
+                const triangle_result = ray_cast_triangle(ro, rd, a, b, c);
+                if (triangle_result.hitting) {
+                    if (triangle_result.t < result.t) result = triangle_result;
+                }
+            }
+        } else unreachable;
+    }
+    return result;
+}
+pub fn ray_cast_spatial_hashgrid(ro: zeng.vec3, rd: zeng.vec3, spatial_hash_grid: *std.AutoHashMap(ivec3, std.ArrayList(*convex_collider)), events: *zeng.events_t) raycast_result_t {
+    // this can be made more efficient by exiting early - if there is a hit at a cell, then we know there wont be a closer one later on. So we need to test against each cell group one after the other.
+    _ = events;
+    var current_cell = ivec3{ quantize(ro.x, GRID_SIZE), quantize(ro.y, GRID_SIZE), quantize(ro.z, GRID_SIZE) };
+
+    const positive_dir = zeng.vec3{ .x = @abs(rd.x), .y = @abs(rd.y), .z = @abs(rd.z) };
+
+    var x_dist_to_travel = starting_axis_distance(ro.x);
+    var y_dist_to_travel = starting_axis_distance(ro.y);
+    var z_dist_to_travel = starting_axis_distance(ro.z);
+
+    var x_accum: f32 = delta_raydist_from_delta_axis(positive_dir, x_dist_to_travel, 0);
+    var y_accum: f32 = delta_raydist_from_delta_axis(positive_dir, x_dist_to_travel, 1);
+    var z_accum: f32 = delta_raydist_from_delta_axis(positive_dir, x_dist_to_travel, 2);
+
+    var relevant_colliders = std.AutoArrayHashMap(*convex_collider, void).init(std.heap.c_allocator);
+    defer relevant_colliders.deinit();
+
+    while (true) {
+        const cell_of_colliders = spatial_hash_grid.get(current_cell);
+        if (cell_of_colliders != null) {
+            for (cell_of_colliders.?.items) |collider| {
+                relevant_colliders.put(collider, void{}) catch unreachable;
+            }
+        }
+        const minimum = @min(x_accum, y_accum, z_accum);
+        if (minimum >= rd.length()) break;
+        if (minimum == x_accum) {
+            x_accum += delta_raydist_from_delta_axis(positive_dir, x_dist_to_travel, 0);
+            x_dist_to_travel = GRID_SIZE;
+            current_cell[0] += @intFromFloat(std.math.sign(rd.x));
+        } else if (minimum == y_accum) {
+            y_accum += delta_raydist_from_delta_axis(positive_dir, y_dist_to_travel, 1);
+            y_dist_to_travel = GRID_SIZE;
+            current_cell[1] += @intFromFloat(std.math.sign(rd.y));
+        } else if (minimum == z_accum) {
+            z_accum += delta_raydist_from_delta_axis(positive_dir, z_dist_to_travel, 2);
+            z_dist_to_travel = GRID_SIZE;
+            current_cell[2] += @intFromFloat(std.math.sign(rd.z));
+        } else {
+            std.debug.print("accums: {} {} {}\n", .{ x_accum, y_accum, z_accum });
+            unreachable;
+        }
+    }
+
+    return ray_cast_group(ro, rd, relevant_colliders.keys());
+}
+pub fn ray_cast_spatial(ro: zeng.vec3, rd: zeng.vec3, collision_space: *zeng.collision_space_t, events: *zeng.events_t) raycast_result_t {
+    // this can be made more efficient by exiting early - if there is a hit at a cell, then we know there wont be a closer one later on. So we need to test against each cell group one after the other.
+    _ = events;
+    var current_cell = ivec3{ quantize(ro.x, GRID_SIZE), quantize(ro.y, GRID_SIZE), quantize(ro.z, GRID_SIZE) };
+
+    const positive_dir = zeng.vec3{ .x = @abs(rd.x), .y = @abs(rd.y), .z = @abs(rd.z) };
+
+    var x_dist_to_travel = starting_axis_distance(ro.x);
+    var y_dist_to_travel = starting_axis_distance(ro.y);
+    var z_dist_to_travel = starting_axis_distance(ro.z);
+
+    var x_accum: f32 = delta_raydist_from_delta_axis(positive_dir, x_dist_to_travel, 0);
+    var y_accum: f32 = delta_raydist_from_delta_axis(positive_dir, x_dist_to_travel, 1);
+    var z_accum: f32 = delta_raydist_from_delta_axis(positive_dir, x_dist_to_travel, 2);
+
+    var relevant_colliders = std.AutoArrayHashMap(*convex_collider, void).init(std.heap.c_allocator);
+    defer relevant_colliders.deinit();
+
+    while (true) {
+        const cell_of_colliders = collision_space.spatial_hash_grid.get(current_cell);
+        if (cell_of_colliders != null) {
+            // for (cell_of_colliders.?.items) |collider| {
+            //     relevant_colliders.put(collider, void{}) catch unreachable;
+            // }
+            for (cell_of_colliders.?.keys()) |client_id| {
+                relevant_colliders.put(collision_space.all_colliders.get(client_id).?.@"0", void{});
+            }
+        }
+        const minimum = @min(x_accum, y_accum, z_accum);
+        if (minimum >= rd.length()) break;
+        if (minimum == x_accum) {
+            x_accum += delta_raydist_from_delta_axis(positive_dir, x_dist_to_travel, 0);
+            x_dist_to_travel = GRID_SIZE;
+            current_cell[0] += @intFromFloat(std.math.sign(rd.x));
+        } else if (minimum == y_accum) {
+            y_accum += delta_raydist_from_delta_axis(positive_dir, y_dist_to_travel, 1);
+            y_dist_to_travel = GRID_SIZE;
+            current_cell[1] += @intFromFloat(std.math.sign(rd.y));
+        } else if (minimum == z_accum) {
+            z_accum += delta_raydist_from_delta_axis(positive_dir, z_dist_to_travel, 2);
+            z_dist_to_travel = GRID_SIZE;
+            current_cell[2] += @intFromFloat(std.math.sign(rd.z));
+        } else {
+            std.debug.print("accums: {} {} {}\n", .{ x_accum, y_accum, z_accum });
+            unreachable;
+        }
+    }
+
+    return ray_cast_group(ro, rd, relevant_colliders.keys());
+}
+pub const debug_draw_stuff = struct {
+    clear: bool = false,
+    add_position: zeng.vec3 = zeng.vec3.ZERO,
+};
+
+pub fn starting_axis_distance(x: f32) f32 {
+    return (@ceil(x / GRID_SIZE + 0.5) - 0.5) * GRID_SIZE - x;
+}
+
+inline fn delta_raydist_from_delta_axis(rd: zeng.vec3, delta: f32, comptime axis: usize) f32 {
+    const axes = [3]f32{ rd.x, rd.y, rd.z };
+
+    const B = axes[(axis + 1) % 3] / axes[axis] * delta;
+    const C = axes[(axis + 2) % 3] / axes[axis] * delta;
+
+    return @sqrt(delta * delta + B * B + C * C);
 }
 
 pub const GRID_SIZE = 0.5;
-pub const TOL = 0.36;
-pub const TOL_ = 0.01;
 pub fn quantize(s: f32, GRIDSIZE: f32) isize {
+    // center grid cell is centered at 0,0
     return @intFromFloat(@round(s / GRIDSIZE));
 }
 pub const ivec3 = struct { isize, isize, isize };
 pub fn construct_spatial_hash_grid(colliders: std.ArrayList(convex_collider), spatial_hash_grid: *std.AutoHashMap(ivec3, std.ArrayList(*convex_collider)), allocator: std.mem.Allocator) void {
     for (colliders.items) |*collider| {
-        const right, const left, const up, const down, const forward, const backward = collider_bound_indices(collider.*);
+        const right, const left, const up, const down, const forward, const backward = collider_bound_indices(collider.*, 0.01);
 
         var i: isize = left;
         while (i <= right) {
@@ -707,13 +825,13 @@ pub fn construct_spatial_hash_grid(colliders: std.ArrayList(convex_collider), sp
     }
 }
 
-pub fn collider_bound_indices(collider: convex_collider) struct { isize, isize, isize, isize, isize, isize } {
-    const _right = collider._support(zeng.vec3.RIGHT).x + TOL;
-    const _left = collider._support(zeng.vec3.RIGHT.neg()).x - TOL;
-    const _up = collider._support(zeng.vec3.UP).y + TOL;
-    const _down = collider._support(zeng.vec3.UP.neg()).y - TOL;
-    const _forward = collider._support(zeng.vec3.FORWARD).z + TOL;
-    const _backward = collider._support(zeng.vec3.FORWARD.neg()).z - TOL;
+pub fn collider_bound_indices(collider: convex_collider, tolerance: f32) struct { isize, isize, isize, isize, isize, isize } {
+    const _right = collider._support(zeng.vec3.RIGHT).x + tolerance;
+    const _left = collider._support(zeng.vec3.RIGHT.neg()).x - tolerance;
+    const _up = collider._support(zeng.vec3.UP).y + tolerance;
+    const _down = collider._support(zeng.vec3.UP.neg()).y - tolerance;
+    const _forward = collider._support(zeng.vec3.FORWARD).z + tolerance;
+    const _backward = collider._support(zeng.vec3.FORWARD.neg()).z - tolerance;
 
     const right = quantize(_right, GRID_SIZE);
     const left = quantize(_left, GRID_SIZE);

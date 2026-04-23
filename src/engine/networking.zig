@@ -6,6 +6,8 @@ const rpc = @import("rpc.zig");
 const utils = @import("utils.zig");
 const FIONBIO: u32 = 0x8004667e;
 
+const SIMULATE_BAD_NETWORK: bool = false;
+
 pub const remote_message = struct {
     seq: usize,
     time_to_send: f64,
@@ -168,10 +170,10 @@ pub fn send_net_messages(commands: *zeng.commands_t, delta_time: f64, tracker: *
     var curr: usize = 0;
     while (curr < commands.remote_messages_send_queue_len) {
         const rem_message = commands.remote_messages_send_queue[curr];
-        if (rem_message.time_to_send <= commands.time) {
+        if (rem_message.time_to_send <= commands.time or !SIMULATE_BAD_NETWORK) {
             const data_with_header = track_packet_for_send(rem_message, tracker, commands.allocator);
             defer commands.allocator.free(data_with_header);
-            if (commands.random.float(f32) > 0.2) {
+            if (commands.random.float(f32) > 0.2 or !SIMULATE_BAD_NETWORK) {
                 const err = std.os.windows.ws2_32.sendto(rem_message.sender_socket, data_with_header.ptr, @intCast(data_with_header.len), 0, &rem_message.target_address.sockaddr, rem_message.target_address.socklen);
                 if (err == -1) {
                     const last_error = zeng.c.WSAGetLastError();

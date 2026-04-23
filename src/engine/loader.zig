@@ -1062,7 +1062,7 @@ fn get_float_from_numeric_value(n: *gltf.node) f32 {
     return @floatFromInt(n.integer);
 }
 
-pub var global_colliders: ?std.ArrayList(zeng.cpu_mesh) = null;
+pub var global_collider_meshes: ?std.ArrayList(zeng.cpu_mesh) = null;
 pub var global_matrices: ?std.ArrayList(zeng.world_matrix) = null;
 
 pub fn buffer_view_to_slice(buffer_view_n: *gltf.node, buffers: []const []const u8) []const u8 {
@@ -1373,12 +1373,12 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
                 scale.y = get_float_from_numeric(_scale, 1);
                 scale.z = get_float_from_numeric(_scale, 2);
             }
-            const mat = zeng.mat_tran(zeng.mat_mult(zeng.quat_to_mat(rotation), zeng.mat_scal(zeng.mat_identity, scale)), translation);
+            const mat = zeng.mat_tran(zeng.mat_mult(zeng.quat_to_mat(rotation), zeng.mat_scal(zeng.mat_identity, scale)), translation); // duplicated for each primitive
 
             const mesh_n = root_n.?.object.get("meshes").?.array.items[@intCast(mesh_index_n.?.integer)];
             for (mesh_n.object.get("primitives").?.array.items) |primitive_n| {
                 var base_color_of_material: ?zeng.vec3 = null;
-                var alpha_mode: ?void = null;
+                var alpha_mode: bool = false;
                 var metallic_of_material: f32 = 0.0;
                 var roughness_of_material: f32 = 0.5;
                 var base_color_texture_gpu: u32 = default_texture;
@@ -1398,8 +1398,8 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
                             roughness_of_material = get_float_from_numeric_value(rf);
                         }
                     }
-                    if (material_n.object.get("alphaMode")) |_| {
-                        alpha_mode = void{};
+                    if (material_n.object.get("alphaMode") != null) {
+                        alpha_mode = true;
                     }
                     if (primitive_n.object.get("material") != null and _textures_n != null and _images_n != null) {
                         if (material_n.object.get("pbrMetallicRoughness") != null and material_n.object.get("pbrMetallicRoughness").?.object.get("baseColorTexture") != null) {
@@ -1407,11 +1407,11 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
                             const base_color_texture_image_index: usize = @intCast(_textures_n.?.array.items[base_color_texture_index].object.get("source").?.integer);
 
                             if (_images_n.?.array.items[base_color_texture_image_index].object.get("uri")) |uri| {
-                                base_color_texture_gpu = zeng.loader.load_texture(std.fmt.allocPrint(allocator, "{s}/{s}\x00", .{ dependencies_path, uri.string }) catch unreachable, true, false, alpha_mode != null);
+                                base_color_texture_gpu = zeng.loader.load_texture(std.fmt.allocPrint(allocator, "{s}/{s}\x00", .{ dependencies_path, uri.string }) catch unreachable, true, false, alpha_mode);
                             } else {
                                 const buffer_view_index: usize = @intCast(_images_n.?.array.items[base_color_texture_image_index].object.get("bufferView").?.integer);
                                 const data = buffer_view_to_slice(bufferviews_n.array.items[buffer_view_index], buffers);
-                                base_color_texture_gpu = zeng.loader.load_texture_from_memory(data, true, false, alpha_mode != null);
+                                base_color_texture_gpu = zeng.loader.load_texture_from_memory(data, true, false, alpha_mode);
                             }
                         }
                     }
@@ -1453,30 +1453,12 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
                 const mesh_data_size: usize = (position_data_len / position_component_size) * (3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size + 4 * joints_component_size + 4 * weights_component_size);
                 var mesh_data = allocator.alloc(u8, mesh_data_size) catch unreachable;
 
-                // std.debug.assert(get_component_type_enum(position_component_type) == zeng.gl.FLOAT);
-                // std.debug.assert(get_component_type_enum(normal_component_type) == zeng.gl.FLOAT);
-                // std.debug.assert(get_component_type_enum(texcoord_component_type) == zeng.gl.FLOAT);
-                // std.debug.assert(get_component_type_enum(joints_component_type) == zeng.gl.UNSIGNED_BYTE);
-                // std.debug.assert(get_component_type_enum(weights_component_type) == zeng.gl.FLOAT);
-                // std.debug.assert(get_component_type_enum(indices_component_type) == zeng.gl.UNSIGNED_SHORT);
-                // std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[(@intCast(attributes_n.object.get("POSITION").?.integer))].object.get("type").?.string, "VEC3"));
-                // std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[(@intCast(attributes_n.object.get("NORMAL").?.integer))].object.get("type").?.string, "VEC3"));
-                // std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[(@intCast(attributes_n.object.get("TEXCOORD_0").?.integer))].object.get("type").?.string, "VEC2"));
-                // std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[(@intCast(attributes_n.object.get("JOINTS_0").?.integer))].object.get("type").?.string, "VEC4"));
-                // std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[(@intCast(attributes_n.object.get("WEIGHTS_0").?.integer))].object.get("type").?.string, "VEC4"));
-                // std.debug.assert(std.mem.eql(u8, root_n.?.object.get("accessors").?.array.items[@intCast(primitive_n.object.get("indices").?.integer)].object.get("type").?.string, "SCALAR"));
-                // std.debug.assert(position_data_len > 0);
-                // std.debug.assert(normal_data_len > 0);
-                // std.debug.assert(position_data_len > 0);
-                // std.debug.assert(joints_data_len > 0);
-                // std.debug.assert(weights_data_len > 0);
-                // std.debug.assert(indices_data_len > 0);
-
                 if (skin_index_n == null and generate_colliders_on_import) { // create a collider based on this STATIC mesh and add it to the global list of colliders
+                    std.debug.assert(indices_component_type == 5123); // i think i only accounted for this type, prob get rid of this eventually
+
                     const collider_positions: []zeng.vec3 = allocator.alloc(zeng.vec3, position_data_len / 12) catch unreachable;
                     var collider_indices: []u32 = undefined;
 
-                    // collider_positions = allocator.alloc(zeng.vec3, position_data_len / 12) catch unreachable;
                     @memcpy(@as([*]u8, @ptrCast(collider_positions)), buffers[position_buffer][position_data_offset .. position_data_offset + position_data_len]);
 
                     collider_indices = allocator.alloc(u32, indices_data_len / 2) catch unreachable;
@@ -1492,15 +1474,12 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
 
                     const collider_mesh = zeng.cpu_mesh{ .indices = collider_indices, .positions = collider_positions };
 
-                    if (global_colliders == null) {
+                    if (global_collider_meshes == null) {
                         global_matrices = std.ArrayList(zeng.world_matrix).initCapacity(allocator, 0) catch unreachable;
-                        global_colliders = std.ArrayList(zeng.cpu_mesh).initCapacity(allocator, 0) catch unreachable;
+                        global_collider_meshes = std.ArrayList(zeng.cpu_mesh).initCapacity(allocator, 0) catch unreachable;
                     }
-                    global_colliders.?.append(allocator, collider_mesh) catch unreachable;
+                    global_collider_meshes.?.append(allocator, collider_mesh) catch unreachable;
                     global_matrices.?.append(allocator, mat) catch unreachable;
-
-                    std.debug.assert(joints_data_len == 0);
-                    std.debug.assert(weights_data_len == 0);
                 }
 
                 var _curr: usize = 0;

@@ -13,11 +13,13 @@ uniform float metallic;
 uniform float roughness;
 uniform float ao;
 
+uniform vec3 sun_direction;
+
 // lights
 uniform vec3 light_positions[4];
 uniform vec3 light_colors[4];
 
-uniform sampler2D shadow_map;
+uniform sampler2D shadow_map_linear;
 
 uniform vec3 cam_pos;
 
@@ -67,11 +69,15 @@ float shadow_map_calculation(vec4 fragPosLightSpace)
     // transform to [0,1] range
     projCoords = projCoords * 0.5 + 0.5;
     // get closest depth value from light's perspective (using [0,1] range fragPosLight as coords)
-    float closestDepth = texture(shadow_map, projCoords.xy).r;
+    // float closestDepth = max(texture(shadow_map, projCoords.xy).r, texture(shadow_map_linear, projCoords.xy).r);
+    float closestDepth = texture(shadow_map_linear, projCoords.xy).r;
+
     // get depth of current fragment from light's perspective
     float currentDepth = projCoords.z;
     // check whether current frag pos is in shadow
-    float shadow = currentDepth - 0.01 > closestDepth ? 1.0 : 0.0;
+    // float shadow = currentDepth - 0.001 > closestDepth ? 1.0 : 0.0;
+    float bias = max(0.005 * (1.0 - dot(normalize(f_normal), sun_direction)), 0.0005);
+    float shadow = currentDepth - bias > closestDepth ? 1.0 : 0.0;
 
     if(projCoords.z > 1.0)
         shadow = 0.0;
@@ -100,7 +106,7 @@ void main()
     {
         // calculate per-light radiance
         // vec3 L = normalize(light_positions[i] - world_pos);
-        vec3 L = vec3(0, 1, 0);
+        vec3 L = sun_direction; // vec3(0, 1, 0);
         vec3 H = normalize(V + L);
         float distance    = length(light_positions[i] - world_pos);
         // float attenuation = 1.0 / (distance * distance);
@@ -142,7 +148,7 @@ void main()
     // color = mix(color, fog_color, fog_t);
 
     // color = color / (color + vec3(1.0)); // tone mapping
-    // float avg = (color.x + color.y + color.z)/3.0;
-    // color = color * 1.5 / (avg + 1.0);
+    float avg = (color.x + color.y + color.z)/3.0;
+    color = color * 1.5 / (avg + 1.0);
     FragColor = vec4(color, opacity);
 }

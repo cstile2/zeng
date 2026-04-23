@@ -23,6 +23,10 @@ pub const loop_mode = enum {
     loop,
     one_shot,
 };
+
+var FRAME_SIZE: usize = undefined;
+var BYTES_PER_SAMPLE: usize = undefined;
+
 pub fn get_audio_file_data(wav_bytes: []const u8) !audio_sample_info {
     if (wav_bytes.len < 44) return error.InvalidWavFile; // Minimum header size
 
@@ -92,22 +96,22 @@ fn convert_sample_to_output_format(T: type, in: T) f32 {
         return sample_float;
     }
 }
-fn process_sample_and_update_state(frame: usize, sample_T: type, n_channels: usize, audio_output_buffer: [*]c.BYTE, play_state: *sound_play_state) void {
+fn process_sample_and_update_state(frame_num: usize, sample_T: type, audio_output_buffer: [*]c.BYTE, play_state: *sound_play_state) void {
     const sizeof = if (sample_T == i24) 3 else @sizeOf(sample_T);
-    if (n_channels > 1) {
-        for (0..n_channels) |channel_index| {
+    if (play_state.wav_file.num_channels > 1) { // file is not mono
+        for (0..play_state.wav_file.num_channels) |channel_index| {
             var sample: sample_T = undefined;
             @memcpy(@as([*]u8, @ptrCast(&sample)), play_state.wav_file.pcm_data[play_state.sample_index + channel_index * sizeof .. play_state.sample_index + channel_index * sizeof + sizeof]);
             const formatted_sample = convert_sample_to_output_format(sample_T, sample);
-            const output_channel_index_offset = 4 * (channel_index % 2);
-            buffer_sum(audio_output_buffer[frame * 8 + output_channel_index_offset ..], formatted_sample);
+            const output_channel_index_offset = BYTES_PER_SAMPLE * channel_index;
+            buffer_sum(audio_output_buffer[frame_num * FRAME_SIZE + output_channel_index_offset ..], formatted_sample);
         }
-    } else {
+    } else { // file is in mono
         var sample: sample_T = undefined;
         @memcpy(@as([*]u8, @ptrCast(&sample)), play_state.wav_file.pcm_data[play_state.sample_index .. play_state.sample_index + sizeof]);
         const formatted_sample = convert_sample_to_output_format(sample_T, sample);
-        buffer_sum(audio_output_buffer[frame * 8 ..], formatted_sample);
-        buffer_sum(audio_output_buffer[frame * 8 + 4 ..], formatted_sample);
+        buffer_sum(audio_output_buffer[frame_num * FRAME_SIZE ..], formatted_sample);
+        buffer_sum(audio_output_buffer[frame_num * FRAME_SIZE + BYTES_PER_SAMPLE ..], formatted_sample);
     }
 
     play_state.float_counter += play_state.sample_rate_ratio;
@@ -190,6 +194,10 @@ pub fn audio_engine_run() !void {
     windows_error = audio_client.lpVtbl.*.Start.?(audio_client);
     try windows_check_error(windows_error);
 
+    BYTES_PER_SAMPLE = (pwfx.wBitsPerSample / 8);
+    FRAME_SIZE = @intCast(pwfx.nChannels * BYTES_PER_SAMPLE);
+    std.debug.assert(pwfx.nChannels >= 2);
+
     while (true) {
         _ = c.WaitForSingleObject(audio_event_handle, c.INFINITE);
 
@@ -230,21 +238,22 @@ pub fn audio_engine_run() !void {
         message_queue_start = atomically_requested_message_spot;
 
         // actual audio processing - mix all the currently playing sounds into the output audio buffer
-        for (0..num_frames_writable) |frame| {
+        for (0..num_frames_writable) |frame_num| {
             // start with zeros - silent audio
-            @memset(audio_output_buffer[frame * 8 + 0 .. frame * 8 + 4], 0);
-            @memset(audio_output_buffer[frame * 8 + 4 .. frame * 8 + 8], 0);
+            @memset(audio_output_buffer[frame_num * FRAME_SIZE + 0 .. frame_num * FRAME_SIZE + BYTES_PER_SAMPLE], 0);
+            @memset(audio_output_buffer[frame_num * FRAME_SIZE + BYTES_PER_SAMPLE .. frame_num * FRAME_SIZE + BYTES_PER_SAMPLE + BYTES_PER_SAMPLE], 0);
             // mix in the various playing sounds
-            for (play_states[0..play_states_count]) |*play_data| {
-                if (!play_data.alive) continue;
-                if (play_data.wav_file.bits_per_sample == 8) {
-                    process_sample_and_update_state(frame, u8, play_data.wav_file.num_channels, audio_output_buffer, play_data);
-                } else if (play_data.wav_file.bits_per_sample == 16) {
-                    process_sample_and_update_state(frame, i16, play_data.wav_file.num_channels, audio_output_buffer, play_data);
-                } else if (play_data.wav_file.bits_per_sample == 24) {
-                    process_sample_and_update_state(frame, i24, play_data.wav_file.num_channels, audio_output_buffer, play_data);
+            for (play_states[0..play_states_count]) |*play_state| {
+                std.debug.assert(play_state.wav_file.num_channels <= pwfx.nChannels);
+                if (!play_state.alive) continue;
+                if (play_state.wav_file.bits_per_sample == 8) {
+                    process_sample_and_update_state(frame_num, u8, audio_output_buffer, play_state);
+                } else if (play_state.wav_file.bits_per_sample == 16) {
+                    process_sample_and_update_state(frame_num, i16, audio_output_buffer, play_state);
+                } else if (play_state.wav_file.bits_per_sample == 24) {
+                    process_sample_and_update_state(frame_num, i24, audio_output_buffer, play_state);
                 } else {
-                    std.debug.print("{}\n", .{play_data.wav_file.bits_per_sample});
+                    std.debug.print("audio file has a samplerate that is not currently supported: {}\n", .{play_state.wav_file.bits_per_sample});
                     unreachable;
                 }
             }

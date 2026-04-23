@@ -21,10 +21,17 @@ pub const c = @cImport({
     @cInclude("clay.h");
     @cInclude("winsock2.h");
 });
-pub const dungeon_deck = @import("user/dungeon_deck.zig");
 
 pub const auto_fill_t = struct {};
 pub const auto_fill = auto_fill_t{};
+
+pub const multiplayer_res = struct {
+    server_peer: net.peer_info_t,
+    main_socket: net.socket_t,
+    is_server: bool,
+    remote_player_entity: ecs.entity_id,
+    replicated_player_skeleton_entity: ecs.entity_id,
+};
 
 // Engine structs
 pub const vec2 = struct {
@@ -37,14 +44,28 @@ pub const vec2 = struct {
     pub fn sub(self: vec2, v: vec2) vec2 {
         return .{ .x = self.x - v.x, .y = self.y - v.y };
     }
-    pub fn mult(self: vec2, f: f32) vec2 {
+    pub fn mult(this: vec2, b: vec2) vec2 {
+        return .{ .x = this.x * b.x, .y = this.y * b.y };
+    }
+    pub fn div(this: vec2, b: vec2) vec2 {
+        return .{ .x = this.x / b.x, .y = this.y / b.y };
+    }
+
+    pub fn add_scalar(self: vec2, s: f32) vec2 {
+        return .{ .x = self.x + s, .y = self.y + s };
+    }
+    pub fn sub_scalar(self: vec2, s: vec2) vec2 {
+        return .{ .x = self.x - s, .y = self.y - s };
+    }
+    pub fn mult_scalar(self: vec2, f: f32) vec2 {
         return .{ .x = self.x * f, .y = self.y * f };
     }
-    pub fn div(self: vec2, f: f32) vec2 {
+    pub fn div_scalar(self: vec2, f: f32) vec2 {
         return .{ .x = self.x / f, .y = self.y / f };
     }
+
     pub fn lerp(a: vec2, b: vec2, t: f32) vec2 {
-        return a.mult(1.0 - t).add(b.mult(t));
+        return a.mult_scalar(1.0 - t).add(b.mult_scalar(t));
     }
 
     pub fn dot(a: vec2, b: vec2) f32 {
@@ -61,7 +82,7 @@ pub const vec2 = struct {
         return self.x * self.x + self.y * self.y;
     }
     pub fn normalized(self: vec2) vec2 {
-        return self.div(self.length());
+        return self.div_scalar(self.length());
     }
 
     pub fn perp(this: vec2) vec2 {
@@ -72,29 +93,41 @@ pub const vec2 = struct {
         return this.perp();
     }
     pub fn clamp(this: vec2, mag: f32) vec2 {
-        if (this.length() > mag) return this.normalized().mult(mag);
+        if (this.length() > mag) return this.normalized().mult_scalar(mag);
         return this;
+    }
+    pub fn move_towards(this: vec2, target: vec2, max_delta: f32) vec2 {
+        return this.add(target.sub(this).clamp(max_delta));
     }
 
     pub const ZERO = vec2{ .x = 0, .y = 0 };
+    pub const ONE = vec2{ .x = 1, .y = 1 };
 };
 pub const vec3 = extern struct {
     x: f32 = 0,
     y: f32 = 0,
     z: f32 = 0,
 
-    pub fn mult(self: vec3, f: f32) vec3 {
-        return .{ .x = self.x * f, .y = self.y * f, .z = self.z * f };
-    }
-    pub fn div(self: vec3, f: f32) vec3 {
-        return .{ .x = self.x / f, .y = self.y / f, .z = self.z / f };
-    }
     pub fn add(self: vec3, v: vec3) vec3 {
         return .{ .x = self.x + v.x, .y = self.y + v.y, .z = self.z + v.z };
     }
     pub fn sub(self: vec3, v: vec3) vec3 {
         return .{ .x = self.x - v.x, .y = self.y - v.y, .z = self.z - v.z };
     }
+
+    pub fn add_scalar(self: vec3, s: f32) vec3 {
+        return .{ .x = self.x + s, .y = self.y + s, .z = self.z + s };
+    }
+    pub fn sub_scalar(self: vec3, s: vec3) vec3 {
+        return .{ .x = self.x - s, .y = self.y - s, .z = self.z - s };
+    }
+    pub fn mult_scalar(self: vec3, f: f32) vec3 {
+        return .{ .x = self.x * f, .y = self.y * f, .z = self.z * f };
+    }
+    pub fn div_scalar(self: vec3, f: f32) vec3 {
+        return .{ .x = self.x / f, .y = self.y / f, .z = self.z / f };
+    }
+
     pub fn length(self: vec3) f32 {
         return @sqrt(self.x * self.x + self.y * self.y + self.z * self.z);
     }
@@ -102,18 +135,18 @@ pub const vec3 = extern struct {
         return self.x * self.x + self.y * self.y + self.z * self.z;
     }
     pub fn normalized(self: vec3) vec3 {
-        return self.div(self.length());
+        return self.div_scalar(self.length());
     }
     pub fn lerp(a: vec3, b: vec3, t: f32) vec3 {
-        return a.mult(1.0 - t).add(b.mult(t));
+        return a.mult_scalar(1.0 - t).add(b.mult_scalar(t));
     }
     pub fn slerp(a: vec3, b: vec3, t: f32) vec3 {
         var _dot = a.dot(b);
         _dot = std.math.clamp(_dot, -1.0, 1.0);
 
         const theta = std.math.acos(_dot) * t;
-        const relative = b.sub(a.mult(_dot)).normalized();
-        return a.mult(@cos(theta)).add(relative.mult(@sin(theta)));
+        const relative = b.sub(a.mult_scalar(_dot)).normalized();
+        return a.mult_scalar(@cos(theta)).add(relative.mult_scalar(@sin(theta)));
     }
     pub fn neg(v: vec3) vec3 {
         return .{ .x = -v.x, .y = -v.y, .z = -v.z };
@@ -129,7 +162,7 @@ pub const vec3 = extern struct {
         };
     }
     pub fn project(lhs: vec3, rhs: vec3) vec3 {
-        return rhs.mult(lhs.dot(rhs) / rhs.dot(rhs));
+        return rhs.mult_scalar(lhs.dot(rhs) / rhs.dot(rhs));
     }
     pub fn slide(lhs: vec3, rhs: vec3) vec3 {
         return lhs.sub(lhs.project(rhs));
@@ -144,7 +177,7 @@ pub const vec3 = extern struct {
         return vec4{ .x = this.x, .y = this.y, .z = this.z, .w = extra };
     }
     pub fn clamp(this: vec3, mag: f32) vec3 {
-        if (this.length() > mag) return this.normalized().mult(mag);
+        if (this.length() > mag) return this.normalized().mult_scalar(mag);
         return this;
     }
 
@@ -307,10 +340,10 @@ pub var global_mouse_pressed = false;
 pub var global_allocator: std.mem.Allocator = undefined;
 
 pub const time_res = struct {
-    delta_time: f64,
-    dt: f32,
-    fixed_delta_time: f64,
-    fixed_dt: f32,
+    delta_time_f64: f64,
+    delta_time: f32,
+    fixed_delta_time_f64: f64,
+    fixed_delta_time: f32,
 };
 pub const main_camera_res = struct {
     id: ecs.entity_id,
@@ -334,8 +367,6 @@ pub const cube_tracker_res = struct {
 };
 pub const player_distinguishing_res = struct {
     main_player_id: ecs.entity_id,
-    is_server: bool,
-    is_client: bool,
 };
 pub const shadow_map_res = struct {
     depth_map_frame_buffer_object: u32,
@@ -345,6 +376,7 @@ pub const shadow_map_res = struct {
     shader_program: u32,
     camera_matrix: [16]f32,
     projection_matrix: [16]f32,
+    sampler_linear: u32,
 
     pub fn init(allocator: std.mem.Allocator) @This() {
         var ret: @This() = undefined;
@@ -353,17 +385,13 @@ pub const shadow_map_res = struct {
         ret.shader_program = loader.load_shader(allocator, "assets/shaders/light_map_vertex.shader", "assets/shaders/light_map_fragment.shader");
 
         ret.camera_matrix = mat_tran(mat_axis_angle(zeng.vec3.RIGHT, -3.14159 / 3.0), .{ .y = -5 });
-        ret.projection_matrix = mat_ortho(-100, 100, -100, 100, 0, 40);
+        ret.projection_matrix = mat_ortho(-10, 10, -10, 10, 0, 40);
 
         zeng.gl.genFramebuffers(1, &ret.depth_map_frame_buffer_object);
 
         gl.genTextures(1, &ret.depth_map_texture);
         gl.bindTexture(gl.TEXTURE_2D, ret.depth_map_texture);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT, ret.shadow_width, ret.shadow_height, 0, gl.DEPTH_COMPONENT, gl.FLOAT, null);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        // gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-        // gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
 
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_BORDER);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_BORDER);
@@ -375,6 +403,15 @@ pub const shadow_map_res = struct {
         gl.drawBuffer(gl.NONE);
         gl.readBuffer(gl.NONE);
         gl.bindFramebuffer(gl.FRAMEBUFFER, 0);
+
+        gl.genSamplers(1, &ret.sampler_linear);
+
+        // Configure linear sampler
+        gl.samplerParameteri(ret.sampler_linear, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.samplerParameteri(ret.sampler_linear, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.samplerParameteri(ret.sampler_linear, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_BORDER);
+        gl.samplerParameteri(ret.sampler_linear, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_BORDER);
+        gl.samplerParameterfv(ret.sampler_linear, gl.TEXTURE_BORDER_COLOR, &borderColor);
 
         return ret;
     }
@@ -388,8 +425,11 @@ pub const shadow_map_res = struct {
         gl.uniformMatrix4fv(light_space_matrix_location, 1, gl.FALSE, &mat);
         const model_location = gl.getUniformLocation(this.shader_program, "model");
 
+        // gl.enable(gl.CULL_FACE);
+        // gl.cullFace(gl.FRONT);
+        // defer gl.cullFace(gl.BACK);
+        // gl.cullFace(gl.BACK);
         gl.disable(gl.CULL_FACE);
-        defer gl.enable(gl.CULL_FACE);
 
         gl.viewport(0, 0, this.shadow_width, this.shadow_height);
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.depth_map_frame_buffer_object);
@@ -405,7 +445,6 @@ pub const shadow_map_res = struct {
             zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, entity_mesh.indices_type, null);
         }
 
-        // RenderScene();
         gl.bindFramebuffer(gl.FRAMEBUFFER, 0);
     }
     // the plan: cascaded shadow maps to cover HUGE area, and raymarch contact shadows for refinement
@@ -423,9 +462,6 @@ pub const delete_event = struct {
     entity_id: ecs.entity_id,
 };
 
-pub const sphere_collider = struct {
-    radius: f32 = 1.0,
-};
 pub const fly_component = struct {
     // SOMETHING_TO_MAKE_THIS_NOT_AN_EMPTY_STRUCT: u8 = 0,
 };
@@ -514,7 +550,95 @@ pub const frame_interpolator = struct { // interpolates visual elements between 
 };
 pub const net_id_component = struct {
     net_id: u32,
+
+    /// If this is not null, then this net_id belongs to a remote peer, not a local entity/object
     remote_peer: ?net.peer_info_t,
+};
+
+pub const collision_space_t = struct {
+    pub const client_id_t = u32;
+    pub const cell_index = struct { isize, isize, isize };
+
+    pub const put_options_t = struct {
+        updated_entity: ?ecs.entity_id = null,
+    };
+
+    all_colliders: std.AutoArrayHashMap(client_id_t, struct { phy.convex_collider, std.ArrayList(cell_index), ecs.entity_id }),
+    spatial_hash_grid: std.AutoHashMap(cell_index, std.AutoArrayHashMap(client_id_t, void)),
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) @This() {
+        var new: @This() = undefined;
+
+        new.all_colliders = .init(allocator);
+        new.spatial_hash_grid = .init(allocator);
+        new.allocator = allocator;
+
+        return new;
+    }
+    pub fn deinit(this: *@This()) void {
+        this.all_colliders.deinit();
+        this.spatial_hash_grid.deinit();
+    }
+
+    pub fn register_client(this: *@This(), client_id: client_id_t, collider: phy.convex_collider, entity_id: ecs.entity_id) void {
+        const entry = this.all_colliders.getOrPut(client_id) catch unreachable;
+        if (entry.found_existing) { // deinit preexisting structure
+            entry.value_ptr.@"1".deinit(this.allocator);
+        }
+
+        entry.value_ptr.* = .{ collider, std.ArrayList(cell_index).initCapacity(this.allocator, 0), entity_id };
+    }
+
+    pub fn update_matrix(this: *@This(), client_id: client_id_t, matrix: [16]f32) void {
+        const client_information = this.all_colliders.get(client_id);
+        client_information.?.@"0".matrix = matrix;
+    }
+
+    /// This function only ADDS information to the collision space. To UPDATE information, call remove() first, then call this
+    pub fn put(this: *@This(), client_id: client_id_t) void {
+        const client_information = this.all_colliders.get(client_id);
+
+        const right, const left, const up, const down, const forward, const backward = phy.collider_bound_indices(client_information.?.@"0", 0.001);
+
+        var new_list = std.ArrayList(cell_index).initCapacity(this.allocator, 0) catch unreachable;
+
+        var i: isize = left;
+        while (i <= right) {
+            defer i += 1;
+
+            var j: isize = down;
+            while (j <= up) {
+                defer j += 1;
+
+                var k: isize = backward;
+                while (k <= forward) {
+                    defer k += 1;
+
+                    new_list.value_ptr.append(this.allocator, .{ i, j, k }) catch unreachable;
+
+                    const get_or_put_result = this.spatial_hash_grid.getOrPut(.{ i, j, k }) catch unreachable;
+                    if (!get_or_put_result.found_existing) get_or_put_result.value_ptr.* = std.AutoArrayHashMap(client_id_t, void).init();
+
+                    get_or_put_result.value_ptr.put(client_id, void{}) catch unreachable;
+                }
+            }
+        }
+
+        client_information.?.@"1".appendSlice(this.allocator, new_list.items) catch unreachable;
+    }
+    pub fn remove(this: @This(), client_id: client_id_t) void {
+        const client_information = this.all_colliders.get(client_id);
+
+        for (client_information.?.@"1".items) |cell| {
+            const cell_stuff = this.spatial_hash_grid.get(cell);
+            if (cell_stuff) |_cell_stuff| {
+                _cell_stuff.swapRemove(client_id);
+            }
+        }
+
+        client_information.?.@"1".clearRetainingCapacity();
+    }
 };
 
 pub const client_info = struct {
@@ -530,7 +654,6 @@ pub const COMPONENT_TYPES = [_]type{
     zeng.camera,
     zeng.skinned_mesh,
     zeng.world_matrix,
-    sphere_collider,
     fly_component,
     follow_component,
     zeng.children_component,
@@ -546,11 +669,6 @@ pub const COMPONENT_TYPES = [_]type{
     net_id_component,
     name_component,
     sprite3D,
-
-    dungeon_deck.fire_ball_component,
-    dungeon_deck.health_component,
-    dungeon_deck.card_caster,
-    dungeon_deck.ghost_component,
 
     auto_animate_component,
 };
@@ -642,9 +760,9 @@ pub fn get_animation_pose_with_weight(animation: *zeng.loader.animation, time_no
         if (channel.outputs == .rotation) {
             rotations[channel.target] = channel.outputs.rotation[idx].nlerp(channel.outputs.rotation[idx + 1], lerp_amount).mult(weight);
         } else if (channel.outputs == .translation) {
-            translations[channel.target] = channel.outputs.translation[idx].lerp(channel.outputs.translation[idx + 1], lerp_amount).mult(weight);
+            translations[channel.target] = channel.outputs.translation[idx].lerp(channel.outputs.translation[idx + 1], lerp_amount).mult_scalar(weight);
         } else if (channel.outputs == .scale) {
-            scales[channel.target] = channel.outputs.scale[idx].lerp(channel.outputs.scale[idx + 1], lerp_amount).mult(weight);
+            scales[channel.target] = channel.outputs.scale[idx].lerp(channel.outputs.scale[idx + 1], lerp_amount).mult_scalar(weight);
         }
     }
 }
@@ -660,9 +778,9 @@ pub fn add_animation_pose_with_weight(animation: *zeng.loader.animation, time_no
         if (channel.outputs == .rotation) {
             rotations[channel.target] = rotations[channel.target].add2(channel.outputs.rotation[idx].nlerp(channel.outputs.rotation[idx + 1], lerp_amount).mult(weight));
         } else if (channel.outputs == .translation) {
-            translations[channel.target] = translations[channel.target].add(channel.outputs.translation[idx].lerp(channel.outputs.translation[idx + 1], lerp_amount).mult(weight));
+            translations[channel.target] = translations[channel.target].add(channel.outputs.translation[idx].lerp(channel.outputs.translation[idx + 1], lerp_amount).mult_scalar(weight));
         } else if (channel.outputs == .scale) {
-            scales[channel.target] = scales[channel.target].add(channel.outputs.scale[idx].lerp(channel.outputs.scale[idx + 1], lerp_amount).mult(weight));
+            scales[channel.target] = scales[channel.target].add(channel.outputs.scale[idx].lerp(channel.outputs.scale[idx + 1], lerp_amount).mult_scalar(weight));
         }
     }
 }
@@ -1345,12 +1463,18 @@ pub const resources_t = struct {
         const type_id = utils.type_id(@typeInfo(@TypeOf(p)).pointer.child);
         this.map.put(type_id, erased) catch unreachable;
     }
-    pub fn get(resources: *resources_t, p: type) *p {
-        if (!resources.map.contains(utils.type_id(p))) {
+    pub fn get(this: *@This(), p: type) *p {
+        if (!this.map.contains(utils.type_id(p))) {
             std.debug.print("TRIED TO FETCH A RESOURCE THAT DOESNT EXIST IN REGISTRY: {}\n", .{p});
             unreachable;
         }
-        return @ptrCast(@alignCast(resources.map.getPtr(utils.type_id(p)).?.*));
+        return @ptrCast(@alignCast(this.map.getPtr(utils.type_id(p)).?.*));
+    }
+    pub fn get_maybe(this: *@This(), p: type) ?*p {
+        if (!this.map.contains(utils.type_id(p))) {
+            return null;
+        }
+        return @ptrCast(@alignCast(this.map.getPtr(utils.type_id(p)).?.*));
     }
     pub fn get_create(this: *resources_t, p: type) struct { *p, bool } {
         var gotten: *p = undefined;
@@ -1476,16 +1600,23 @@ pub const commands_t = struct {
 pub const events_t = struct {
     commands: *zeng.commands_t,
     tracker: *net.packet_ack_tracker_t,
-    main_socket: net.socket_t,
     res: *resources_t,
 
-    pub fn send(this: *@This(), peer: net.peer_info_t, event: anytype, channel: zeng.commands_t.reliability_channel) void {
+    pub fn send_remote(this: *@This(), peer: net.peer_info_t, event: anytype, channel: zeng.commands_t.reliability_channel) void {
         const payload_array = this.commands.allocator.alloc(u8, @sizeOf(u32) + @sizeOf(@TypeOf(event))) catch unreachable;
         var curr_byte: u32 = 0;
         zeng.loader.serialize_to_bytes(comptime zeng.GET_MSG_CODE(@TypeOf(event)), payload_array, &curr_byte);
         zeng.loader.serialize_to_bytes(event, payload_array, &curr_byte);
 
-        const _msg = remote_message{ .seq = if (channel == .reliable) this.tracker.new_seq_number() else 0, .resend_timer = net.resend_interval_sec, .payload = this.commands.allocator.realloc(payload_array, curr_byte) catch unreachable, .sender_socket = this.main_socket, .target_address = peer, .time_to_send = this.commands.get_sim_send_time(), .channel = channel };
+        const _msg = remote_message{
+            .seq = if (channel == .reliable) this.tracker.new_seq_number() else 0,
+            .resend_timer = net.resend_interval_sec,
+            .payload = this.commands.allocator.realloc(payload_array, curr_byte) catch unreachable,
+            .sender_socket = this.res.get(multiplayer_res).main_socket,
+            .target_address = peer,
+            .time_to_send = this.commands.get_sim_send_time(),
+            .channel = channel,
+        };
         if (channel == .reliable) {
             this.tracker.mine.insert(_msg.seq).* = .{ .acked = false, .timestamp = zeng.timer_get(), .rem_message = _msg };
         }
@@ -1536,7 +1667,9 @@ pub fn start_of_frame() void {
 }
 pub fn end_of_frame(res: *resources_t) void {
     const new_time = zeng.timer_get();
-    res.get(time_res).delta_time = zeng.timer_calc_delta(old_time, new_time);
+    res.get(time_res).delta_time_f64 = zeng.timer_calc_delta(old_time, new_time);
+    res.get(time_res).delta_time = @floatCast(zeng.timer_calc_delta(old_time, new_time));
+
     old_time = new_time;
     // std.time.sleep(std.time.ns_per_s / 60);
 }
@@ -1670,7 +1803,8 @@ pub fn set_cursor(cursor_type: cursor_type_enum) void {
     _ = c.SetCursor(c.LoadCursorW(null, cop.*));
 }
 
-pub var global_mouse_pos: [2]i16 = .{ 0, 0 };
+pub var global_mouse_screen_pos: [2]u16 = .{ 0, 0 };
+pub var global_mouse_sensitivity: f64 = 0.001;
 pub var key_press_messages: std.ArrayList(u8) = undefined;
 pub fn windows_message_handler(hwnd: c.HWND, message: c.UINT, wParam: c.WPARAM, lParam: c.LPARAM) callconv(.c) c.LRESULT {
     switch (message) {
@@ -1679,9 +1813,9 @@ pub fn windows_message_handler(hwnd: c.HWND, message: c.UINT, wParam: c.WPARAM, 
             return 0;
         },
         c.WM_MOUSEMOVE => {
-            const x: i16 = @intCast(lParam & 0xFFFF);
-            const y: i16 = @intCast((lParam >> 16) & 0xFFFF);
-            global_mouse_pos = .{ x, y };
+            const x: u16 = @intCast(lParam & 0xFFFF);
+            const y: u16 = @intCast((lParam >> 16) & 0xFFFF);
+            global_mouse_screen_pos = .{ x, y };
             return 0;
         },
         c.WM_INPUT => {
@@ -1696,8 +1830,8 @@ pub fn windows_message_handler(hwnd: c.HWND, message: c.UINT, wParam: c.WPARAM, 
                 const _dy = raw.data.mouse.lLastY;
 
                 const _input = global_world_ptr.get(global_player_entity, rpc.input_message).?;
-                _input.rot_x -= @as(f64, @floatFromInt(_dx)) * 0.001;
-                _input.rot_y -= @as(f64, @floatFromInt(_dy)) * 0.001;
+                _input.rot_x -= @as(f64, @floatFromInt(_dx)) * global_mouse_sensitivity;
+                _input.rot_y -= @as(f64, @floatFromInt(_dy)) * global_mouse_sensitivity;
             }
 
             const flags = raw.data.mouse.unnamed_0.unnamed_0.usButtonFlags;
