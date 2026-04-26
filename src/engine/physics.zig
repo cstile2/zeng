@@ -12,21 +12,28 @@ const vec2 = zeng.vec2;
 //     indices: []u32,
 // };
 
-pub const mesh_triangle_data = struct {
-    indices: [3]u32,
-    positions: []vec3,
+pub const mesh_triangle_data_clean = struct {
+    mesh: *zeng.cpu_mesh,
+    triangle_index: usize,
+};
+pub const triangle_data = struct {
+    positions: [3]zeng.vec3,
 };
 
 pub const collider_type = enum {
-    // mesh,
     sphere,
+    rectangle,
     support_based,
 };
 pub const convex_collider = struct {
-    tag: collider_type = .sphere,
     support: *const fn (vec3, convex_collider) vec3,
-    data: *const anyopaque,
     matrix: zeng.world_matrix,
+
+    data: union(enum) {
+        indirect: *const anyopaque,
+        mesh_triangle_clean: mesh_triangle_data_clean,
+        triangle: triangle_data,
+    },
 
     pub fn _support(self: convex_collider, dir: vec3) vec3 {
         const _dir = zeng.mat_mult_vec4(zeng.mat_invert(self.matrix), dir.to_vec4(0.0)).to_vec3();
@@ -56,12 +63,27 @@ pub fn cube(dir: vec3, coll: convex_collider) vec3 {
         .z = if (dir.z >= 0) 0.5 else -0.5,
     };
 }
-pub fn triangle(dir: vec3, coll: convex_collider) vec3 {
-    const tri_data = @as(*const [3]vec3, @ptrCast(@alignCast(coll.data)));
+pub fn standalone_triangle(dir: vec3, coll: convex_collider) vec3 {
+    const tri_data = coll.data.triangle.positions;
 
     var max_float = tri_data[0].dot(dir);
     var max_pos: vec3 = tri_data[0];
-    for (tri_data.*) |vert| {
+    for (tri_data) |vert| {
+        if (vert.dot(dir) > max_float) {
+            max_float = vert.dot(dir);
+            max_pos = vert;
+        }
+    }
+
+    return max_pos;
+}
+pub fn triangle_clean(dir: vec3, coll: convex_collider) vec3 {
+    const d = coll.data.mesh_triangle_clean;
+
+    var max_float = d.mesh.positions[d.mesh.indices[d.triangle_index + 0]].dot(dir);
+    var max_pos: vec3 = d.mesh.positions[d.mesh.indices[d.triangle_index + 0]];
+    for (&[2]usize{ 1, 2 }) |i| {
+        const vert = d.mesh.positions[d.mesh.indices[d.triangle_index + i]];
         if (vert.dot(dir) > max_float) {
             max_float = vert.dot(dir);
             max_pos = vert;
@@ -72,20 +94,6 @@ pub fn triangle(dir: vec3, coll: convex_collider) vec3 {
 }
 pub fn player_capsule(dir: vec3, coll: convex_collider) vec3 {
     return dual_point(dir, coll).add(dir.normalized().mult_scalar(0.35));
-}
-pub fn mesh_triangle(dir: vec3, coll: convex_collider) vec3 {
-    const tri_data = @as(*const mesh_triangle_data, @ptrCast(@alignCast(coll.data)));
-
-    var max_float = tri_data.positions[tri_data.indices[0]].dot(dir);
-    var max_pos: vec3 = tri_data.positions[tri_data.indices[0]];
-    for (tri_data.indices) |ind| {
-        if (tri_data.positions[ind].dot(dir) > max_float) {
-            max_float = tri_data.positions[ind].dot(dir);
-            max_pos = tri_data.positions[ind];
-        }
-    }
-
-    return max_pos;
 }
 
 fn support(a_coll: convex_collider, b_coll: convex_collider, dir: vec3) vec3 {
@@ -658,21 +666,16 @@ pub fn ray_cast_group(ro: vec3, rd: vec3, physics_data: anytype) raycast_result_
     result.t = std.math.floatMax(f32);
 
     for (physics_data) |coll| {
-        if (coll.tag == .support_based and coll.support == &@import("physics.zig").mesh_triangle) {
-            const mesh_data = @as(*const mesh_triangle_data, @ptrCast(@alignCast(coll.data)));
+        if (coll.data == .mesh_triangle_clean) {
+            const mesh_data: mesh_triangle_data_clean = coll.data.mesh_triangle_clean;
 
-            var curr_tri: usize = 0;
-            while (curr_tri < mesh_data.indices.len) {
-                defer curr_tri += 3;
+            const a = zeng.mat_mult_vec4(coll.matrix, mesh_data.mesh.positions[mesh_data.mesh.indices[mesh_data.triangle_index + 0]].to_vec4(1.0)).to_vec3();
+            const b = zeng.mat_mult_vec4(coll.matrix, mesh_data.mesh.positions[mesh_data.mesh.indices[mesh_data.triangle_index + 1]].to_vec4(1.0)).to_vec3();
+            const c = zeng.mat_mult_vec4(coll.matrix, mesh_data.mesh.positions[mesh_data.mesh.indices[mesh_data.triangle_index + 2]].to_vec4(1.0)).to_vec3();
 
-                const a = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 0]].to_vec4(1.0)).to_vec3();
-                const b = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 1]].to_vec4(1.0)).to_vec3();
-                const c = zeng.mat_mult_vec4(coll.matrix, mesh_data.positions[mesh_data.indices[curr_tri + 2]].to_vec4(1.0)).to_vec3();
-
-                const triangle_result = ray_cast_triangle(ro, rd, a, b, c);
-                if (triangle_result.hitting) {
-                    if (triangle_result.t < result.t) result = triangle_result;
-                }
+            const triangle_result = ray_cast_triangle(ro, rd, a, b, c);
+            if (triangle_result.hitting) {
+                if (triangle_result.t < result.t) result = triangle_result;
             }
         } else unreachable;
     }

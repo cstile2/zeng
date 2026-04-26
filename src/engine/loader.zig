@@ -1062,8 +1062,8 @@ fn get_float_from_numeric_value(n: *gltf.node) f32 {
     return @floatFromInt(n.integer);
 }
 
-pub var global_collider_meshes: ?std.ArrayList(zeng.cpu_mesh) = null;
-pub var global_matrices: ?std.ArrayList(zeng.world_matrix) = null;
+// pub var global_collider_meshes: ?std.ArrayList(zeng.cpu_mesh) = null;
+// pub var global_matrices: ?std.ArrayList(zeng.world_matrix) = null;
 
 pub fn buffer_view_to_slice(buffer_view_n: *gltf.node, buffers: []const []const u8) []const u8 {
     const buffer: usize = @intCast(buffer_view_n.object.get("buffer").?.integer);
@@ -1106,16 +1106,17 @@ pub fn deep_copy_skeleton(s: zeng.skeleton, allocator: std.mem.Allocator) zeng.s
 
     return ret;
 }
-pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, names_map: std.AutoHashMap(usize, []const u8), parent_child_map: std.AutoArrayHashMap(usize, std.ArrayList(usize)), top_level_children: std.AutoHashMap(usize, void), skeleton_slice: []zeng.skeleton, skinmesh_to_skeleton: std.AutoHashMap(usize, usize), world: *ecs.world_t, allocator: std.mem.Allocator) ecs.entity_id {
+pub fn instantiate_model_hierarchy(imported: imported_3d_scene, world: *ecs.world_t, allocator: std.mem.Allocator, collision_space: ?*zeng.collision_space_t) ecs.entity_id {
     var skeleton_entity_list = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
-    for (skeleton_slice) |skel| {
+    for (imported.skeleton_slice) |skel| {
         const skeleton_copy_entity = world.spawn(.{deep_copy_skeleton(skel, allocator)});
         skeleton_entity_list.append(allocator, skeleton_copy_entity) catch unreachable;
     }
 
-    var gltf_id_to_entity_id = std.AutoArrayHashMap(usize, ?std.ArrayList(ecs.entity_id)).init(allocator);
+    var group_map = std.AutoArrayHashMap(usize, ?std.ArrayList(ecs.entity_id)).init(allocator);
+    var gltf_id_to_entity_id = std.AutoArrayHashMap(usize, ecs.entity_id).init(allocator);
     var root_child_list = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
-    for (mesh_slice) |mesh_like| {
+    for (imported.mesh_slice) |mesh_like| {
         var entity_id: ecs.entity_id = undefined;
         if (mesh_like.node == .skinned_mesh) {
             entity_id = world.spawn(.{
@@ -1123,51 +1124,72 @@ pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, names_map:
                 zeng.local_matrix{ .transform = mesh_like.matrix },
                 blk: {
                     var new = mesh_like.node.skinned_mesh;
-                    new.skeleton = skeleton_entity_list.items[skinmesh_to_skeleton.get(mesh_like.gltf_id).?];
+                    new.skeleton = skeleton_entity_list.items[imported.skinned_mesh_to_skeleton.get(mesh_like.gltf_id).?];
                     break :blk new;
                 },
             });
-            if (names_map.get(mesh_like.gltf_id)) |name| {
+            if (imported.name_map.get(mesh_like.gltf_id)) |name| {
                 world.add(name, entity_id);
             }
-            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
-            // gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
-            add_to_group(mesh_like.gltf_id, entity_id, &gltf_id_to_entity_id, allocator);
+            if (imported.top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
+            gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
+            add_to_group(mesh_like.gltf_id, entity_id, &group_map, allocator);
         } else if (mesh_like.node == .static_mesh) {
             entity_id = world.spawn(.{
                 zeng.mat_identity,
                 zeng.local_matrix{ .transform = mesh_like.matrix },
                 mesh_like.node.static_mesh,
             });
-            if (names_map.get(mesh_like.gltf_id)) |name| {
+            if (imported.name_map.get(mesh_like.gltf_id)) |name| {
                 world.add(name, entity_id);
             }
-            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
-            // gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
-            add_to_group(mesh_like.gltf_id, entity_id, &gltf_id_to_entity_id, allocator);
+            if (imported.top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
+            gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
+            add_to_group(mesh_like.gltf_id, entity_id, &group_map, allocator);
         } else if (mesh_like.node == .empty) {
             entity_id = world.spawn(.{
                 zeng.mat_identity,
                 zeng.local_matrix{ .transform = mesh_like.matrix },
             });
 
-            if (top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
-            // gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
-            add_to_group(mesh_like.gltf_id, entity_id, &gltf_id_to_entity_id, allocator);
+            if (imported.top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
+            gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
+            add_to_group(mesh_like.gltf_id, entity_id, &group_map, allocator);
         }
-        if (names_map.get(mesh_like.gltf_id)) |name| {
+        if (imported.name_map.get(mesh_like.gltf_id)) |name| {
             world.add(name, entity_id);
         }
     }
+    if (collision_space != null) {
+        for (imported.collision_mesh_slice, imported.collision_matrix_slice, imported.collision_node_id_slice) |*_mesh, _matrix, _n_id| {
+            var curr_tri: usize = 0;
+            while (curr_tri < _mesh.indices.len) { // turn each mesh into a bunch of individual triangle colliders
+                defer curr_tri += 3;
+                const coll_ptr = collision_space.?.add_collider(phy.convex_collider{
+                    .matrix = _matrix,
+                    .support = phy.triangle_clean,
+                    .data = .{ .mesh_triangle_clean = .{ .mesh = _mesh, .triangle_index = curr_tri } },
+                });
 
-    for (parent_child_map.keys(), parent_child_map.values()) |parent, children| {
-        if (gltf_id_to_entity_id.get(parent)) |_parent_e_ids| {
+                if (gltf_id_to_entity_id.get(_n_id)) |entity| {
+                    const gop = collision_space.?.entity_to_collider_collection.getOrPut(entity) catch unreachable;
+                    if (!gop.found_existing) {
+                        gop.value_ptr.* = std.ArrayList(*phy.convex_collider).initCapacity(collision_space.?.allocator, 0) catch unreachable;
+                    }
+                    gop.value_ptr.append(collision_space.?.allocator, coll_ptr) catch unreachable;
+                } else unreachable;
+            }
+        }
+    }
+
+    for (imported.parent_child_map.keys(), imported.parent_child_map.values()) |parent, children| {
+        if (group_map.get(parent)) |_parent_e_ids| {
             if (_parent_e_ids) |parent_e_ids| {
                 const parent_e_id = parent_e_ids.items[0];
                 var children_slice_component = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
 
                 for (children.items) |child_group| {
-                    const child_e_ids = gltf_id_to_entity_id.get(child_group).? orelse unreachable;
+                    const child_e_ids = group_map.get(child_group).? orelse unreachable;
                     for (child_e_ids.items) |child_e_id| {
                         children_slice_component.append(allocator, child_e_id) catch unreachable;
                     }
@@ -1185,24 +1207,41 @@ pub fn instantiate_model_hierarchy(mesh_slice: []scene_node_w_matrix, names_map:
 
     return model_root;
 }
-pub var generate_colliders_on_import: bool = false;
-pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, dependencies_path: []const u8, allocator: std.mem.Allocator, skin_shader_program: u32, static_shader_program: u32, default_texture: u32) struct { []scene_node_w_matrix, std.AutoHashMap(usize, []const u8), []animation, [][]const u8, []zeng.skeleton, std.AutoArrayHashMap(usize, std.ArrayList(usize)), std.AutoHashMap(usize, void), std.AutoHashMap(usize, usize) } {
-    var result_top_level_objects = std.AutoHashMap(usize, void).init(allocator);
+
+pub const imported_3d_scene = struct {
+    mesh_slice: []scene_node_w_matrix,
+    name_map: std.AutoHashMap(usize, []const u8),
+    animation_slice: []animation,
+    animation_name_slice: [][]const u8,
+    skeleton_slice: []zeng.skeleton,
+    parent_child_map: std.AutoArrayHashMap(usize, std.ArrayList(usize)),
+    top_level_children: std.AutoHashMap(usize, void),
+    skinned_mesh_to_skeleton: std.AutoHashMap(usize, usize),
+    collision_mesh_slice: []zeng.cpu_mesh,
+    collision_matrix_slice: []zeng.world_matrix,
+    collision_node_id_slice: []usize,
+};
+pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, dependencies_path: []const u8, allocator: std.mem.Allocator, skin_shader_program: u32, static_shader_program: u32, default_texture: u32) imported_3d_scene {
+    var result_top_level_children = std.AutoHashMap(usize, void).init(allocator);
     for (root_n.?.object.get("scenes").?.array.items) |scene_n| {
         for (scene_n.object.get("nodes").?.array.items) |node_n| {
-            result_top_level_objects.put(@intCast(node_n.integer), void{}) catch unreachable;
+            result_top_level_children.put(@intCast(node_n.integer), void{}) catch unreachable;
         }
     }
     var joint_to_skin = std.AutoHashMap(usize, usize).init(allocator);
     var skeleton_space_maps = std.ArrayList(std.AutoHashMap(usize, usize)).initCapacity(allocator, 0) catch unreachable;
 
     var result_nodes = std.ArrayList(scene_node_w_matrix).initCapacity(allocator, 0) catch unreachable;
-    var result_names = std.AutoHashMap(usize, []const u8).init(allocator);
-    var result_animations = std.ArrayList(animation).initCapacity(allocator, 0) catch unreachable;
-    var result_animation_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
-    var result_skeletons = std.ArrayList(zeng.skeleton).initCapacity(allocator, 0) catch unreachable;
-    var result_children_map = std.AutoArrayHashMap(usize, std.ArrayList(usize)).init(allocator);
-    var result_skinmesh_to_skeleton = std.AutoHashMap(usize, usize).init(allocator);
+    var result_name_map = std.AutoHashMap(usize, []const u8).init(allocator);
+    var result_animation_list = std.ArrayList(animation).initCapacity(allocator, 0) catch unreachable;
+    var result_animation_name_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    var result_skeleton_list = std.ArrayList(zeng.skeleton).initCapacity(allocator, 0) catch unreachable;
+    var result_parent_child_map = std.AutoArrayHashMap(usize, std.ArrayList(usize)).init(allocator);
+    var result_skinned_mesh_to_skeleton = std.AutoHashMap(usize, usize).init(allocator);
+
+    var result_collision_mesh_list = std.ArrayList(zeng.cpu_mesh).initCapacity(allocator, 0) catch unreachable;
+    var result_collision_matrix_list = std.ArrayList(zeng.world_matrix).initCapacity(allocator, 0) catch unreachable;
+    var result_collision_node_id_list = std.ArrayList(usize).initCapacity(allocator, 0) catch unreachable;
 
     const nodes_n = root_n.?.object.get("nodes").?;
     const accessors_n = root_n.?.object.get("accessors").?;
@@ -1247,7 +1286,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
                 t.* = zeng.vec3.ZERO;
             }
             skeleton_space_maps.append(allocator, jointspace_to_nodespace) catch unreachable;
-            result_skeletons.append(allocator, zeng.skeleton{
+            result_skeleton_list.append(allocator, zeng.skeleton{
                 .inverse_bind_matrices = temp_inverse_bind_matrices,
                 .bone_parent_indices = temp_bone_parent_indices,
                 .local_bone_matrices = allocator.alloc(zeng.world_matrix, temp_bone_parent_indices.len) catch unreachable,
@@ -1321,8 +1360,8 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
                 }) catch unreachable;
             }
 
-            result_animations.append(allocator, animation{ .channels = temp_channels.items, .duration = max_timestamp }) catch unreachable;
-            result_animation_names.append(allocator, current_animation.object.get("name").?.string) catch unreachable;
+            result_animation_list.append(allocator, animation{ .channels = temp_channels.items, .duration = max_timestamp }) catch unreachable;
+            result_animation_name_list.append(allocator, current_animation.object.get("name").?.string) catch unreachable;
             // result_skeletons.items[owner_skin].animations.append(allocator, result_animations.items.len - 1) catch unreachable;
         }
     }
@@ -1338,7 +1377,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
                 // test if any skeleton contains BOTH the child and the parent bone - otherwise add children to the hierarchy
                 for (skeleton_space_maps.items, 0..) |skin, s| {
                     if (skin.contains(current_node_index) and skin.contains(@intCast(child.integer))) { // this is an armature connection - don't add it to the global children hierarchy - add it inside this skeleton ONLY
-                        result_skeletons.items[s].bone_parent_indices[skin.get(@intCast(child.integer)).?] = @intCast(skin.get(current_node_index).?);
+                        result_skeleton_list.items[s].bone_parent_indices[skin.get(@intCast(child.integer)).?] = @intCast(skin.get(current_node_index).?);
                         continue :children_blk;
                     }
                 }
@@ -1346,7 +1385,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
             }
 
             if (entry.items.len > 0) {
-                result_children_map.put(current_node_index, entry) catch unreachable; // assign a set of children to this node in output
+                result_parent_child_map.put(current_node_index, entry) catch unreachable; // assign a set of children to this node in output
             } else entry.deinit(allocator);
         }
 
@@ -1453,33 +1492,30 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
                 const mesh_data_size: usize = (position_data_len / position_component_size) * (3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size + 4 * joints_component_size + 4 * weights_component_size);
                 var mesh_data = allocator.alloc(u8, mesh_data_size) catch unreachable;
 
-                if (skin_index_n == null and generate_colliders_on_import) { // create a collider based on this STATIC mesh and add it to the global list of colliders
+                if (skin_index_n == null) { // create a collider based on this STATIC mesh and add it to the global list of colliders
                     std.debug.assert(indices_component_type == 5123); // i think i only accounted for this type, prob get rid of this eventually
 
-                    const collider_positions: []zeng.vec3 = allocator.alloc(zeng.vec3, position_data_len / 12) catch unreachable;
-                    var collider_indices: []u32 = undefined;
+                    const mesh_collider_positions: []zeng.vec3 = allocator.alloc(zeng.vec3, position_data_len / 12) catch unreachable;
+                    var mesh_collider_indices: []u32 = undefined;
 
-                    @memcpy(@as([*]u8, @ptrCast(collider_positions)), buffers[position_buffer][position_data_offset .. position_data_offset + position_data_len]);
+                    @memcpy(@as([*]u8, @ptrCast(mesh_collider_positions)), buffers[position_buffer][position_data_offset .. position_data_offset + position_data_len]);
 
-                    collider_indices = allocator.alloc(u32, indices_data_len / 2) catch unreachable;
-                    var curr_ind: usize = 0;
-                    while (curr_ind < indices_data_len) {
-                        defer curr_ind += 2;
+                    mesh_collider_indices = allocator.alloc(u32, indices_data_len / 2) catch unreachable;
+                    var curr_byte_offset: usize = 0;
+                    while (curr_byte_offset < indices_data_len) {
+                        defer curr_byte_offset += 2;
 
                         var i: u16 = undefined;
-                        @memcpy(@as([*]u8, @ptrCast(&i)), buffers[indices_data_buffer][indices_data_offset + curr_ind .. indices_data_offset + curr_ind + 2]);
+                        @memcpy(@as([*]u8, @ptrCast(&i)), buffers[indices_data_buffer][indices_data_offset + curr_byte_offset .. indices_data_offset + curr_byte_offset + 2]);
                         const _i: u32 = @intCast(i);
-                        collider_indices[curr_ind / 2] = _i;
+                        mesh_collider_indices[curr_byte_offset / 2] = _i;
                     }
 
-                    const collider_mesh = zeng.cpu_mesh{ .indices = collider_indices, .positions = collider_positions };
+                    const collider_mesh = zeng.cpu_mesh{ .indices = mesh_collider_indices, .positions = mesh_collider_positions };
 
-                    if (global_collider_meshes == null) {
-                        global_matrices = std.ArrayList(zeng.world_matrix).initCapacity(allocator, 0) catch unreachable;
-                        global_collider_meshes = std.ArrayList(zeng.cpu_mesh).initCapacity(allocator, 0) catch unreachable;
-                    }
-                    global_collider_meshes.?.append(allocator, collider_mesh) catch unreachable;
-                    global_matrices.?.append(allocator, mat) catch unreachable;
+                    result_collision_mesh_list.append(allocator, collider_mesh) catch unreachable;
+                    result_collision_matrix_list.append(allocator, mat) catch unreachable;
+                    result_collision_node_id_list.append(allocator, current_node_index) catch unreachable;
                 }
 
                 var _curr: usize = 0;
@@ -1577,7 +1613,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
                     zeng.gl.enableVertexAttribArray(3);
                     zeng.gl.enableVertexAttribArray(4);
 
-                    result_skinmesh_to_skeleton.put(current_node_index, @intCast(skin_index_n.?.integer)) catch unreachable;
+                    result_skinned_mesh_to_skeleton.put(current_node_index, @intCast(skin_index_n.?.integer)) catch unreachable;
                     result_nodes.append(allocator, scene_node_w_matrix{
                         .node = scene_node{
                             .skinned_mesh = zeng.skinned_mesh{
@@ -1689,7 +1725,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
         defer current_node_index += 1;
 
         if (current_node_n.object.get("name")) |name| {
-            result_names.put(current_node_index, name.string) catch unreachable;
+            result_name_map.put(current_node_index, name.string) catch unreachable;
         }
 
         var translation: zeng.vec3 = zeng.vec3.ZERO;
@@ -1715,34 +1751,40 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
 
         if (joint_to_skin.get(current_node_index)) |my_skeleton| {
             const index_within_skeleton = skeleton_space_maps.items[my_skeleton].get(current_node_index).?;
-            result_skeletons.items[my_skeleton].default_bone_translations[index_within_skeleton] = translation;
-            result_skeletons.items[my_skeleton].default_bone_rotations[index_within_skeleton] = rotation;
-            result_skeletons.items[my_skeleton].default_bone_scales[index_within_skeleton] = scale;
+            result_skeleton_list.items[my_skeleton].default_bone_translations[index_within_skeleton] = translation;
+            result_skeleton_list.items[my_skeleton].default_bone_rotations[index_within_skeleton] = rotation;
+            result_skeleton_list.items[my_skeleton].default_bone_scales[index_within_skeleton] = scale;
         }
     }
 
-    return .{ result_nodes.items, result_names, result_animations.items, result_animation_names.items, result_skeletons.items, result_children_map, result_top_level_objects, result_skinmesh_to_skeleton };
+    return .{
+        .mesh_slice = result_nodes.items,
+        .name_map = result_name_map,
+        .animation_slice = result_animation_list.items,
+        .animation_name_slice = result_animation_name_list.items,
+        .skeleton_slice = result_skeleton_list.items,
+        .parent_child_map = result_parent_child_map,
+        .top_level_children = result_top_level_children,
+        .skinned_mesh_to_skeleton = result_skinned_mesh_to_skeleton,
+        .collision_mesh_slice = result_collision_mesh_list.items,
+        .collision_matrix_slice = result_collision_matrix_list.items,
+        .collision_node_id_slice = result_collision_node_id_list.items,
+    };
 }
 pub const gltf_import_options = struct {
     generate_colliders: bool = true,
 };
-pub fn auto_import(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, default_texture: u32, allocator: std.mem.Allocator) ecs.entity_id {
-    const gltf_extraction_type = @typeInfo(@TypeOf(gltf_extract_resources)).@"fn".return_type.?;
+pub fn auto_import(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, default_texture: u32, allocator: std.mem.Allocator, collision_space: ?*zeng.collision_space_t) ecs.entity_id {
     const full_file_path = std.fmt.allocPrint(allocator, "{s}/{s}.gltf", .{ folder_name, file_name }) catch unreachable;
 
-    if (asset_reg.get_maybe(full_file_path, gltf_extraction_type)) |_cached_gltf_extraction| {
-        const mesh_slice, const names_map, _, _, const skeleton_slice, const parent_child_map, const top_level_children, const skinned_mesh_to_skeleton = _cached_gltf_extraction.*;
-        return zeng.loader.instantiate_model_hierarchy(mesh_slice, names_map, parent_child_map, top_level_children, skeleton_slice, skinned_mesh_to_skeleton, world, allocator);
+    if (asset_reg.get_maybe(full_file_path, imported_3d_scene)) |_imported| {
+        return zeng.loader.instantiate_model_hierarchy(_imported.*, world, allocator, collision_space);
     }
 
     const gltf_bytes = get_file_bytes(full_file_path, allocator);
-
     const parsed_gltf = gltf_parse(gltf_bytes, allocator);
-
-    if (parsed_gltf == null) {}
-
+    if (parsed_gltf == null) unreachable;
     var buffers = std.ArrayList([]u8).initCapacity(allocator, parsed_gltf.?.object.get("buffers").?.array.items.len) catch unreachable;
-
     const decoder = std.base64.Base64Decoder.init(std.base64.standard_alphabet_chars, '=');
     for (parsed_gltf.?.object.get("buffers").?.array.items) |buffer_n| {
         const byte_length: usize = @intCast(buffer_n.object.get("byteLength").?.integer);
@@ -1763,16 +1805,15 @@ pub fn auto_import(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, folde
         }
     }
 
-    const gltf_extraction: gltf_extraction_type = gltf_extract_resources(parsed_gltf, buffers.items, folder_name, allocator, skin_shader, static_shader, default_texture);
-    const cached_gltf_extraction = allocator.create(gltf_extraction_type) catch unreachable;
-    cached_gltf_extraction.* = gltf_extraction;
-    asset_reg.put(full_file_path, cached_gltf_extraction);
+    const imported = gltf_extract_resources(parsed_gltf, buffers.items, folder_name, allocator, skin_shader, static_shader, default_texture);
+    const cached_imported = allocator.create(imported_3d_scene) catch unreachable;
+    cached_imported.* = imported;
+    asset_reg.put(full_file_path, cached_imported);
 
-    const mesh_slice, const names_map, const animation_slice, const animation_name_slice, const skeleton_slice, const parent_child_map, const top_level_children, const skinned_mesh_to_skeleton = gltf_extraction;
-    for (animation_slice, animation_name_slice) |*_animation, animation_name| {
+    for (imported.animation_slice, imported.animation_name_slice) |*_animation, animation_name| {
         const full_animation_path = std.fmt.allocPrint(allocator, "{s}/animations/{s}", .{ full_file_path, animation_name }) catch unreachable;
         asset_reg.put(full_animation_path, _animation);
     }
 
-    return zeng.loader.instantiate_model_hierarchy(mesh_slice, names_map, parent_child_map, top_level_children, skeleton_slice, skinned_mesh_to_skeleton, world, allocator);
+    return zeng.loader.instantiate_model_hierarchy(imported, world, allocator, collision_space);
 }

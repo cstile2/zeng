@@ -27,7 +27,7 @@ pub var shoot_presentation_trigger: bool = false;
 
 /// Spawn a player prefab
 pub fn create_player(asset_reg: *asset_registry, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator, net_id_c: zeng.net_id_component) ecs.entity_id {
-    const player_gltf = zeng.loader.auto_import(asset_reg, world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, uv_checker_tex, allocator);
+    const player_gltf = zeng.loader.auto_import(asset_reg, world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, uv_checker_tex, allocator, null);
     world.add(player_component{ .velocity = zeng.vec3.ZERO, .ground_normal = zeng.vec3.UP, .grounded = false, .animation_controller = undefined, .camera = undefined }, player_gltf);
     world.add(rpc.input_message{ .tick = 0, .jump = false, .sprint = false, .move_vect = zeng.vec2.ZERO, .rot_x = 0.0, .rot_y = 0.0, .shoot = false, .aiming = false, .shoot_origin = undefined }, player_gltf);
     world.add(net_id_c, player_gltf);
@@ -49,7 +49,6 @@ pub fn create_player(asset_reg: *asset_registry, world: *ecs.world_t, skin_shade
 pub fn construct_local_player(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator) ecs.entity_id {
     const result = zeng.player_module.create_player(asset_reg, world, skin_shader, static_shader, uv_checker_tex, fet, top_children, allocator, .{ .net_id = zeng.get_new_netid(), .remote_peer = null });
     world.add(zeng.input_implement{ .move_fn = zeng.input_implement.default_move_fn, .jump_fn = zeng.input_implement.default_jump }, result);
-    world.get(result, zeng.world_matrix).?.* = zeng.mat_tran(world.get(result, zeng.world_matrix).?.*, zeng.vec3{ .y = 20.0, .x = 20.0 });
     world.add(@as(zeng.frame_interpolator, undefined), result);
     var found_entity = zeng.find_component_of_type(world, result, zeng.skinned_mesh, fet.fresh_query(.{zeng.children_component}));
     while (found_entity) |_| {
@@ -60,7 +59,7 @@ pub fn construct_local_player(asset_reg: *zeng.asset_registry_t, world: *ecs.wor
     return result;
 }
 pub fn construct_replicated_player(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator) ecs.entity_id {
-    const remote_player_entity = zeng.loader.auto_import(asset_reg, world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, uv_checker_tex, allocator);
+    const remote_player_entity = zeng.loader.auto_import(asset_reg, world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, uv_checker_tex, allocator, null);
     top_children.append(allocator, remote_player_entity) catch unreachable;
 
     world.get(world.get(remote_player_entity, zeng.children_component).?.items[0], zeng.local_matrix).?.transform = zeng.mat_tran(zeng.mat_identity, .{ .y = -0.84 });
@@ -105,7 +104,7 @@ pub fn shoot_system(player_distinguishing: *zeng.player_distinguishing_res, even
         if (entity_input.shoot) {
             const player_matrix = matrix_from_euler(entity_input.rot_x, entity_input.rot_y);
             const ray_direction = zeng.mat_mult_vec3(player_matrix, zeng.vec3{ .z = -100 });
-            const b_coll = phy.convex_collider{ .data = undefined, .matrix = zeng.mat_tran(zeng.mat_identity, entity_input.shoot_origin), .support = &phy.point, .tag = .support_based };
+            const b_coll = phy.convex_collider{ .data = undefined, .matrix = zeng.mat_tran(zeng.mat_identity, entity_input.shoot_origin), .support = &phy.point };
 
             const shg_result = phy.ray_cast_spatial_hashgrid(entity_input.shoot_origin, ray_direction, res.get(std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.convex_collider))), events);
 
@@ -114,7 +113,7 @@ pub fn shoot_system(player_distinguishing: *zeng.player_distinguishing_res, even
 
             for (involved_entities.items) |involved_entity| {
                 if (involved_entity == players_it.current_entity_id) continue;
-                const a_coll = phy.convex_collider{ .data = undefined, .matrix = world.get(involved_entity, zeng.world_matrix).?.*, .support = &phy.player_capsule, .tag = .support_based };
+                const a_coll = phy.convex_collider{ .data = undefined, .matrix = world.get(involved_entity, zeng.world_matrix).?.*, .support = &phy.player_capsule };
 
                 var enter_t: f32 = undefined;
                 var exit_t: f32 = undefined;
@@ -151,11 +150,11 @@ pub fn shoot_system(player_distinguishing: *zeng.player_distinguishing_res, even
 }
 
 /// Runs player collision once per tick
-pub fn player_collision_system(player_q: *ecs.query(.{ player_component, zeng.world_matrix }), tri_ev: *zeng.msg([3]zeng.vec3), spatial_hash_grid: *std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.convex_collider))) !void {
+pub fn player_collision_system(player_q: *ecs.query(.{ player_component, zeng.world_matrix }), collision_space: *zeng.collision_space_t, events: *zeng.events_t) !void {
     var player_it = player_q.iterator();
     while (player_it.next()) |player_curr| {
         const plyr, const world_matrix = player_curr;
-        simulate_collision(plyr, world_matrix, spatial_hash_grid, tri_ev);
+        simulate_collision(plyr, world_matrix, collision_space, events);
     }
 }
 /// Runs player movement simulation and visual animations once per tick
@@ -187,26 +186,27 @@ pub fn player_simulate_and_animate_system(asset_reg: *asset_registry, time: *tim
 }
 
 /// Collision detection for players - designed to be run multiple times per frame for latency compensation
-pub fn simulate_collision(plyr: *player_component, world_matrix: *zeng.world_matrix, spatial_hash_grid: *std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.convex_collider)), tri_ev: *zeng.msg([3]zeng.vec3)) void {
+pub fn simulate_collision(plyr: *player_component, world_matrix: *zeng.world_matrix, collision_space: *zeng.collision_space_t, events: *zeng.events_t) void {
     var capsule_collider = phy.convex_collider{ .data = undefined, .matrix = world_matrix.*, .support = phy.dual_point };
     const capsule_radius: f32 = 0.35;
 
     const old_grounded = plyr.grounded;
-    const old_ground_normal = plyr.ground_normal;
     var closest_dist = std.math.floatMax(f32);
-    var cloest_point: zeng.vec3 = undefined;
+    var closest_point: zeng.vec3 = undefined;
     var combined_normal = zeng.vec3.ZERO;
     var combined_normal_count: usize = 0;
     plyr.grounded = false;
 
-    // pub const TOL = 0.36;
+    var normals = std.ArrayList(zeng.vec3).initCapacity(std.heap.c_allocator, 0) catch unreachable;
+    defer normals.deinit(std.heap.c_allocator);
+
     const right, const left, const up, const down, const forward, const backward = phy.collider_bound_indices(capsule_collider, capsule_radius + 0.01);
 
-    var list_of_collision_cells = std.ArrayList(std.ArrayList(*phy.convex_collider)).initCapacity(std.heap.c_allocator, 0) catch unreachable;
-    defer list_of_collision_cells.deinit(std.heap.c_allocator);
+    var already_checked_collider_ptrs = std.AutoHashMap(*phy.convex_collider, void).init(std.heap.c_allocator);
+    defer already_checked_collider_ptrs.deinit();
 
-    var already_checked = std.AutoHashMap(*phy.convex_collider, void).init(std.heap.c_allocator);
-    defer already_checked.deinit();
+    var tri_count: usize = 0;
+    var cell_count: usize = 0;
 
     var i: isize = left;
     while (i <= right) {
@@ -225,67 +225,94 @@ pub fn simulate_collision(plyr: *player_component, world_matrix: *zeng.world_mat
                 //     .y = @as(f32, @floatFromInt(j)) * phy.GRID_SIZE,
                 //     .z = @as(f32, @floatFromInt(k)) * phy.GRID_SIZE,
                 // };
-                // tri_ev.send(.{ vec, vec.add(zeng.vec3.UP.mult(0.1)), vec.add(zeng.vec3.RIGHT.mult(0.1)) });
+                // events.send_local([3]zeng.vec3{ vec, vec.add(zeng.vec3.UP.mult_scalar(0.1)), vec.add(zeng.vec3.RIGHT.mult_scalar(0.1)) });
 
-                const collider_within_bounds = spatial_hash_grid.get(.{ i, j, k });
-                if (collider_within_bounds != null) list_of_collision_cells.append(std.heap.c_allocator, collider_within_bounds.?) catch unreachable;
-            }
-        }
-    }
+                if (collision_space.spatial_hash_grid.get(.{ i, j, k })) |cell_list| {
+                    cell_count += 1;
+                    for (cell_list.keys()) |collider| {
+                        if (already_checked_collider_ptrs.contains(collider)) continue;
+                        already_checked_collider_ptrs.put(collider, void{}) catch unreachable;
+                        tri_count += 1;
 
-    for (list_of_collision_cells.items) |curr_collision_cell| {
-        for (curr_collision_cell.items) |curr_collider| {
-            if (already_checked.contains(curr_collider)) continue;
-            already_checked.put(curr_collider, void{}) catch unreachable;
+                        _ = events;
+                        // const clean = collider.data.mesh_triangle_clean;
+                        // const tri = [3]zeng.vec3{
+                        //     zeng.mat_mult_vec3(collider.matrix, clean.mesh.positions[clean.mesh.indices[clean.triangle_index + 0]]),
+                        //     zeng.mat_mult_vec3(collider.matrix, clean.mesh.positions[clean.mesh.indices[clean.triangle_index + 1]]),
+                        //     zeng.mat_mult_vec3(collider.matrix, clean.mesh.positions[clean.mesh.indices[clean.triangle_index + 2]]),
+                        // };
+                        // events.send_local(tri);
 
-            std.debug.assert(curr_collider.tag == .support_based); // just for now
+                        // std.debug.assert(collider.data == .triangle);
+                        // std.debug.assert(collider.support == &phy.standalone_triangle);
 
-            _ = tri_ev;
-            // const coll_data = @as(*const phy.mesh_triangle_data, @ptrCast(@alignCast(curr_collider.data)));
-            // tri_ev.send(.{
-            //     zeng.mat_mult_vec4(curr_collider.matrix, coll_data.positions[coll_data.indices[0]].to_vec4(1.0)).to_vec3(),
-            //     zeng.mat_mult_vec4(curr_collider.matrix, coll_data.positions[coll_data.indices[1]].to_vec4(1.0)).to_vec3(),
-            //     zeng.mat_mult_vec4(curr_collider.matrix, coll_data.positions[coll_data.indices[2]].to_vec4(1.0)).to_vec3(),
-            // });
-
-            const p = phy.shape_separation(curr_collider.*, capsule_collider, 10);
-            if (p.length() < capsule_radius) {
-                if (p.neg().normalized().dot(zeng.vec3.UP) > 0.5) {
-                    plyr.grounded = true;
-                    plyr.ground_normal = p.neg().normalized();
+                        const p = phy.shape_separation(collider.*, capsule_collider, 10);
+                        if (p.length() < capsule_radius) {
+                            if (p.neg().normalized().dot(zeng.vec3.UP) > 0.5) {
+                                plyr.grounded = true;
+                                plyr.ground_normal = p.neg().normalized();
+                            }
+                            world_matrix.* = zeng.mat_tran(world_matrix.*, p.add(p.neg().normalized().mult_scalar(capsule_radius)));
+                            capsule_collider.matrix = world_matrix.*;
+                            combined_normal = combined_normal.add(p.neg().normalized());
+                            combined_normal_count += 1;
+                            normals.append(std.heap.c_allocator, p) catch unreachable;
+                        }
+                        if (p.length() < closest_dist and p.neg().normalized().dot(zeng.vec3.UP) > 0.5) {
+                            closest_point = p;
+                            closest_dist = p.length();
+                        }
+                    }
                 }
-                world_matrix.* = zeng.mat_tran(world_matrix.*, p.add(p.neg().normalized().mult_scalar(capsule_radius)));
-                capsule_collider.matrix = world_matrix.*;
-                combined_normal = combined_normal.add(p.neg().normalized());
-                combined_normal_count += 1;
-            }
-            if (p.length() < closest_dist) {
-                cloest_point = p;
-                closest_dist = p.length();
             }
         }
     }
 
-    if (old_grounded and !plyr.grounded) {
-        if (closest_dist < 0.6) {
-            std.debug.print("{}\n", .{cloest_point.neg().normalized().dot(zeng.vec3.UP) > 0.5});
-        } else {
-            std.debug.print("NOPE\n", .{});
-        }
-    }
+    // for (list_of_collision_cells.items) |curr_collision_cell| {
+    //     for (curr_collision_cell.items) |curr_collider| {
+    //         if (already_checked.contains(curr_collider)) continue;
+    //         already_checked.put(curr_collider, void{}) catch unreachable;
+
+    //         std.debug.assert(curr_collider.tag == .support_based); // just for now
+
+    //         _ = tri_ev;
+    //         // const coll_data = @as(*const phy.mesh_triangle_data, @ptrCast(@alignCast(curr_collider.data)));
+    //         // tri_ev.send(.{
+    //         //     zeng.mat_mult_vec4(curr_collider.matrix, coll_data.positions[coll_data.indices[0]].to_vec4(1.0)).to_vec3(),
+    //         //     zeng.mat_mult_vec4(curr_collider.matrix, coll_data.positions[coll_data.indices[1]].to_vec4(1.0)).to_vec3(),
+    //         //     zeng.mat_mult_vec4(curr_collider.matrix, coll_data.positions[coll_data.indices[2]].to_vec4(1.0)).to_vec3(),
+    //         // });
+
+    //         const p = phy.shape_separation(curr_collider.*, capsule_collider, 10);
+    //         if (p.length() < capsule_radius) {
+    //             if (p.neg().normalized().dot(zeng.vec3.UP) > 0.5) {
+    //                 plyr.grounded = true;
+    //                 plyr.ground_normal = p.neg().normalized();
+    //             }
+    //             world_matrix.* = zeng.mat_tran(world_matrix.*, p.add(p.neg().normalized().mult_scalar(capsule_radius)));
+    //             capsule_collider.matrix = world_matrix.*;
+    //             combined_normal = combined_normal.add(p.neg().normalized());
+    //             combined_normal_count += 1;
+    //         }
+    //         if (p.length() < closest_dist) {
+    //             cloest_point = p;
+    //             closest_dist = p.length();
+    //         }
+    //     }
+    // }
 
     if (old_grounded and !plyr.grounded and closest_dist < 0.6) {
-        if (cloest_point.neg().normalized().dot(zeng.vec3.UP) > 0.5 or cloest_point.neg().normalized().dot(old_ground_normal) > 0.5) {
+        if (closest_point.neg().normalized().dot(zeng.vec3.UP) > 0.5) {
             plyr.grounded = true;
-            plyr.ground_normal = cloest_point.neg().normalized();
-            world_matrix.* = zeng.mat_tran(world_matrix.*, cloest_point.add(cloest_point.neg().normalized().mult_scalar(capsule_radius)));
-            plyr.velocity = plyr.velocity.slide(cloest_point);
+            plyr.ground_normal = closest_point.neg().normalized();
+            world_matrix.* = zeng.mat_tran(world_matrix.*, closest_point.add(closest_point.neg().normalized().mult_scalar(capsule_radius)));
+            plyr.velocity = plyr.velocity.slide(plyr.ground_normal);
             return;
         }
     }
-    if (combined_normal_count > 0) {
-        plyr.velocity = plyr.velocity.slide(combined_normal);
-    }
+    if (combined_normal_count > 0) plyr.velocity = plyr.velocity.slide(combined_normal);
+
+    std.debug.print("grounded: {}   cell count: {}  |  tri count: {}\n", .{ plyr.grounded, cell_count, tri_count });
 }
 /// Player movement and logic - designed to be multiple times per frame for latency compensation
 pub fn simulate_player(_player: *player_component, input: *const rpc.input_message, matrix: *zeng.world_matrix, time: *time_res) void {

@@ -148,7 +148,8 @@ void main()
     // color = mix(color, fog_color, fog_t);
 
     // color = color / (color + vec3(1.0)); // tone mapping
+    // color *= 0.4;
     float avg = (color.x + color.y + color.z)/3.0;
-    color = color * 1.5 / (avg + 1.0);
+    color = color / (avg + 1.0);
     FragColor = vec4(color, opacity);
 }

@@ -558,50 +558,93 @@ pub const net_id_component = struct {
 pub const collision_space_t = struct {
     pub const client_id_t = u32;
     pub const cell_index = struct { isize, isize, isize };
+    pub const collider_list = struct {
+        chunks: std.ArrayList([]phy.convex_collider),
+        curr_index: usize,
+        allocator: std.mem.Allocator,
+        __last_appended_ptr: ?*phy.convex_collider,
 
-    pub const put_options_t = struct {
-        updated_entity: ?ecs.entity_id = null,
+        pub fn init(this: *@This(), allocator: std.mem.Allocator) void {
+            this.allocator = allocator;
+            this.chunks = std.ArrayList([]phy.convex_collider).initCapacity(allocator, 0) catch unreachable;
+            this.chunks.append(this.allocator, this.allocator.alloc(phy.convex_collider, 100000) catch unreachable) catch unreachable;
+            this.curr_index = 0;
+            this.__last_appended_ptr = null;
+        }
+        pub fn append(this: *@This(), collider: phy.convex_collider) void {
+            if (this.curr_index >= this.chunks.getLast().len) {
+                std.debug.print("cool\n", .{});
+                this.chunks.append(this.allocator, this.allocator.alloc(phy.convex_collider, 100000) catch unreachable) catch unreachable;
+                this.curr_index = 0;
+            }
+
+            this.__last_appended_ptr = &this.chunks.getLast()[this.curr_index];
+            this.__last_appended_ptr.?.* = collider;
+
+            this.curr_index += 1;
+        }
     };
 
-    all_colliders: std.AutoArrayHashMap(client_id_t, struct { phy.convex_collider, std.ArrayList(cell_index), ecs.entity_id }),
-    spatial_hash_grid: std.AutoHashMap(cell_index, std.AutoArrayHashMap(client_id_t, void)),
+    all_colliders: collider_list,
+    spatial_hash_grid: std.AutoHashMap(cell_index, std.AutoArrayHashMap(*phy.convex_collider, void)),
+    inverse: std.AutoHashMap(*phy.convex_collider, std.ArrayList(cell_index)),
+    entity_to_collider_collection: std.AutoHashMap(ecs.entity_id, std.ArrayList(*phy.convex_collider)),
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) @This() {
-        var new: @This() = undefined;
+    pub fn init(this: *@This(), allocator: std.mem.Allocator) void {
+        // this.all_colliders = .init(allocator);
+        // this.spatial_hash_grid = .init(allocator);
+        // this.allocator = allocator;
+        // this.stable_fixed_buffer = std.heap.FixedBufferAllocator.init(allocator.alloc(u8, 100000000) catch unreachable);
+        // this.stable_allocator = this.stable_fixed_buffer.allocator();
+        // this.curr_client_id = 0;
 
-        new.all_colliders = .init(allocator);
-        new.spatial_hash_grid = .init(allocator);
-        new.allocator = allocator;
-
-        return new;
+        this.all_colliders.init(allocator);
+        this.spatial_hash_grid = .init(allocator);
+        this.inverse = .init(allocator);
+        this.allocator = allocator;
+        this.entity_to_collider_collection = .init(allocator);
     }
     pub fn deinit(this: *@This()) void {
-        this.all_colliders.deinit();
-        this.spatial_hash_grid.deinit();
+        _ = this;
+        // this.all_colliders.deinit();
+        // this.spatial_hash_grid.deinit();
     }
 
-    pub fn register_client(this: *@This(), client_id: client_id_t, collider: phy.convex_collider, entity_id: ecs.entity_id) void {
-        const entry = this.all_colliders.getOrPut(client_id) catch unreachable;
-        if (entry.found_existing) { // deinit preexisting structure
-            entry.value_ptr.@"1".deinit(this.allocator);
+    pub fn add_collider(this: *@This(), collider: phy.convex_collider) *phy.convex_collider {
+        this.all_colliders.append(collider);
+
+        this.scatter_collider(this.all_colliders.__last_appended_ptr.?);
+
+        return this.all_colliders.__last_appended_ptr.?;
+    }
+
+    pub fn update_entity_collider(this: *@This(), entity: ecs.entity_id, entity_matrix: zeng.world_matrix) void {
+        const list = this.entity_to_collider_collection.get(entity).?;
+
+        for (list.items) |collider| {
+            collider.matrix = entity_matrix;
+            this.unscatter_collider(collider);
+            this.scatter_collider(collider);
+        }
+    }
+
+    pub fn unscatter_collider(this: *@This(), collider: *phy.convex_collider) void {
+        const list = this.inverse.get(collider).?;
+
+        for (list.items) |cell| {
+            if (cell[0] == 0 and cell[1] == 0 and cell[2] == -8) std.debug.print("unscatter: {*}\n", .{collider});
+
+            if (!this.spatial_hash_grid.getPtr(cell).?.swapRemove(collider)) unreachable;
         }
 
-        entry.value_ptr.* = .{ collider, std.ArrayList(cell_index).initCapacity(this.allocator, 0), entity_id };
+        if (!this.inverse.remove(collider)) unreachable;
     }
+    pub fn scatter_collider(this: *@This(), collider: *phy.convex_collider) void {
+        const right, const left, const up, const down, const forward, const backward = phy.collider_bound_indices(collider.*, 0.001);
 
-    pub fn update_matrix(this: *@This(), client_id: client_id_t, matrix: [16]f32) void {
-        const client_information = this.all_colliders.get(client_id);
-        client_information.?.@"0".matrix = matrix;
-    }
-
-    /// This function only ADDS information to the collision space. To UPDATE information, call remove() first, then call this
-    pub fn put(this: *@This(), client_id: client_id_t) void {
-        const client_information = this.all_colliders.get(client_id);
-
-        const right, const left, const up, const down, const forward, const backward = phy.collider_bound_indices(client_information.?.@"0", 0.001);
-
-        var new_list = std.ArrayList(cell_index).initCapacity(this.allocator, 0) catch unreachable;
+        var collider_cell_list = std.ArrayList(cell_index).initCapacity(this.allocator, 0) catch unreachable;
+        defer collider_cell_list.deinit(this.allocator);
 
         var i: isize = left;
         while (i <= right) {
@@ -615,29 +658,18 @@ pub const collision_space_t = struct {
                 while (k <= forward) {
                     defer k += 1;
 
-                    new_list.value_ptr.append(this.allocator, .{ i, j, k }) catch unreachable;
+                    collider_cell_list.append(this.allocator, .{ i, j, k }) catch unreachable;
 
                     const get_or_put_result = this.spatial_hash_grid.getOrPut(.{ i, j, k }) catch unreachable;
-                    if (!get_or_put_result.found_existing) get_or_put_result.value_ptr.* = std.AutoArrayHashMap(client_id_t, void).init();
+                    if (!get_or_put_result.found_existing) get_or_put_result.value_ptr.* = .init(this.allocator);
 
-                    get_or_put_result.value_ptr.put(client_id, void{}) catch unreachable;
+                    get_or_put_result.value_ptr.put(collider, void{}) catch unreachable;
                 }
             }
         }
-
-        client_information.?.@"1".appendSlice(this.allocator, new_list.items) catch unreachable;
-    }
-    pub fn remove(this: @This(), client_id: client_id_t) void {
-        const client_information = this.all_colliders.get(client_id);
-
-        for (client_information.?.@"1".items) |cell| {
-            const cell_stuff = this.spatial_hash_grid.get(cell);
-            if (cell_stuff) |_cell_stuff| {
-                _cell_stuff.swapRemove(client_id);
-            }
-        }
-
-        client_information.?.@"1".clearRetainingCapacity();
+        const inverse_entry = this.inverse.getOrPut(collider) catch unreachable;
+        if (!inverse_entry.found_existing) inverse_entry.value_ptr.* = std.ArrayList(cell_index).initCapacity(this.allocator, collider_cell_list.items.len) catch unreachable;
+        inverse_entry.value_ptr.appendSlice(this.allocator, collider_cell_list.items) catch unreachable;
     }
 };
 
@@ -729,6 +761,17 @@ pub fn recursive_delete_entities(entity: ecs.entity_id, world: *ecs.world_t) voi
         }
     }
     world.despawn(entity);
+}
+
+pub fn recurisve_update_collider(entity: ecs.entity_id, world: *ecs.world_t, collision_space: *collision_space_t) void {
+    if (!world.is_alive(entity)) return;
+    if (world.get(entity, zeng.children_component)) |entity_children| {
+        for (entity_children.items) |child| {
+            recurisve_update_collider(child, world, collision_space);
+        }
+    }
+    if (world.get(entity, zeng.mesh) == null) return;
+    collision_space.update_entity_collider(entity, world.get(entity, zeng.world_matrix).?.*);
 }
 
 pub fn binary_search(inputs: []const f32, time: f32) usize {
@@ -1492,17 +1535,6 @@ pub const resources_t = struct {
 };
 
 // Commands
-
-// pub fn GET_MSG_CODE(T: type) u32 {
-//     var count: u32 = 0;
-//     for (rpc.REMOTE_MESSAGE_TYPES) |msg_type| {
-//         if (msg_type == T) {
-//             return count;
-//         }
-//         count += 1;
-//     }
-//     @compileError("invalid remote message type!");
-// }
 pub const generated_types = @import("generated_types.zig");
 pub fn GET_MSG_CODE(T: type) u32 {
     var count: u32 = 0;
@@ -1942,6 +1974,9 @@ pub fn msg(T: type) type {
                 this.curr_index += 1;
                 return this.parent.items()[this.curr_index - 1];
             }
+            pub fn clear(this: *@This()) void {
+                this.parent.clear(this.parent.allocator);
+            }
             pub fn get_sender(this: *@This()) net.peer_info_t {
                 return this.parent.address_items()[this.curr_index - 1];
             }
@@ -2006,20 +2041,20 @@ pub const children_component = struct {
 pub const local_matrix = struct {
     transform: zeng.world_matrix = zeng.mat_identity,
 };
-pub fn sync_transforms_children(id: ecs.entity_id, q_transform: *ecs.query(.{zeng.world_matrix}), q_children: *ecs.query(.{children_component}), q_local_transform: *ecs.query(.{local_matrix})) void {
-    const global = q_transform.get(id, zeng.world_matrix) orelse return;
-    const childrens = q_transform.get(id, children_component) orelse return;
+pub fn sync_transforms_children(id: ecs.entity_id, world: *ecs.world_t) void {
+    const global = world.get(id, zeng.world_matrix).?;
+    const childrens = world.get(id, children_component) orelse return;
     for (childrens.items) |_c| {
-        sync_transforms_recursive(global.*, _c, q_transform, q_children, q_local_transform);
+        sync_transforms_recursive(global.*, _c, world);
     }
 }
-pub fn sync_transforms_recursive(parent_global: zeng.world_matrix, id: ecs.entity_id, q_transform: *ecs.query(.{zeng.world_matrix}), q_children: *ecs.query(.{children_component}), q_local_transform: *ecs.query(.{local_matrix})) void {
-    const local = q_local_transform.get(id, local_matrix) orelse return;
-    const global = q_transform.get(id, zeng.world_matrix) orelse return;
+pub fn sync_transforms_recursive(parent_global: zeng.world_matrix, id: ecs.entity_id, world: *ecs.world_t) void {
+    const local = world.get(id, local_matrix).?;
+    const global = world.get(id, zeng.world_matrix).?;
     global.* = zeng.mat_mult(parent_global, local.transform);
 
-    const childrens = q_transform.get(id, children_component) orelse return;
+    const childrens = world.get(id, children_component) orelse return;
     for (childrens.items) |_c| {
-        sync_transforms_recursive(global.*, _c, q_transform, q_children, q_local_transform);
+        sync_transforms_recursive(global.*, _c, world);
     }
 }

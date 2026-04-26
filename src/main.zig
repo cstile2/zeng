@@ -466,7 +466,7 @@ pub const sprite3D_mesh_res = struct {
 
 pub fn create_tower(res: *zeng.resources_t, allocator: std.mem.Allocator) ecs.entity_id {
     const default = res.get(rendering_defaults_res);
-    const root = zeng.loader.auto_import(res.get(zeng.asset_registry_t), res.get(ecs.world_t), "assets/gltf/people", "Female suit", default.skin_shader, default.static_shader, default.default_texture, allocator);
+    const root = zeng.loader.auto_import(res.get(zeng.asset_registry_t), res.get(ecs.world_t), "assets/gltf/people", "Female suit", default.skin_shader, default.static_shader, default.default_texture, allocator, null);
     const skinned = zeng.find_component_of_type_actual(res.get(ecs.world_t), root, zeng.skinned_mesh, res.get(zeng.resource_fetcher_t).fresh_query(.{zeng.children_component}));
     const sk = skinned.?.skeleton;
 
@@ -530,7 +530,6 @@ pub fn main() !void {
     var world: ecs.world_t = ecs.world_t.init(allocator);
     defer world.deinit();
     var fet: zeng.resource_fetcher_t = .{ .world = &world, .res = &res, .allocator = arena_allocator };
-    // var main_hot_reloader = hot_reloader{};
 
     _ = try std.Thread.spawn(.{}, aud.audio_engine_run, .{});
     zeng.global_world_ptr = &world;
@@ -570,14 +569,17 @@ pub fn main() !void {
 
     var top_children = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
     defer top_children.deinit(allocator);
+    var collision_space: zeng.collision_space_t = undefined;
+    collision_space.init(allocator);
+    defer collision_space.deinit();
+    res.insert_ptr(&collision_space);
 
-    zeng.loader.generate_colliders_on_import = false;
-    const pistol_entity = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf", "pistol", skin_shader, static_shader, white_tex, arena_allocator);
+    const pistol_entity = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf", "pistol", skin_shader, static_shader, white_tex, arena_allocator, null);
     top_children.append(allocator, pistol_entity) catch unreachable;
 
     const cube_entity = world.spawn(.{ cube_mesh, zeng.mat_tran(zeng.mat_identity, .{ .x = -7.0, .y = 2.0 }), zeng.floater_component{} });
 
-    const test_entity = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, white_tex, arena_allocator);
+    const test_entity = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, white_tex, arena_allocator, &collision_space);
     top_children.append(allocator, test_entity) catch unreachable;
     const test_random_skinned_mesh = zeng.find_component_of_type(&world, test_entity, zeng.skinned_mesh, fet.fresh_query(.{zeng.children_component})).?;
     const test_skeleton_entity = world.get(test_random_skinned_mesh, zeng.skinned_mesh).?.skeleton;
@@ -586,14 +588,16 @@ pub fn main() !void {
     world.add(zeng.auto_animate_component{}, test_skeleton_entity);
 
     const player_entity = zeng.player_module.construct_local_player(&asset_registry, &world, skin_shader, static_shader, uv_checker_tex, &fet, &top_children, arena_allocator);
+    world.get(player_entity, zeng.world_matrix).?.* = zeng.mat_tran(world.get(player_entity, zeng.world_matrix).?.*, zeng.vec3{ .y = 5.0 });
 
-    zeng.loader.generate_colliders_on_import = true;
-    const map_entity = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf", "outdoor_map_6_8_25", skin_shader, static_shader, uv_checker_tex, arena_allocator);
+    const map_entity = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf", "outdoor_map_6_8_25", skin_shader, static_shader, uv_checker_tex, arena_allocator, &collision_space);
     top_children.append(allocator, map_entity) catch unreachable;
 
-    // const new = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf", "modular_building_set", skin_shader, static_shader, uv_checker_tex, arena_allocator);
-    // top_children.append(allocator, new) catch unreachable;
-    // world.get(new, zeng.world_matrix).?.* = zeng.mat_scal_aligned(world.get(new, zeng.world_matrix).?.*, zeng.vec3.ONE.mult_scalar(2.0));
+    const new = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf", "modular_building_set", skin_shader, static_shader, uv_checker_tex, arena_allocator, &collision_space);
+    top_children.append(allocator, new) catch unreachable;
+    world.get(new, zeng.world_matrix).?.* = zeng.mat_scal_aligned(world.get(new, zeng.world_matrix).?.*, zeng.vec3.ONE.mult_scalar(1.5));
+    zeng.sync_transforms_children(new, &world);
+    zeng.recurisve_update_collider(new, &world, &collision_space);
 
     res.insert(rendering_defaults_res{ .default_texture = uv_checker_tex, .skin_shader = skin_shader, .static_shader = static_shader });
     res.insert_ptr(&res);
@@ -625,9 +629,6 @@ pub fn main() !void {
     res.insert_ptr(&inverse_peer_map);
     res.insert(zeng.shadow_map_res.init(allocator));
     res.insert(zeng.mouse_state_res{ .mouse_position = undefined, .mouse_pressed = undefined, .mouse_released = undefined });
-    var colliders = std.ArrayList(phy.convex_collider).initCapacity(allocator, 0) catch unreachable;
-    defer colliders.deinit(allocator);
-    res.insert_ptr(&colliders);
     var spatial_hash_grid = std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.convex_collider)).init(allocator);
     defer spatial_hash_grid.deinit();
     res.insert_ptr(&spatial_hash_grid);
@@ -648,28 +649,10 @@ pub fn main() !void {
     const sdf_text_rect_mesh = zeng.mesh{ .vao_gpu = square_vao, .indices_length = square_indices_length, .indices_type = zeng.gl.UNSIGNED_INT, .material = undefined };
     var events = zeng.events_t{ .commands = &commands, .tracker = &tracker, .res = &res };
     res.insert_ptr(&events);
-    var collision_space = zeng.collision_space_t.init(allocator);
-    defer collision_space.deinit();
-    res.insert_ptr(&collision_space);
+
     inline for (zeng.generated_types.net_event_types) |T| res.insert(msg(T).init(allocator, true));
 
     top_children.append(allocator, create_tower(&res, arena_allocator)) catch unreachable;
-
-    { // construct spatial hash grid
-        for (zeng.loader.global_collider_meshes.?.items, zeng.loader.global_matrices.?.items) |_mesh, _matrix| {
-            var curr_tri: usize = 0;
-            while (curr_tri < _mesh.indices.len) { // turn each mesh into a bunch of individual triangle colliders
-                defer curr_tri += 3;
-                const cool = arena_allocator.create(phy.mesh_triangle_data) catch unreachable;
-                cool.positions = _mesh.positions;
-                cool.indices = .{ _mesh.indices[curr_tri], _mesh.indices[curr_tri + 1], _mesh.indices[curr_tri + 2] };
-                const collider = phy.convex_collider{ .matrix = _matrix, .support = phy.mesh_triangle, .tag = .support_based, .data = @ptrCast(cool) };
-                colliders.append(allocator, collider) catch unreachable;
-            }
-        }
-        // center grid cell is centered at (0,0)
-        phy.construct_spatial_hash_grid(colliders, &spatial_hash_grid, arena_allocator);
-    }
 
     var accumulator: f64 = 0.0;
     var tick: isize = 0;
@@ -700,7 +683,6 @@ pub fn main() !void {
     }, .start, CODEBLOCKPRINT_event);
     var dragging_code_block: ?*cb_code_block = null;
     var mouse_down_last_frame = false;
-    // var selected_parameter: ?*cb_parameter = null;
 
     var proc_anim: proc = .{ .res = &res };
 
@@ -721,9 +703,6 @@ pub fn main() !void {
     var hit_indicator_direction: zeng.vec3 = .ZERO;
     var hit_indicator_timer: f32 = 0.0;
 
-    // var game_api = main_hot_reloader.hot_reload_api() catch unreachable;
-    // main_hot_reloader.store_last_dll_write_time("zig-out/bin/hot_reload.dll");
-
     // var positions: [1028]zeng.vec3 = undefined;
     // var positions_len: usize = 0;
 
@@ -738,12 +717,6 @@ pub fn main() !void {
         if (res.get_maybe(zeng.multiplayer_res)) |mr| {
             zeng.net.recieve_net_messages(mr.main_socket, &res, allocator, &tracker);
         }
-
-        // main_hot_reloader.try_new_api(&game_api);
-
-        const world_matrix_q = fet.fresh_query(.{zeng.world_matrix});
-        const children_q = fet.fresh_query(.{zeng.children_component});
-        const local_matrix_q = fet.fresh_query(.{zeng.local_matrix});
 
         const mouse_state = res.get(zeng.mouse_state_res);
         mouse_state.mouse_position = vec2{ .x = @floatFromInt(zeng.global_mouse_screen_pos[0]), .y = @floatFromInt(zeng.global_mouse_screen_pos[1]) };
@@ -833,11 +806,11 @@ pub fn main() !void {
                             break;
                         }
                         zeng.player_module.simulate_player(world.get(player_entity, zeng.player_module.player_component).?, &im, world.get(player_entity, zeng.world_matrix).?, res.get(zeng.time_res));
-                        zeng.player_module.simulate_collision(world.get(player_entity, zeng.player_module.player_component).?, world.get(player_entity, zeng.world_matrix).?, &spatial_hash_grid, res.get(msg([3]zeng.vec3)));
+                        zeng.player_module.simulate_collision(world.get(player_entity, zeng.player_module.player_component).?, world.get(player_entity, zeng.world_matrix).?, &collision_space, &events);
                     }
                     draw_resims = @intCast(@max(tick - snap_event.tick, 0));
 
-                    zeng.sync_transforms_children(player_entity, world_matrix_q, children_q, local_matrix_q);
+                    zeng.sync_transforms_children(player_entity, &world);
                 }
                 var missed_input_events = res.get(msg(rpc.speed_client_up)).iterator();
                 while (missed_input_events.iterate()) |_| {
@@ -1007,14 +980,14 @@ pub fn main() !void {
             const interpolated_matrix = player_interpolator.get_matrix(@as(f32, @floatCast(accumulator / fixed_delta)));
             zeng.mat_position_set(&(res.get(zeng.shadow_map_res).camera_matrix), zeng.mat_position(interpolated_matrix).add(.{ .y = 15, .z = 8 }));
 
-            proc_anim.procedural_animation(interpolated_matrix, pistol_entity, world_matrix_q, children_q, local_matrix_q);
+            proc_anim.procedural_animation(interpolated_matrix, pistol_entity);
             // _ = &proc_anim;
 
             result = null;
         }
         for (top_children.items) |ch| { // sync all transforms TODO: make a "root" entity and use a children component to achieve this concept
             if (!world.is_alive(ch)) continue;
-            zeng.sync_transforms_children(ch, world_matrix_q, children_q, local_matrix_q);
+            zeng.sync_transforms_children(ch, &world);
         }
         if (multiplayer != null and !multiplayer.?.is_server) { // animation host player on client
             const skel = world.get(multiplayer.?.replicated_player_skeleton_entity, zeng.skeleton).?;
@@ -1268,6 +1241,10 @@ pub fn main() !void {
             while (delete_events.iterate()) |curr_delete_event| {
                 zeng.recursive_delete_entities(curr_delete_event.entity_id, &world);
             }
+            var debug_triangle_events = res.get(msg([3]zeng.vec3)).iterator();
+            while (debug_triangle_events.iterate()) |t| {
+                zeng.render.debug_draw_triangle(t, &res);
+            }
             commands.process_commands(&world);
             net.send_net_messages(&commands, res.get(zeng.time_res).delta_time_f64, &tracker);
             zeng.key_press_messages.clearAndFree(allocator);
@@ -1429,7 +1406,7 @@ pub const proc = struct {
     pistol_lerped_bob: zeng.vec3 = .ZERO,
 
     res: *zeng.resources_t,
-    pub fn procedural_animation(this: *@This(), interpolated_matrix: [16]f32, pistol_entity: ecs.entity_id, world_matrix_q: anytype, children_q: anytype, local_matrix_q: anytype) void {
+    pub fn procedural_animation(this: *@This(), interpolated_matrix: [16]f32, pistol_entity: ecs.entity_id) void {
         const delta_time = this.res.get(zeng.time_res).delta_time;
         const world = this.res.get(ecs.world_t);
         const main_camera = this.res.get(zeng.main_camera_res).id;
@@ -1480,8 +1457,8 @@ pub const proc = struct {
             zeng.mat_mult(zeng.mat_axis_angle(zeng.vec3.RIGHT, @as(f32, @floatCast(local_player_input.rot_y)) + this.lerped_camera_recoil), zeng.mat_identity),
         );
         cam_matrix.* = zeng.mat_mult(zeng.mat_axis_angle(zeng.vec3.FORWARD, util.perlin(this.camera_shake_position) * 0.05 * this.camera_shake_amount), cam_matrix.*);
-        cam_matrix.* = zeng.mat_mult(zeng.mat_axis_angle(zeng.mat_forward(cam_matrix.*), 0.01 * @sin(2.0 * 3.1415 * this.player_step_phase)), cam_matrix.*);
-        zeng.mat_position_set(cam_matrix, camera_target_position.add(zeng.vec3{ .y = 0.8 + 0.02 * @sin(4.0 * 3.1415 * this.player_step_phase) }));
+        // cam_matrix.* = zeng.mat_mult(zeng.mat_axis_angle(zeng.mat_forward(cam_matrix.*), 0.01 * @sin(2.0 * 3.1415 * this.player_step_phase)), cam_matrix.*);
+        zeng.mat_position_set(cam_matrix, camera_target_position.add(zeng.vec3{ .y = 0.8 })); // + 0.02 * @sin(4.0 * 3.1415 * this.player_step_phase) }));
 
         const pistol_local_position: zeng.vec3 = .{ .z = -0.17, .x = 0.13, .y = -0.15 };
         const pistol_local_position2: zeng.vec3 = .{ .z = -0.17, .y = -0.11 };
@@ -1535,14 +1512,14 @@ pub const proc = struct {
         const new_pistol_mat = zeng.mat_mult(cam_matrix.*, zeng.mat_tran(zeng.mat_axis_angle(zeng.vec3.RIGHT, this.pistol_recoil_rotation), pistol_lerped_location));
 
         world.get(pistol_entity, zeng.world_matrix).?.* = new_pistol_mat;
-        zeng.sync_transforms_children(pistol_entity, world_matrix_q, children_q, local_matrix_q);
+        zeng.sync_transforms_children(pistol_entity, world);
 
         this.camera_recoil -= 0.5 * delta_time;
         if (this.camera_recoil < 0.0) this.camera_recoil = 0.0;
         this.lerped_camera_recoil = zeng.lerp(this.lerped_camera_recoil, this.camera_recoil, 14.0 * delta_time);
 
         for (world.get(player_entity, zeng.children_component).?.items) |child_item| {
-            zeng.sync_transforms_recursive(interpolated_matrix, child_item, world_matrix_q, children_q, local_matrix_q);
+            zeng.sync_transforms_recursive(interpolated_matrix, child_item, world);
         }
     }
 };
@@ -1577,3 +1554,7 @@ pub const proc = struct {
 // so when the map is imported, and then resized, we would need to call grid.update(client_id) for each client_id in the client_list of each mesh entity seen when traversing from the root scene entity.
 
 // we will also be able to support dynamic entities as well. prob just need to consolidate ray casting triangles with gjk shapecasting
+
+// TOO SLOW
+// all_colliders: list(collider) (stable pointers)
+// spatial_hash_grid: hashmap(cell, *collider)
