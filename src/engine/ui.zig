@@ -23,9 +23,9 @@ pub const box_drawer_t = struct {
     vao: u32,
     indices_len: c_int,
 
-    pub fn init(this: *@This(), allocator: std.mem.Allocator) void {
+    pub fn init(this: *@This(), io: std.Io, allocator: std.mem.Allocator) void {
         this.vao, this.indices_len = zeng.loader.create_cornered_square_mesh();
-        this.shader_program = zeng.loader.load_shader(allocator, "assets/shaders/rectangle_vertex.shader", "assets/shaders/rectangle_fragment.shader");
+        this.shader_program = zeng.loader.load_shader(io, allocator, "assets/shaders/rectangle_vertex.shader", "assets/shaders/rectangle_fragment.shader");
     }
 
     pub fn draw_img(self: *const @This(), ctx: zeng.graphics_t, x: f32, y: f32, w: f32, h: f32, _color: zeng.render.color, texture: u32, radius: f32) void {
@@ -299,10 +299,10 @@ pub const font_info = struct {
     tex_height: usize,
     shader_program: u32,
 };
-pub fn parse_font_descriptor(path: []const u8) font_info {
+pub fn parse_font_descriptor(path: []const u8, io: std.Io, alloactor: std.mem.Allocator) font_info {
     var buffer: [256]u8 = undefined;
     const fnt_file_path = std.fmt.bufPrint(buffer[0..], "{s}.fnt", .{path}) catch unreachable;
-    const data = zeng.loader.get_file_bytes(fnt_file_path, std.heap.c_allocator);
+    const data = zeng.loader.get_file_bytes(fnt_file_path, alloactor, io);
 
     const png_file_path = std.fmt.bufPrint(buffer[0..], "{s}.png\x00", .{path}) catch unreachable;
 
@@ -328,7 +328,7 @@ pub fn parse_font_descriptor(path: []const u8) font_info {
         fcis[count] = font_character_info{ .id = id, .x = x, .y = y, .width = width, .height = height, .xoffset = xoffset, .yoffset = yoffset, .xadvance = xadvance };
     }
 
-    return font_info{ .character_infos = fcis, .tex = zeng.loader.load_texture_options(png_file_path, .{ .min_filter = .linear, .mag_filter = .linear }), .shader_program = zeng.loader.load_shader(std.heap.c_allocator, "assets/shaders/sdf_text_vertex.shader", "assets/shaders/sdf_text_fragment.shader"), .tex_width = scaleW, .tex_height = scaleH };
+    return font_info{ .character_infos = fcis, .tex = zeng.loader.load_texture_options(png_file_path, .{ .min_filter = .linear, .mag_filter = .linear }), .shader_program = zeng.loader.load_shader(io, std.heap.c_allocator, "assets/shaders/sdf_text_vertex.shader", "assets/shaders/sdf_text_fragment.shader"), .tex_width = scaleW, .tex_height = scaleH };
 }
 
 pub fn parse_helper(str: []const u8, data: []const u8, curr: *usize, T: type) ?T {

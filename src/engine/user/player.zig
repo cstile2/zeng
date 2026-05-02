@@ -27,8 +27,8 @@ pub const player_component = struct {
 pub var shoot_presentation_trigger: bool = false;
 
 /// Spawn a player prefab
-pub fn create_player(asset_reg: *asset_registry, world: *ecs.world_t, skin_shader: u32, static_shader: u32, default_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator, net_id_c: zeng.net_id_component) ecs.entity_id {
-    const player_gltf = zeng.loader.auto_import(asset_reg, world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, default_tex, allocator, null);
+pub fn create_player(asset_reg: *asset_registry, world: *ecs.world_t, skin_shader: u32, static_shader: u32, default_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), io: std.Io, allocator: std.mem.Allocator, net_id_c: zeng.net_id_component) ecs.entity_id {
+    const player_gltf = zeng.loader.auto_import(asset_reg, world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, default_tex, io, allocator, null);
     world.add(player_component{ .velocity = zeng.vec3.ZERO, .ground_normal = zeng.vec3.UP, .grounded = false, .animation_controller = undefined, .camera = undefined }, player_gltf);
     world.add(rpc.input_message{ .tick = 0, .jump = false, .sprint = false, .move_vect = zeng.vec2.ZERO, .rot_x = 0.0, .rot_y = 0.0, .shoot = false, .aiming = false, .shoot_origin = undefined }, player_gltf);
     world.add(net_id_c, player_gltf);
@@ -44,8 +44,8 @@ pub fn create_player(asset_reg: *asset_registry, world: *ecs.world_t, skin_shade
     return player_gltf;
 }
 /// Spawn a host player prefab in a server
-pub fn construct_local_player(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator) ecs.entity_id {
-    const result = zeng.player_module.create_player(asset_reg, world, skin_shader, static_shader, uv_checker_tex, fet, top_children, allocator, .{ .net_id = zeng.get_new_netid(), .remote_peer = null });
+pub fn construct_local_player(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), io: std.Io, allocator: std.mem.Allocator) ecs.entity_id {
+    const result = zeng.player_module.create_player(asset_reg, world, skin_shader, static_shader, uv_checker_tex, fet, top_children, io, allocator, .{ .net_id = zeng.get_new_netid(), .remote_peer = null });
     world.add(zeng.input_implement{ .move_fn = zeng.input_implement.default_move_fn, .jump_fn = zeng.input_implement.default_jump }, result);
     world.add(@as(zeng.frame_interpolator, undefined), result);
     var found_entity = zeng.find_component_of_type(world, result, zeng.skinned_mesh, fet.fresh_query(.{zeng.children_component}));
@@ -56,8 +56,8 @@ pub fn construct_local_player(asset_reg: *zeng.asset_registry_t, world: *ecs.wor
     zeng.global_player_entity = result;
     return result;
 }
-pub fn construct_replicated_player(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator) ecs.entity_id {
-    const remote_player_entity = zeng.loader.auto_import(asset_reg, world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, uv_checker_tex, allocator, null);
+pub fn construct_replicated_player(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), io: std.Io, allocator: std.mem.Allocator) ecs.entity_id {
+    const remote_player_entity = zeng.loader.auto_import(asset_reg, world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, uv_checker_tex, io, allocator, null);
     top_children.append(allocator, remote_player_entity) catch unreachable;
 
     world.get(world.get(remote_player_entity, zeng.children_component).?.items[0], zeng.local_matrix).?.transform = zeng.mat_tran(zeng.mat_identity, .{ .y = -0.84 });

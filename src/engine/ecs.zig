@@ -120,19 +120,19 @@ pub fn count_component(_world: *world_t, component_type: type) usize {
 pub fn query(comptime component_list: anytype) type {
     return struct {
         pub const TYPES: @TypeOf(component_list) = component_list;
-        relevant_tables: std.AutoArrayHashMap(archetype_id, *const archetype_table),
+        relevant_tables: std.array_hash_map.Auto(archetype_id, *const archetype_table),
         ordered_component_columns: std.ArrayList([component_list.len]component_column), // make columns faster during iteration
         locations: *const std.AutoHashMap(entity_id, unstable_entity_location),
 
         pub fn create_and_gather(w: *world_t, allocator: std.mem.Allocator) @This() {
             const minimum_set_hash = comptime COMP_TYPELIST_TO_HASH(component_list);
             var ret: @This() = undefined;
-            ret.relevant_tables = std.AutoArrayHashMap(archetype_id, *const archetype_table).init(allocator);
+            ret.relevant_tables = std.array_hash_map.Auto(archetype_id, *const archetype_table).init(allocator, &.{}, &.{}) catch unreachable;
             ret.ordered_component_columns = std.ArrayList([component_list.len]component_column).initCapacity(allocator, component_list.len) catch unreachable;
             ret.locations = &w.locations;
             for (w.tables.values()) |*table| {
                 if (table.archetype_hash & minimum_set_hash == minimum_set_hash) {
-                    ret.relevant_tables.put(table.archetype_hash, table) catch unreachable;
+                    ret.relevant_tables.put(allocator, table.archetype_hash, table) catch unreachable;
                     ret.ordered_component_columns.append(allocator, undefined) catch unreachable;
                     inline for (comptime 0..component_list.len) |i| {
                         ret.ordered_component_columns.items[ret.ordered_component_columns.items.len - 1][i] = table.storages.get(comptime COMP_TYPE_TO_ID(component_list[i])).?;
@@ -141,8 +141,8 @@ pub fn query(comptime component_list: anytype) type {
             }
             return ret;
         }
-        pub fn deinit(this: *@This()) void {
-            this.relevant_tables.deinit();
+        pub fn deinit(this: *@This(), allocator: std.mem.Allocator) void {
+            this.relevant_tables.deinit(allocator);
         }
 
         pub fn get(this: @This(), entity: entity_id, T: type) ?*T {
@@ -155,38 +155,34 @@ pub fn query(comptime component_list: anytype) type {
     };
 }
 pub fn query_iterator(comptime types: anytype) type {
-    comptime var tuple_fields2: [types.len]std.builtin.Type.StructField = undefined;
+    // comptime var tuple_fields2: [types.len]std.builtin.Type.StructField = undefined;
+    // comptime for (types, 0..) |_type, i| {
+    //     tuple_fields2[i] = .{
+    //         .type = _type,
+    //         .name = std.fmt.comptimePrint("c_{}", .{_type}),
+    //         .default_value_ptr = null,
+    //         .is_comptime = false,
+    //         .alignment = @alignOf(_type),
+    //     };
+    // };
+    // comptime var tuple_fields: [types.len]std.builtin.Type.StructField = undefined;
+    comptime var tuple_field_names: [types.len][]const u8 = undefined;
+    comptime var tuple_field_types: [types.len]type = undefined;
+    comptime var tuple_field_attributes: [types.len]std.builtin.Type.StructField.Attributes = undefined;
     comptime for (types, 0..) |_type, i| {
-        tuple_fields2[i] = .{
-            .type = _type,
-            .name = std.fmt.comptimePrint("c_{}", .{_type}),
-            .default_value_ptr = null,
-            .is_comptime = false,
-            .alignment = @alignOf(_type),
-        };
+        // tuple_fields[i] = .{
+        //     .type = *_type,
+        //     .name = std.fmt.comptimePrint("{d}", .{i}),
+        //     .default_value_ptr = null,
+        //     .is_comptime = false,
+        //     .alignment = @alignOf(*_type),
+        // };
+        tuple_field_names[i] = std.fmt.comptimePrint("{d}", .{i});
+        tuple_field_types[i] = *_type;
+        tuple_field_attributes[i] = .{};
     };
-    comptime var tuple_fields: [types.len]std.builtin.Type.StructField = undefined;
-    comptime for (types, 0..) |_type, i| {
-        tuple_fields[i] = .{
-            .type = *_type,
-            .name = std.fmt.comptimePrint("{d}", .{i}),
-            .default_value_ptr = null,
-            .is_comptime = false,
-            .alignment = @alignOf(*_type),
-        };
-    };
-    const ptrs_to_components = @Type(.{ .@"struct" = .{
-        .layout = .auto,
-        .fields = &tuple_fields,
-        .decls = &.{},
-        .is_tuple = true,
-    } });
-    const ptrs_to_components_struct = @Type(.{ .@"struct" = .{
-        .layout = .auto,
-        .fields = &tuple_fields2,
-        .decls = &.{},
-        .is_tuple = false,
-    } });
+    const ptrs_to_components = @Tuple(&tuple_field_types);
+    // const ptrs_to_components_struct = @Struct(.auto, null, &tuple_fields2, &.{}, false);
 
     return struct {
         _parent_query: *const query(types),
@@ -215,26 +211,26 @@ pub fn query_iterator(comptime types: anytype) type {
             this._current_table_index += 1;
             return component_ptrs;
         }
-        pub fn next_entity(this: *@This()) ?ptrs_to_components_struct {
-            if (this._parent_query_relevant_tables.len == 0) return null;
-            while (this._current_table_index >= this._parent_query_relevant_tables[this._current_table].count) {
-                if (this._current_table + 1 < this._parent_query_relevant_tables.len) {
-                    this._current_table += 1;
-                    this._current_table_index = 0;
-                } else return null;
-            }
+        // pub fn next_entity(this: *@This()) ?ptrs_to_components_struct {
+        //     if (this._parent_query_relevant_tables.len == 0) return null;
+        //     while (this._current_table_index >= this._parent_query_relevant_tables[this._current_table].count) {
+        //         if (this._current_table + 1 < this._parent_query_relevant_tables.len) {
+        //             this._current_table += 1;
+        //             this._current_table_index = 0;
+        //         } else return null;
+        //     }
 
-            var current_columns = this._parent_query.ordered_component_columns.items[this._current_table];
+        //     var current_columns = this._parent_query.ordered_component_columns.items[this._current_table];
 
-            var component_ptrs: ptrs_to_components = undefined;
-            inline for (&component_ptrs, comptime 0..) |*component_ptr, i| {
-                component_ptr.* = current_columns[i].get(this._current_table_index, @TypeOf(component_ptr.*.*));
-            }
-            this.current_entity_id = this._parent_query_relevant_tables[this._current_table].public_ids[this._current_table_index];
+        //     var component_ptrs: ptrs_to_components = undefined;
+        //     inline for (&component_ptrs, comptime 0..) |*component_ptr, i| {
+        //         component_ptr.* = current_columns[i].get(this._current_table_index, @TypeOf(component_ptr.*.*));
+        //     }
+        //     this.current_entity_id = this._parent_query_relevant_tables[this._current_table].public_ids[this._current_table_index];
 
-            this._current_table_index += 1;
-            return component_ptrs;
-        }
+        //     this._current_table_index += 1;
+        //     return component_ptrs;
+        // }
 
         pub fn reset(this: *@This()) void {
             this._current_table_index = 0;
@@ -245,7 +241,7 @@ pub fn query_iterator(comptime types: anytype) type {
 
 /// Contains all entities for an ECS system and is needed to use the ECS
 pub const world_t = struct {
-    tables: std.AutoArrayHashMap(archetype_id, archetype_table),
+    tables: std.array_hash_map.Auto(archetype_id, archetype_table),
     allocator: std.mem.Allocator,
     new_public_id: entity_id = 0,
     locations: std.AutoHashMap(entity_id, unstable_entity_location),
@@ -254,7 +250,7 @@ pub const world_t = struct {
     pub fn init(allocator: std.mem.Allocator) world_t {
         return .{
             .allocator = allocator,
-            .tables = std.AutoArrayHashMap(archetype_id, archetype_table).init(allocator),
+            .tables = std.array_hash_map.Auto(archetype_id, archetype_table).init(allocator, &.{}, &.{}) catch unreachable,
             .locations = std.AutoHashMap(entity_id, unstable_entity_location).init(allocator),
         };
     }
@@ -263,7 +259,7 @@ pub const world_t = struct {
         for (this.tables.values()) |*table| {
             table.deinit();
         }
-        this.tables.deinit();
+        this.tables.deinit(this.allocator);
         this.locations.deinit();
     }
 
@@ -400,7 +396,7 @@ pub const world_t = struct {
 
     /// internal helper function - retrieve an archetype table and create one if none exists
     pub fn ensure_table(this: *world_t, arch_id: archetype_id) !*archetype_table {
-        const table_get_put = try this.tables.getOrPut(arch_id);
+        const table_get_put = try this.tables.getOrPut(this.allocator, arch_id);
 
         if (table_get_put.found_existing) return table_get_put.value_ptr;
 
@@ -446,7 +442,7 @@ pub const world_t = struct {
 /// holds all of the component storage objects for a given archetype of an entity - allows for simple, fast iteration on arrays
 pub const archetype_table = struct {
     archetype_hash: u64 = 0,
-    storages: std.AutoArrayHashMap(component_id, component_column),
+    storages: std.array_hash_map.Auto(component_id, component_column),
     public_ids: []entity_id,
     capacity: u64 = 0,
     count: u64 = 0,
@@ -455,7 +451,7 @@ pub const archetype_table = struct {
     pub fn init(this: *archetype_table, capacity: u64, allocator: std.mem.Allocator) void {
         this.allocator = allocator;
         this.archetype_hash = 0;
-        this.storages = std.AutoArrayHashMap(component_id, component_column).init(allocator);
+        this.storages = std.array_hash_map.Auto(component_id, component_column).init(allocator, &.{}, &.{}) catch unreachable;
         this.public_ids = allocator.alloc(entity_id, capacity) catch unreachable;
         this.capacity = capacity;
         this.count = 0;
@@ -464,7 +460,7 @@ pub const archetype_table = struct {
         for (this.storages.values()) |*component_storage| {
             component_storage.deinit(this.allocator);
         }
-        this.storages.deinit();
+        this.storages.deinit(this.allocator);
         this.allocator.free(this.public_ids);
     }
 
@@ -473,7 +469,7 @@ pub const archetype_table = struct {
 
         var new: component_column = undefined;
         try new.init(T_run, this.capacity, this.allocator);
-        try this.storages.putNoClobber(T_run.component_id, new);
+        try this.storages.putNoClobber(this.allocator, T_run.component_id, new);
     }
     pub fn add_entity_from_components(this: *archetype_table, component_values: anytype) !void {
         this.ensure_enough_capacity() catch unreachable;

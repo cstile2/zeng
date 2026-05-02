@@ -696,14 +696,14 @@ pub fn ray_cast_collision_space(ro: zeng.vec3, rd: zeng.vec3, collision_space: *
     var y_accum: f32 = delta_raydist_from_delta_axis(positive_dir, x_dist_to_travel, 1);
     var z_accum: f32 = delta_raydist_from_delta_axis(positive_dir, x_dist_to_travel, 2);
 
-    var relevant_colliders = std.AutoArrayHashMap(*convex_collider, void).init(std.heap.c_allocator);
-    defer relevant_colliders.deinit();
+    var relevant_colliders = std.array_hash_map.Auto(*convex_collider, void).init(std.heap.c_allocator, &.{}, &.{}) catch unreachable;
+    defer relevant_colliders.deinit(std.heap.c_allocator);
 
     while (true) {
         const cell_of_colliders = collision_space.spatial_hash_grid.get(current_cell);
         if (cell_of_colliders != null) {
             for (cell_of_colliders.?.keys()) |collider| {
-                relevant_colliders.put(collider, void{}) catch unreachable;
+                relevant_colliders.put(std.heap.c_allocator, collider, void{}) catch unreachable;
             }
         }
         const minimum = @min(x_accum, y_accum, z_accum);
@@ -711,15 +711,15 @@ pub fn ray_cast_collision_space(ro: zeng.vec3, rd: zeng.vec3, collision_space: *
         if (minimum == x_accum) {
             x_accum += delta_raydist_from_delta_axis(positive_dir, x_dist_to_travel, 0);
             x_dist_to_travel = GRID_SIZE;
-            current_cell[0] += @intFromFloat(std.math.sign(rd.x));
+            current_cell[0] += @intCast(std.math.sign(rd.x));
         } else if (minimum == y_accum) {
             y_accum += delta_raydist_from_delta_axis(positive_dir, y_dist_to_travel, 1);
             y_dist_to_travel = GRID_SIZE;
-            current_cell[1] += @intFromFloat(std.math.sign(rd.y));
+            current_cell[1] += @intCast(std.math.sign(rd.y));
         } else if (minimum == z_accum) {
             z_accum += delta_raydist_from_delta_axis(positive_dir, z_dist_to_travel, 2);
             z_dist_to_travel = GRID_SIZE;
-            current_cell[2] += @intFromFloat(std.math.sign(rd.z));
+            current_cell[2] += @intCast(std.math.sign(rd.z));
         } else {
             std.debug.print("accums: {} {} {}\n", .{ x_accum, y_accum, z_accum });
             unreachable;

@@ -10,24 +10,7 @@ pub fn fn_parameter_type_array(comptime t: std.builtin.Type) [t.@"fn".params.len
     return types;
 }
 pub fn type_array_to_tuple_type(comptime types: anytype) type {
-    var struct_fields: [types.len]std.builtin.Type.StructField = undefined;
-    for (types, 0..) |_type, i| {
-        struct_fields[i] = .{
-            .type = _type,
-            .name = std.fmt.comptimePrint("{d}", .{i}),
-            .default_value_ptr = null,
-            .is_comptime = false,
-            .alignment = @alignOf(_type),
-        };
-    }
-    const payload_type = @Type(.{
-        .@"struct" = .{
-            .layout = .auto,
-            .fields = &struct_fields,
-            .decls = &.{},
-            .is_tuple = true,
-        },
-    });
+    const payload_type = @Tuple(&types);
     return payload_type;
 }
 pub fn tuple_of_ptrs(comptime types: anytype) type {
@@ -41,14 +24,7 @@ pub fn tuple_of_ptrs(comptime types: anytype) type {
             .alignment = @alignOf(_type),
         };
     };
-    const payload_type = @Type(.{
-        .Struct = .{
-            .layout = .Auto,
-            .fields = &struct_fields,
-            .decls = &.{},
-            .is_tuple = true,
-        },
-    });
+    const payload_type = @Struct(.auto, null, &struct_fields, &.{}, true);
     return payload_type;
 }
 pub fn type_id(comptime T: type) usize {

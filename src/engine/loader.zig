@@ -3,19 +3,18 @@ const zeng = @import("zeng.zig");
 const ecs = @import("ecs.zig");
 const phy = @import("physics.zig");
 
-pub fn get_file_bytes(filepath: []const u8, allocator: std.mem.Allocator) []u8 {
+pub fn get_file_bytes(filepath: []const u8, allocator: std.mem.Allocator, io: std.Io) []u8 {
     // open file from filepath > close after done
-    const file = std.fs.cwd().openFile(filepath, .{}) catch unreachable;
-    defer file.close();
+    const file = std.Io.Dir.cwd().openFile(io, filepath, .{}) catch unreachable;
+    defer file.close(io);
 
     // get size of the file (in bytes)
-    const stat = file.stat() catch unreachable;
+    const stat = file.stat(io) catch unreachable;
 
     // read the file and store it into a dynamically allocated array of u8 > return as a slice
     const buf = allocator.alloc(u8, stat.size) catch unreachable;
-    var reader = file.reader(buf);
-    const n = reader.file.read(buf) catch unreachable;
-    return buf[0..n];
+    const contents = std.Io.Dir.readFile(std.Io.Dir.cwd(), io, filepath, buf) catch unreachable;
+    return contents;
 }
 pub fn separate_text(text: []const u8, comptime delimiter: u8, allocator: std.mem.Allocator) [][]u8 {
     var ret = allocator.alloc([]u8, 50) catch unreachable;
@@ -43,11 +42,11 @@ pub fn separate_text(text: []const u8, comptime delimiter: u8, allocator: std.me
 
     return ret[0..ret_count];
 }
-pub fn load_shader(allocator: std.mem.Allocator, vertex_path: anytype, fragment_path: anytype) u32 {
+pub fn load_shader(io: std.Io, allocator: std.mem.Allocator, vertex_path: anytype, fragment_path: anytype) u32 {
     var ret: u32 = undefined;
 
     // get code from vertex shader file as a string
-    const vert_shader_code = get_file_bytes(vertex_path, allocator);
+    const vert_shader_code = get_file_bytes(vertex_path, allocator, io);
     defer allocator.free(vert_shader_code);
 
     // take vertex shader code > send to GPU > compile
@@ -64,7 +63,7 @@ pub fn load_shader(allocator: std.mem.Allocator, vertex_path: anytype, fragment_
     }
 
     // get code from fragment shader file as a string
-    var frag_shader_code = zeng.loader.get_file_bytes(fragment_path, allocator);
+    var frag_shader_code = zeng.loader.get_file_bytes(fragment_path, allocator, io);
     defer allocator.free(frag_shader_code);
 
     // take fragment shader code > send to GPU > compile
@@ -1066,8 +1065,8 @@ pub fn buffer_view_to_slice(buffer_view_n: *gltf.node, buffers: []const []const 
     return buffers[buffer][byte_offset .. byte_offset + byte_length];
 }
 
-pub fn add_to_group(key: usize, value: ecs.entity_id, group_map: *std.AutoArrayHashMap(usize, ?std.ArrayList(ecs.entity_id)), allocator: std.mem.Allocator) void {
-    const ptr = group_map.getOrPut(key) catch unreachable;
+pub fn add_to_group(key: usize, value: ecs.entity_id, group_map: *std.array_hash_map.Auto(usize, ?std.ArrayList(ecs.entity_id)), allocator: std.mem.Allocator) void {
+    const ptr = group_map.getOrPut(allocator, key) catch unreachable;
 
     if (!ptr.found_existing) {
         ptr.value_ptr.* = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
@@ -1106,8 +1105,8 @@ pub fn instantiate_model_hierarchy(imported: imported_3d_scene, world: *ecs.worl
         skeleton_entity_list.append(allocator, skeleton_copy_entity) catch unreachable;
     }
 
-    var group_map = std.AutoArrayHashMap(usize, ?std.ArrayList(ecs.entity_id)).init(allocator);
-    var gltf_id_to_entity_id = std.AutoArrayHashMap(usize, ecs.entity_id).init(allocator);
+    var group_map = std.array_hash_map.Auto(usize, ?std.ArrayList(ecs.entity_id)).init(allocator, &.{}, &.{}) catch unreachable;
+    var gltf_id_to_entity_id = std.array_hash_map.Auto(usize, ecs.entity_id).init(allocator, &.{}, &.{}) catch unreachable;
     var root_child_list = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
     for (imported.mesh_slice) |mesh_like| {
         var entity_id: ecs.entity_id = undefined;
@@ -1125,7 +1124,7 @@ pub fn instantiate_model_hierarchy(imported: imported_3d_scene, world: *ecs.worl
                 world.add(name, entity_id);
             }
             if (imported.top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
-            gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
+            gltf_id_to_entity_id.put(allocator, mesh_like.gltf_id, entity_id) catch unreachable;
             add_to_group(mesh_like.gltf_id, entity_id, &group_map, allocator);
         } else if (mesh_like.node == .static_mesh) {
             entity_id = world.spawn(.{
@@ -1137,7 +1136,7 @@ pub fn instantiate_model_hierarchy(imported: imported_3d_scene, world: *ecs.worl
                 world.add(name, entity_id);
             }
             if (imported.top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
-            gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
+            gltf_id_to_entity_id.put(allocator, mesh_like.gltf_id, entity_id) catch unreachable;
             add_to_group(mesh_like.gltf_id, entity_id, &group_map, allocator);
         } else if (mesh_like.node == .empty) {
             entity_id = world.spawn(.{
@@ -1146,7 +1145,7 @@ pub fn instantiate_model_hierarchy(imported: imported_3d_scene, world: *ecs.worl
             });
 
             if (imported.top_level_children.contains(mesh_like.gltf_id)) root_child_list.append(allocator, entity_id) catch unreachable;
-            gltf_id_to_entity_id.put(mesh_like.gltf_id, entity_id) catch unreachable;
+            gltf_id_to_entity_id.put(allocator, mesh_like.gltf_id, entity_id) catch unreachable;
             add_to_group(mesh_like.gltf_id, entity_id, &group_map, allocator);
         }
         if (imported.name_map.get(mesh_like.gltf_id)) |name| {
@@ -1207,7 +1206,7 @@ pub const imported_3d_scene = struct {
     animation_slice: []animation,
     animation_name_slice: [][]const u8,
     skeleton_slice: []zeng.skeleton,
-    parent_child_map: std.AutoArrayHashMap(usize, std.ArrayList(usize)),
+    parent_child_map: std.array_hash_map.Auto(usize, std.ArrayList(usize)),
     top_level_children: std.AutoHashMap(usize, void),
     skinned_mesh_to_skeleton: std.AutoHashMap(usize, usize),
     collision_mesh_slice: []zeng.cpu_mesh,
@@ -1229,7 +1228,7 @@ pub fn gltf_extract_resources(root_n: *gltf.node, buffers: []const []const u8, d
     var result_animation_list = std.ArrayList(animation).initCapacity(allocator, 0) catch unreachable;
     var result_animation_name_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
     var result_skeleton_list = std.ArrayList(zeng.skeleton).initCapacity(allocator, 0) catch unreachable;
-    var result_parent_child_map = std.AutoArrayHashMap(usize, std.ArrayList(usize)).init(allocator);
+    var result_parent_child_map = std.array_hash_map.Auto(usize, std.ArrayList(usize)).init(allocator, &.{}, &.{}) catch unreachable;
     var result_skinned_mesh_to_skeleton = std.AutoHashMap(usize, usize).init(allocator);
 
     var result_collision_mesh_list = std.ArrayList(zeng.cpu_mesh).initCapacity(allocator, 0) catch unreachable;
@@ -1378,7 +1377,7 @@ pub fn gltf_extract_resources(root_n: *gltf.node, buffers: []const []const u8, d
             }
 
             if (entry.items.len > 0) {
-                result_parent_child_map.put(current_node_index, entry) catch unreachable; // assign a set of children to this node in output
+                result_parent_child_map.put(allocator, current_node_index, entry) catch unreachable; // assign a set of children to this node in output
             } else entry.deinit(allocator);
         }
 
@@ -1750,14 +1749,14 @@ pub fn gltf_extract_resources(root_n: *gltf.node, buffers: []const []const u8, d
 pub const gltf_import_options = struct {
     generate_colliders: bool = true,
 };
-pub fn auto_import(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, default_texture: u32, allocator: std.mem.Allocator, collision_space: ?*zeng.collision_space_t) ecs.entity_id {
+pub fn auto_import(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, folder_name: anytype, file_name: anytype, skin_shader: u32, static_shader: u32, default_texture: u32, io: std.Io, allocator: std.mem.Allocator, collision_space: ?*zeng.collision_space_t) ecs.entity_id {
     const full_file_path = std.fmt.allocPrint(allocator, "{s}/{s}.gltf", .{ folder_name, file_name }) catch unreachable;
 
     if (asset_reg.get_maybe(full_file_path, imported_3d_scene)) |_imported| {
         return zeng.loader.instantiate_model_hierarchy(_imported.*, world, allocator, collision_space);
     }
 
-    const gltf_bytes = get_file_bytes(full_file_path, allocator);
+    const gltf_bytes = get_file_bytes(full_file_path, allocator, io);
     const parsed_gltf = gltf_parse(gltf_bytes, allocator);
     var buffers = std.ArrayList([]u8).initCapacity(allocator, parsed_gltf.?.object.get("buffers").?.array.items.len) catch unreachable;
     const decoder = std.base64.Base64Decoder.init(std.base64.standard_alphabet_chars, '=');
@@ -1774,7 +1773,7 @@ pub fn auto_import(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, folde
             buffers.append(allocator, data) catch unreachable;
         } else {
             const full_data_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ folder_name, uri.?.string }) catch unreachable;
-            const bin_bytes = get_file_bytes(full_data_path, allocator);
+            const bin_bytes = get_file_bytes(full_data_path, allocator, io);
 
             buffers.append(allocator, bin_bytes) catch unreachable;
         }

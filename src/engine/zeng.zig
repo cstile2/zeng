@@ -378,11 +378,11 @@ pub const shadow_map_res = struct {
     projection_matrix: [16]f32,
     sampler_linear: u32,
 
-    pub fn init(allocator: std.mem.Allocator) @This() {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator) @This() {
         var ret: @This() = undefined;
         ret.shadow_width = 1028;
         ret.shadow_height = 1028;
-        ret.shader_program = loader.load_shader(allocator, "assets/shaders/light_map_vertex.shader", "assets/shaders/light_map_fragment.shader");
+        ret.shader_program = loader.load_shader(io, allocator, "assets/shaders/light_map_vertex.shader", "assets/shaders/light_map_fragment.shader");
 
         ret.camera_matrix = mat_tran(mat_axis_angle(zeng.vec3.RIGHT, -3.14159 / 3.0), .{ .y = -5 });
         ret.projection_matrix = mat_ortho(-15, 15, -15, 15, 0, 40);
@@ -581,7 +581,7 @@ pub const collision_space_t = struct {
     };
 
     all_colliders: collider_list,
-    spatial_hash_grid: std.AutoHashMap(cell_index, std.AutoArrayHashMap(*phy.convex_collider, void)),
+    spatial_hash_grid: std.AutoHashMap(cell_index, std.array_hash_map.Auto(*phy.convex_collider, void)),
     inverse: std.AutoHashMap(*phy.convex_collider, std.ArrayList(cell_index)),
     entity_to_collider_collection: std.AutoHashMap(ecs.entity_id, std.ArrayList(*phy.convex_collider)),
     allocator: std.mem.Allocator,
@@ -654,9 +654,9 @@ pub const collision_space_t = struct {
                     collider_cell_list.append(this.allocator, .{ i, j, k }) catch unreachable;
 
                     const get_or_put_result = this.spatial_hash_grid.getOrPut(.{ i, j, k }) catch unreachable;
-                    if (!get_or_put_result.found_existing) get_or_put_result.value_ptr.* = .init(this.allocator);
+                    if (!get_or_put_result.found_existing) get_or_put_result.value_ptr.* = std.array_hash_map.Auto(*phy.convex_collider, void).init(this.allocator, &.{}, &.{}) catch unreachable;
 
-                    get_or_put_result.value_ptr.put(collider, void{}) catch unreachable;
+                    get_or_put_result.value_ptr.put(this.allocator, collider, void{}) catch unreachable;
                 }
             }
         }
@@ -1462,7 +1462,7 @@ pub const resource_fetcher_t = struct {
             q_ptr.* = ecs.query(component_list).create_and_gather(this.world, this.allocator);
         } else {
             // query was found, but we want to refresh it
-            q_ptr.deinit();
+            q_ptr.deinit(this.allocator);
             q_ptr.* = ecs.query(component_list).create_and_gather(this.world, this.allocator);
         }
         return q_ptr;
@@ -1470,11 +1470,11 @@ pub const resource_fetcher_t = struct {
 };
 
 pub const resources_t = struct {
-    map: std.AutoArrayHashMap(usize, *anyopaque),
+    map: std.array_hash_map.Auto(usize, *anyopaque),
     allocator: std.mem.Allocator,
 
     pub fn init(this: *@This(), allocator: std.mem.Allocator, __graphics: *graphics_t) void {
-        this.map = std.AutoArrayHashMap(usize, *anyopaque).init(allocator);
+        this.map = std.array_hash_map.Auto(usize, *anyopaque).init(allocator, &.{}, &.{}) catch unreachable;
         this.allocator = allocator;
         _ = c.SetWindowLongPtrW(__graphics.hwnd, c.GWLP_USERDATA, @intCast(@intFromPtr(this)));
         this.insert_ptr(__graphics);
@@ -1487,7 +1487,7 @@ pub const resources_t = struct {
         const new_guy = this.allocator.create(@TypeOf(p)) catch unreachable;
         new_guy.* = p;
 
-        const a = this.map.getOrPut(utils.type_id(@TypeOf(p))) catch unreachable;
+        const a = this.map.getOrPut(this.allocator, utils.type_id(@TypeOf(p))) catch unreachable;
         if (a.found_existing) {
             const ref = @as(*@TypeOf(p), @ptrCast(@alignCast(a.value_ptr.*)));
             this.allocator.destroy(ref);
@@ -1497,7 +1497,7 @@ pub const resources_t = struct {
     pub fn insert_ptr(this: *resources_t, p: anytype) void {
         const erased = @as(*anyopaque, @ptrCast(p));
         const type_id = utils.type_id(@typeInfo(@TypeOf(p)).pointer.child);
-        this.map.put(type_id, erased) catch unreachable;
+        this.map.put(this.allocator, type_id, erased) catch unreachable;
     }
     pub fn get(this: *@This(), p: type) *p {
         if (!this.map.contains(utils.type_id(p))) {
@@ -1520,7 +1520,7 @@ pub const resources_t = struct {
         } else {
             undef = true;
             const new_guy = this.allocator.create(p) catch unreachable;
-            this.map.put(utils.type_id(p), @ptrCast(new_guy)) catch unreachable;
+            this.map.put(this.allocator, utils.type_id(p), @ptrCast(new_guy)) catch unreachable;
             gotten = new_guy;
         }
         return .{ gotten, undef };
