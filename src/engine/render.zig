@@ -31,9 +31,8 @@ pub fn draw_text(string: []const u8, font_info: ui.font_info, mesh: zeng.mesh, x
         horizontal += curr_info.xadvance;
     }
 }
-pub fn draw_mesh(entity_mesh: zeng.mesh, entity_transform: zeng.world_matrix, projection_matrix: [16]f32, inv_camera_matrix: [16]f32, camera_position: zeng.vec3, light_space_matrix: [16]f32, shadow_map: *zeng.shadow_map_res) void {
-
-    // use shader program > bind VAO > bind texture
+var noise_tex: ?u32 = null;
+pub fn draw_animated_skinned_mesh(world: *ecs.world_t, entity_mesh: anytype, entity_transform: zeng.world_matrix, projection_matrix: [16]f32, inv_camera_matrix: [16]f32, camera_position: zeng.vec3, light_space_matrix: [16]f32, shadow_map: *zeng.shadow_map_res) void {
     zeng.gl.useProgram(entity_mesh.material.shader_program);
     zeng.gl.bindVertexArray(entity_mesh.vao_gpu);
 
@@ -58,7 +57,10 @@ pub fn draw_mesh(entity_mesh: zeng.mesh, entity_transform: zeng.world_matrix, pr
     const clip_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "clip");
     zeng.gl.uniformMatrix4fv(world_location, 1, zeng.gl.FALSE, &entity_transform);
     zeng.gl.uniformMatrix4fv(clip_location, 1, zeng.gl.FALSE, &clip_matrix);
-
+    if (@TypeOf(entity_mesh) == zeng.skinned_mesh) {
+        const bone_matrices_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "bone_matrices");
+        zeng.gl.uniformMatrix4fv(bone_matrices_location, 100, zeng.gl.FALSE, @ptrCast(world.get(entity_mesh.skeleton, zeng.skeleton).?.model_bone_matrices));
+    }
     const base_color_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "albedo");
     const base_color = entity_mesh.material.parameter_map.get("albedo").?.float_3;
     zeng.gl.uniform3fv(base_color_location, 1, @ptrCast(&base_color));
@@ -84,44 +86,6 @@ pub fn draw_mesh(entity_mesh: zeng.mesh, entity_transform: zeng.world_matrix, pr
 
     const light_space_matrix_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "lightSpaceMatrix");
     zeng.gl.uniformMatrix4fv(light_space_matrix_location, 1, zeng.gl.FALSE, &light_space_matrix);
-
-    zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, entity_mesh.indices_type, null);
-}
-var noise_tex: ?u32 = null;
-pub fn draw_animated_skinned_mesh(world: *ecs.world_t, entity_mesh: zeng.skinned_mesh, entity_transform: zeng.world_matrix, projection_matrix: [16]f32, inv_camera_matrix: [16]f32, camera_position: zeng.vec3) void {
-    zeng.gl.useProgram(entity_mesh.material.shader_program);
-    zeng.gl.bindVertexArray(entity_mesh.vao_gpu);
-
-    const base_color_texture = entity_mesh.material.parameter_map.get("albedo_texture").?.texture;
-    zeng.gl.bindTexture(zeng.gl.TEXTURE_2D, base_color_texture);
-
-    var clip_matrix = zeng.mat_mult(projection_matrix, zeng.mat_mult(inv_camera_matrix, entity_transform));
-    const bone_matrices_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "bone_matrices");
-    const world_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "world");
-    const clip_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "clip");
-    zeng.gl.uniformMatrix4fv(world_location, 1, zeng.gl.FALSE, &entity_transform);
-    zeng.gl.uniformMatrix4fv(clip_location, 1, zeng.gl.FALSE, &clip_matrix);
-    zeng.gl.uniformMatrix4fv(bone_matrices_location, 100, zeng.gl.FALSE, @ptrCast(world.get(entity_mesh.skeleton, zeng.skeleton).?.model_bone_matrices));
-
-    const base_color_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "albedo");
-    const base_color = entity_mesh.material.parameter_map.get("albedo").?.float_3;
-    zeng.gl.uniform3fv(base_color_location, 1, @ptrCast(&base_color));
-
-    const lights_locations_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "light_positions");
-    zeng.gl.uniform3fv(lights_locations_location, 4, @ptrCast(&[4]zeng.vec3{ zeng.vec3{ .y = 1 }, zeng.vec3{}, zeng.vec3{}, zeng.vec3{} }));
-    const lights_colors_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "light_colors");
-    zeng.gl.uniform3fv(lights_colors_location, 4, @ptrCast(&[4]zeng.vec3{ zeng.vec3.ONE.mult_scalar(5), zeng.vec3{}, zeng.vec3{}, zeng.vec3{} }));
-
-    const metallic = entity_mesh.material.parameter_map.get("metallic").?.float_1;
-    const metallic_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "metallic");
-    zeng.gl.uniform1f(metallic_location, metallic);
-    const roughness = entity_mesh.material.parameter_map.get("roughness").?.float_1;
-    const roughness_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "roughness");
-    zeng.gl.uniform1f(roughness_location, roughness);
-    const ao_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "ao");
-    zeng.gl.uniform1f(ao_location, 1.0);
-    const cam_pos_location = zeng.gl.getUniformLocation(entity_mesh.material.shader_program, "cam_pos");
-    zeng.gl.uniform3fv(cam_pos_location, 1, @ptrCast(&camera_position));
 
     zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, entity_mesh.indices_type, null);
 }

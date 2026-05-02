@@ -10,10 +10,12 @@ layout (location = 4) in vec4 my_bone_weights;
 uniform mat4 bone_matrices[100];
 uniform mat4 world;
 uniform mat4 clip;
+uniform mat4 lightSpaceMatrix;
 
 out vec3 f_normal;
 out vec2 f_tex_coord;
 out vec3 world_pos;
+out vec4 FragPosLightSpace;
 
 void main() {
     vec4 blend_pos = vec4(0.0);
@@ -26,9 +28,9 @@ void main() {
     }
     blend_normal = world * blend_normal;
     
+    f_normal = normalize(blend_normal.xyz);
     gl_Position = clip * blend_pos;
     world_pos = (world * blend_pos).xyz;
-
-    f_normal = normalize(blend_normal.xyz);
+    FragPosLightSpace = lightSpaceMatrix * vec4(world_pos, 1.0);
     f_tex_coord = v_tex_coord;
 }

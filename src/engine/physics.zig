@@ -681,10 +681,10 @@ pub fn ray_cast_group(ro: vec3, rd: vec3, physics_data: anytype) raycast_result_
     }
     return result;
 }
-pub fn ray_cast_spatial_hashgrid(ro: zeng.vec3, rd: zeng.vec3, spatial_hash_grid: *std.AutoHashMap(ivec3, std.ArrayList(*convex_collider)), events: *zeng.events_t) raycast_result_t {
+pub fn ray_cast_collision_space(ro: zeng.vec3, rd: zeng.vec3, collision_space: *zeng.collision_space_t, events: *zeng.events_t) raycast_result_t {
     // this can be made more efficient by exiting early - if there is a hit at a cell, then we know there wont be a closer one later on. So we need to test against each cell group one after the other.
     _ = events;
-    var current_cell = ivec3{ quantize(ro.x, GRID_SIZE), quantize(ro.y, GRID_SIZE), quantize(ro.z, GRID_SIZE) };
+    var current_cell = zeng.collision_space_t.cell_index{ quantize(ro.x, GRID_SIZE), quantize(ro.y, GRID_SIZE), quantize(ro.z, GRID_SIZE) };
 
     const positive_dir = zeng.vec3{ .x = @abs(rd.x), .y = @abs(rd.y), .z = @abs(rd.z) };
 
@@ -700,9 +700,9 @@ pub fn ray_cast_spatial_hashgrid(ro: zeng.vec3, rd: zeng.vec3, spatial_hash_grid
     defer relevant_colliders.deinit();
 
     while (true) {
-        const cell_of_colliders = spatial_hash_grid.get(current_cell);
+        const cell_of_colliders = collision_space.spatial_hash_grid.get(current_cell);
         if (cell_of_colliders != null) {
-            for (cell_of_colliders.?.items) |collider| {
+            for (cell_of_colliders.?.keys()) |collider| {
                 relevant_colliders.put(collider, void{}) catch unreachable;
             }
         }

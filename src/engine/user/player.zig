@@ -21,21 +21,19 @@ pub const player_component = struct {
     animation_controller: ecs.entity_id,
     tilt: zeng.vec3 = zeng.vec3.ZERO,
     camera: ecs.entity_id,
+    enemy: bool = false,
 };
 
 pub var shoot_presentation_trigger: bool = false;
 
 /// Spawn a player prefab
-pub fn create_player(asset_reg: *asset_registry, world: *ecs.world_t, skin_shader: u32, static_shader: u32, uv_checker_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator, net_id_c: zeng.net_id_component) ecs.entity_id {
-    const player_gltf = zeng.loader.auto_import(asset_reg, world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, uv_checker_tex, allocator, null);
+pub fn create_player(asset_reg: *asset_registry, world: *ecs.world_t, skin_shader: u32, static_shader: u32, default_tex: u32, fet: *zeng.resource_fetcher_t, top_children: *std.ArrayList(ecs.entity_id), allocator: std.mem.Allocator, net_id_c: zeng.net_id_component) ecs.entity_id {
+    const player_gltf = zeng.loader.auto_import(asset_reg, world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, default_tex, allocator, null);
     world.add(player_component{ .velocity = zeng.vec3.ZERO, .ground_normal = zeng.vec3.UP, .grounded = false, .animation_controller = undefined, .camera = undefined }, player_gltf);
     world.add(rpc.input_message{ .tick = 0, .jump = false, .sprint = false, .move_vect = zeng.vec2.ZERO, .rot_x = 0.0, .rot_y = 0.0, .shoot = false, .aiming = false, .shoot_origin = undefined }, player_gltf);
     world.add(net_id_c, player_gltf);
-
     world.get(world.get(player_gltf, zeng.children_component).?.items[0], zeng.local_matrix).?.transform = zeng.mat_tran(zeng.mat_identity, .{ .y = -0.84 });
 
-    // find the first instance of a skinned mesh component > retrieve the entity with that skeleton > add animation component to the player skeleton entity > ...
-    // attach skeleton entity to the animation_controller on player > add netid to player
     if (zeng.find_component_of_type(world, player_gltf, zeng.skinned_mesh, fet.fresh_query(.{zeng.children_component}))) |player_random_skinned_mesh| {
         const player_skeleton_entity = world.get(player_random_skinned_mesh, zeng.skinned_mesh).?.skeleton;
         world.add(zeng.animation_component{ .time = 0.0, .current_animation = 0 }, player_skeleton_entity);
@@ -81,7 +79,7 @@ fn matrix_from_euler(x: f64, y: f64) zeng.world_matrix {
 }
 
 /// Allows the player to shoot their gun
-pub fn shoot_system(player_distinguishing: *zeng.player_distinguishing_res, events: *zeng.events_t, res: *zeng.resources_t, players_query: *ecs.query(.{ rpc.input_message, zeng.world_matrix, zeng.net_id_component }), peer_map: *std.AutoHashMap(net.peer_info_t, zeng.client_info), world: *ecs.world_t) !void {
+pub fn shoot_system(player_distinguishing: *zeng.player_distinguishing_res, events: *zeng.events_t, res: *zeng.resources_t, players_query: *ecs.query(.{ rpc.input_message, zeng.world_matrix, zeng.net_id_component }), peer_map: *std.AutoHashMap(net.peer_info_t, zeng.client_info), collision_space: *zeng.collision_space_t, world: *ecs.world_t) !void {
     if (world.get(player_distinguishing.main_player_id, rpc.input_message).?.shoot) shoot_presentation_trigger = true;
 
     const mr = res.get_maybe(zeng.multiplayer_res);
@@ -106,7 +104,7 @@ pub fn shoot_system(player_distinguishing: *zeng.player_distinguishing_res, even
             const ray_direction = zeng.mat_mult_vec3(player_matrix, zeng.vec3{ .z = -100 });
             const b_coll = phy.convex_collider{ .data = undefined, .matrix = zeng.mat_tran(zeng.mat_identity, entity_input.shoot_origin), .support = &phy.point };
 
-            const shg_result = phy.ray_cast_spatial_hashgrid(entity_input.shoot_origin, ray_direction, res.get(std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.convex_collider))), events);
+            const shg_result = phy.ray_cast_collision_space(entity_input.shoot_origin, ray_direction, collision_space, events);
 
             var minimum_t: ?f32 = null;
             var minimum_entity: ecs.entity_id = undefined;
@@ -158,7 +156,7 @@ pub fn player_collision_system(player_q: *ecs.query(.{ player_component, zeng.wo
     }
 }
 /// Runs player movement simulation and visual animations once per tick
-pub fn player_simulate_and_animate_system(asset_reg: *asset_registry, time: *time_res, player_q: *ecs.query(.{ player_component, rpc.input_message, zeng.world_matrix }), animator_q: *ecs.query(.{ zeng.skeleton, zeng.animation_component })) !void {
+pub fn player_simulate_and_animate_system(world: *ecs.world_t, pdr: *zeng.player_distinguishing_res, asset_reg: *asset_registry, time: *time_res, player_q: *ecs.query(.{ player_component, rpc.input_message, zeng.world_matrix }), animator_q: *ecs.query(.{ zeng.skeleton, zeng.animation_component })) !void {
     const animation_A = asset_reg.get_maybe("assets/gltf/people/KingShiny.gltf/animations/Idle", zeng.loader.animation).?;
     const animation_B = asset_reg.get_maybe("assets/gltf/people/KingShiny.gltf/animations/Run", zeng.loader.animation).?;
 
@@ -166,7 +164,7 @@ pub fn player_simulate_and_animate_system(asset_reg: *asset_registry, time: *tim
     while (player_it.next()) |player_curr| {
         const _player, const input: *rpc.input_message, const matrix = player_curr;
 
-        simulate_player(_player, input, matrix, time);
+        simulate_player(world, _player, input, matrix, time, pdr);
 
         const anim = animator_q.get(_player.animation_controller, zeng.animation_component).?;
         const skel = animator_q.get(_player.animation_controller, zeng.skeleton).?;
@@ -243,9 +241,6 @@ pub fn simulate_collision(plyr: *player_component, world_matrix: *zeng.world_mat
                         // };
                         // events.send_local(tri);
 
-                        // std.debug.assert(collider.data == .triangle);
-                        // std.debug.assert(collider.support == &phy.standalone_triangle);
-
                         const p = phy.shape_separation(collider.*, capsule_collider, 10);
                         if (p.length() < capsule_radius) {
                             if (p.neg().normalized().dot(zeng.vec3.UP) > 0.5) {
@@ -268,39 +263,6 @@ pub fn simulate_collision(plyr: *player_component, world_matrix: *zeng.world_mat
         }
     }
 
-    // for (list_of_collision_cells.items) |curr_collision_cell| {
-    //     for (curr_collision_cell.items) |curr_collider| {
-    //         if (already_checked.contains(curr_collider)) continue;
-    //         already_checked.put(curr_collider, void{}) catch unreachable;
-
-    //         std.debug.assert(curr_collider.tag == .support_based); // just for now
-
-    //         _ = tri_ev;
-    //         // const coll_data = @as(*const phy.mesh_triangle_data, @ptrCast(@alignCast(curr_collider.data)));
-    //         // tri_ev.send(.{
-    //         //     zeng.mat_mult_vec4(curr_collider.matrix, coll_data.positions[coll_data.indices[0]].to_vec4(1.0)).to_vec3(),
-    //         //     zeng.mat_mult_vec4(curr_collider.matrix, coll_data.positions[coll_data.indices[1]].to_vec4(1.0)).to_vec3(),
-    //         //     zeng.mat_mult_vec4(curr_collider.matrix, coll_data.positions[coll_data.indices[2]].to_vec4(1.0)).to_vec3(),
-    //         // });
-
-    //         const p = phy.shape_separation(curr_collider.*, capsule_collider, 10);
-    //         if (p.length() < capsule_radius) {
-    //             if (p.neg().normalized().dot(zeng.vec3.UP) > 0.5) {
-    //                 plyr.grounded = true;
-    //                 plyr.ground_normal = p.neg().normalized();
-    //             }
-    //             world_matrix.* = zeng.mat_tran(world_matrix.*, p.add(p.neg().normalized().mult_scalar(capsule_radius)));
-    //             capsule_collider.matrix = world_matrix.*;
-    //             combined_normal = combined_normal.add(p.neg().normalized());
-    //             combined_normal_count += 1;
-    //         }
-    //         if (p.length() < closest_dist) {
-    //             cloest_point = p;
-    //             closest_dist = p.length();
-    //         }
-    //     }
-    // }
-
     if (old_grounded and !plyr.grounded and closest_dist < 0.6) {
         if (closest_point.neg().normalized().dot(zeng.vec3.UP) > 0.5) {
             plyr.grounded = true;
@@ -311,27 +273,34 @@ pub fn simulate_collision(plyr: *player_component, world_matrix: *zeng.world_mat
         }
     }
     if (combined_normal_count > 0) plyr.velocity = plyr.velocity.slide(combined_normal);
-
-    std.debug.print("grounded: {}   cell count: {}  |  tri count: {}\n", .{ plyr.grounded, cell_count, tri_count });
 }
 /// Player movement and logic - designed to be multiple times per frame for latency compensation
-pub fn simulate_player(_player: *player_component, input: *const rpc.input_message, matrix: *zeng.world_matrix, time: *time_res) void {
-    const rotated_matrix = matrix_from_euler(input.rot_x, input.rot_y);
+pub fn simulate_player(world: *ecs.world_t, _player: *player_component, input: *const rpc.input_message, matrix: *zeng.world_matrix, time: *time_res, main_player_res: *zeng.player_distinguishing_res) void {
+    if (!_player.enemy) {
+        const rotated_matrix = matrix_from_euler(input.rot_x, input.rot_y);
+        const basis_right = zeng.mat_right(rotated_matrix).slide(_player.ground_normal).normalized();
+        const basis_forward = basis_right.cross(_player.ground_normal);
+        const move_vect = basis_right.mult_scalar(input.move_vect.x).add(basis_forward.mult_scalar(input.move_vect.y));
+        simulate_player_wth_move_vect(move_vect, _player, input, matrix, time);
+    } else {
+        const p = zeng.mat_position(world.get(main_player_res.main_player_id, zeng.world_matrix).?.*);
+        const d = p.sub(zeng.mat_position(matrix.*)).slide(.UP).clamp(1.0);
+        simulate_player_wth_move_vect(d, _player, input, matrix, time);
+    }
+}
 
+pub fn simulate_player_wth_move_vect(move_vect: zeng.vec3, _player: *player_component, input: *const rpc.input_message, matrix: *zeng.world_matrix, time: *time_res) void {
     if (input.jump and _player.grounded) {
         _player.velocity = _player.velocity.add(zeng.vec3{ .y = 4 });
         _player.grounded = false;
         _player.ground_normal = zeng.vec3.UP;
     }
 
-    const max_speed: f32 = if (input.sprint and !input.aiming) 6.0 else 3.0;
+    const max_speed: f32 = if (input.sprint and !input.aiming) 5.0 else 2.5;
     const acc: f32 = 60.0;
-    const basis_right = zeng.mat_right(rotated_matrix).slide(_player.ground_normal).normalized();
-    const basis_forward = basis_right.cross(_player.ground_normal);
-    var move_vect = basis_right.mult_scalar(input.move_vect.x).add(basis_forward.mult_scalar(input.move_vect.y));
 
     if (_player.grounded) {
-        if (input.move_vect.length() > 0.1) {
+        if (move_vect.length() > 0.1) {
             if (_player.velocity.length_sq() > 0.01) {
                 const g = move_vect.sub(_player.velocity.normalized()).clamp(1.0);
                 const h = g.mult_scalar(2.0).add(move_vect).normalized();

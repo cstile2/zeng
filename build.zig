@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) !void {
         },
     });
     const hot_reload_module = b.addModule("hot_reload", .{
-        .root_source_file = b.path("dynamic/script_copy.zig"),
+        .root_source_file = b.path("dynamic/hot_reload.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{

@@ -14,7 +14,7 @@ pub fn get_file_bytes(filepath: []const u8, allocator: std.mem.Allocator) []u8 {
     // read the file and store it into a dynamically allocated array of u8 > return as a slice
     const buf = allocator.alloc(u8, stat.size) catch unreachable;
     var reader = file.reader(buf);
-    const n = reader.read(buf) catch unreachable;
+    const n = reader.file.read(buf) catch unreachable;
     return buf[0..n];
 }
 pub fn separate_text(text: []const u8, comptime delimiter: u8, allocator: std.mem.Allocator) [][]u8 {
@@ -1034,14 +1034,7 @@ fn get_component_type_enum(_type: usize) zeng.gl.GLenum {
         else => unreachable,
     };
 }
-fn get_offsest_and_length(accessor_index: usize, accessors: gltf.node, bufferviews: gltf.node) struct { usize, usize, usize } {
-    const bv_index: usize = @intCast(accessors.array.items[accessor_index].object.get("bufferView").?.integer);
-    const offset: usize = @intCast(bufferviews.array.items[bv_index].object.get("byteOffset").?.integer);
-    const length: usize = @intCast(bufferviews.array.items[bv_index].object.get("byteLength").?.integer);
-    const component_type: usize = @intCast(accessors.array.items[accessor_index].object.get("componentType").?.integer);
-    return .{ offset, length, component_type };
-}
-fn get_offsest_and_length2(accessor_index: usize, accessors: gltf.node, bufferviews: gltf.node) struct { usize, usize, usize, usize } {
+fn get_offsest_and_length(accessor_index: usize, accessors: gltf.node, bufferviews: gltf.node) struct { usize, usize, usize, usize } {
     const bv_index: usize = @intCast(accessors.array.items[accessor_index].object.get("bufferView").?.integer);
     const offset: usize = @intCast(bufferviews.array.items[bv_index].object.get("byteOffset").?.integer);
     const length: usize = @intCast(bufferviews.array.items[bv_index].object.get("byteLength").?.integer);
@@ -1221,9 +1214,9 @@ pub const imported_3d_scene = struct {
     collision_matrix_slice: []zeng.world_matrix,
     collision_node_id_slice: []usize,
 };
-pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, dependencies_path: []const u8, allocator: std.mem.Allocator, skin_shader_program: u32, static_shader_program: u32, default_texture: u32) imported_3d_scene {
+pub fn gltf_extract_resources(root_n: *gltf.node, buffers: []const []const u8, dependencies_path: []const u8, allocator: std.mem.Allocator, skin_shader_program: u32, static_shader_program: u32, default_texture: u32) imported_3d_scene {
     var result_top_level_children = std.AutoHashMap(usize, void).init(allocator);
-    for (root_n.?.object.get("scenes").?.array.items) |scene_n| {
+    for (root_n.object.get("scenes").?.array.items) |scene_n| {
         for (scene_n.object.get("nodes").?.array.items) |node_n| {
             result_top_level_children.put(@intCast(node_n.integer), void{}) catch unreachable;
         }
@@ -1243,14 +1236,14 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
     var result_collision_matrix_list = std.ArrayList(zeng.world_matrix).initCapacity(allocator, 0) catch unreachable;
     var result_collision_node_id_list = std.ArrayList(usize).initCapacity(allocator, 0) catch unreachable;
 
-    const nodes_n = root_n.?.object.get("nodes").?;
-    const accessors_n = root_n.?.object.get("accessors").?;
-    const bufferviews_n = root_n.?.object.get("bufferViews").?;
+    const nodes_n = root_n.object.get("nodes").?;
+    const accessors_n = root_n.object.get("accessors").?;
+    const bufferviews_n = root_n.object.get("bufferViews").?;
 
-    const _animations_n = root_n.?.object.get("animations");
-    const _textures_n = root_n.?.object.get("textures");
-    const _images_n = root_n.?.object.get("images");
-    const _skins_n = root_n.?.object.get("skins");
+    const _animations_n = root_n.object.get("animations");
+    const _textures_n = root_n.object.get("textures");
+    const _images_n = root_n.object.get("images");
+    const _skins_n = root_n.object.get("skins");
 
     if (_skins_n) |skins_n| {
         var current_skin_num: usize = 0;
@@ -1270,7 +1263,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
             @memset(temp_bone_parent_indices, -1);
 
             const temp_inverse_bind_matrices = allocator.alloc(zeng.world_matrix, bone_counter) catch unreachable;
-            const this_buffer_index, const offset: usize, const length: usize, _ = get_offsest_and_length2(@intCast(current_skin_n.object.get("inverseBindMatrices").?.integer), accessors_n.*, bufferviews_n.*);
+            const this_buffer_index, const offset: usize, const length: usize, _ = get_offsest_and_length(@intCast(current_skin_n.object.get("inverseBindMatrices").?.integer), accessors_n.*, bufferviews_n.*);
             @memcpy(@as([*]u8, @ptrCast(temp_inverse_bind_matrices)), buffers[this_buffer_index][offset .. offset + length]);
 
             const _default_bone_translations = allocator.alloc(zeng.vec3, temp_bone_parent_indices.len) catch unreachable;
@@ -1312,8 +1305,8 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
 
                 const input_accessor_index: usize = @intCast(sampler.object.get("input").?.integer);
                 const output_accessor_index: usize = @intCast(sampler.object.get("output").?.integer);
-                const input_buffer, const input_offset, const input_length, const input_component_type = get_offsest_and_length2(input_accessor_index, accessors_n.*, bufferviews_n.*);
-                const output_buffer, const output_offset, const output_length, const output_component_type = get_offsest_and_length2(output_accessor_index, accessors_n.*, bufferviews_n.*);
+                const input_buffer, const input_offset, const input_length, const input_component_type = get_offsest_and_length(input_accessor_index, accessors_n.*, bufferviews_n.*);
+                const output_buffer, const output_offset, const output_length, const output_component_type = get_offsest_and_length(output_accessor_index, accessors_n.*, bufferviews_n.*);
 
                 std.debug.assert(get_component_type_enum(input_component_type) == zeng.gl.FLOAT);
                 std.debug.assert(get_component_type_enum(output_component_type) == zeng.gl.FLOAT);
@@ -1414,7 +1407,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
             }
             const mat = zeng.mat_tran(zeng.mat_mult(zeng.quat_to_mat(rotation), zeng.mat_scal(zeng.mat_identity, scale)), translation); // duplicated for each primitive
 
-            const mesh_n = root_n.?.object.get("meshes").?.array.items[@intCast(mesh_index_n.?.integer)];
+            const mesh_n = root_n.object.get("meshes").?.array.items[@intCast(mesh_index_n.?.integer)];
             for (mesh_n.object.get("primitives").?.array.items) |primitive_n| {
                 var base_color_of_material: ?zeng.vec3 = null;
                 var alpha_mode: bool = false;
@@ -1424,7 +1417,7 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
                 const attributes_n = primitive_n.object.get("attributes").?;
                 if (primitive_n.object.get("material")) |material_index_n| { // material
                     const material_index: usize = @intCast(material_index_n.integer);
-                    const material_n = root_n.?.object.get("materials").?.array.items[material_index];
+                    const material_n = root_n.object.get("materials").?.array.items[material_index];
 
                     if (material_n.object.get("pbrMetallicRoughness")) |pbr| {
                         if (pbr.object.get("baseColorFactor")) |bcf| {
@@ -1458,60 +1451,43 @@ pub fn gltf_extract_resources(root_n: ?*gltf.node, buffers: []const []const u8, 
 
                 var position_buffer: usize, var position_data_offset: usize, var position_data_len: usize, var position_component_type: usize = .{ 0, 0, 0, 5126 };
                 if (attributes_n.object.get("POSITION")) |position_accessor_n| {
-                    position_buffer, position_data_offset, position_data_len, position_component_type = get_offsest_and_length2(@intCast(position_accessor_n.integer), accessors_n.*, bufferviews_n.*);
+                    position_buffer, position_data_offset, position_data_len, position_component_type = get_offsest_and_length(@intCast(position_accessor_n.integer), accessors_n.*, bufferviews_n.*);
                 }
                 const position_component_size = get_component_type_size(position_component_type);
 
                 var normal_buffer: usize, var normal_data_offset: usize, var normal_data_len: usize, var normal_component_type: usize = .{ 0, 0, 0, 5126 };
                 if (attributes_n.object.get("NORMAL")) |normal_accessor_n| {
-                    normal_buffer, normal_data_offset, normal_data_len, normal_component_type = get_offsest_and_length2(@intCast(normal_accessor_n.integer), accessors_n.*, bufferviews_n.*);
+                    normal_buffer, normal_data_offset, normal_data_len, normal_component_type = get_offsest_and_length(@intCast(normal_accessor_n.integer), accessors_n.*, bufferviews_n.*);
                 }
                 const normal_component_size = get_component_type_size(normal_component_type);
 
                 var texcoord_data_buffer: usize, var texcoord_data_offset: usize, var texcoord_data_len: usize, var texcoord_component_type: usize = .{ 0, 0, 0, 5126 };
                 if (attributes_n.object.get("TEXCOORD_0")) |texcoord_accessor_n| {
-                    texcoord_data_buffer, texcoord_data_offset, texcoord_data_len, texcoord_component_type = get_offsest_and_length2(@intCast(texcoord_accessor_n.integer), accessors_n.*, bufferviews_n.*);
+                    texcoord_data_buffer, texcoord_data_offset, texcoord_data_len, texcoord_component_type = get_offsest_and_length(@intCast(texcoord_accessor_n.integer), accessors_n.*, bufferviews_n.*);
                 }
                 const texcoord_component_size = get_component_type_size(texcoord_component_type);
 
                 var joints_buffer: usize, var joints_data_offset: usize, var joints_data_len: usize, var joints_component_type: usize = .{ 0, 0, 0, 5121 };
                 if (attributes_n.object.get("JOINTS_0")) |joints_accessor_n| {
-                    joints_buffer, joints_data_offset, joints_data_len, joints_component_type = get_offsest_and_length2(@intCast(joints_accessor_n.integer), accessors_n.*, bufferviews_n.*);
+                    joints_buffer, joints_data_offset, joints_data_len, joints_component_type = get_offsest_and_length(@intCast(joints_accessor_n.integer), accessors_n.*, bufferviews_n.*);
                 }
                 const joints_component_size = get_component_type_size(joints_component_type);
 
                 var weights_buffer: usize, var weights_data_offset: usize, var weights_data_len: usize, var weights_component_type: usize = .{ 0, 0, 0, 5126 };
                 if (attributes_n.object.get("WEIGHTS_0")) |weights_accessor_n| {
-                    weights_buffer, weights_data_offset, weights_data_len, weights_component_type = get_offsest_and_length2(@intCast(weights_accessor_n.integer), accessors_n.*, bufferviews_n.*);
+                    weights_buffer, weights_data_offset, weights_data_len, weights_component_type = get_offsest_and_length(@intCast(weights_accessor_n.integer), accessors_n.*, bufferviews_n.*);
                 }
                 const weights_component_size = get_component_type_size(weights_component_type);
 
-                const indices_data_buffer, const indices_data_offset: usize, const indices_data_len: usize, const indices_component_type: usize = get_offsest_and_length2(@intCast(primitive_n.object.get("indices").?.integer), accessors_n.*, bufferviews_n.*);
+                const indices_data_buffer, const indices_data_offset: usize, const indices_data_len: usize, const indices_component_type: usize = get_offsest_and_length(@intCast(primitive_n.object.get("indices").?.integer), accessors_n.*, bufferviews_n.*);
                 const indices_component_size = get_component_type_size(indices_component_type);
 
                 const mesh_data_size: usize = (position_data_len / position_component_size) * (3 * position_component_size + 3 * normal_component_size + 2 * texcoord_component_size + 4 * joints_component_size + 4 * weights_component_size);
                 var mesh_data = allocator.alloc(u8, mesh_data_size) catch unreachable;
 
                 if (skin_index_n == null) { // create a collider based on this STATIC mesh and add it to the global list of colliders
-                    std.debug.assert(indices_component_type == 5123); // i think i only accounted for this type, prob get rid of this eventually
 
-                    const mesh_collider_positions: []zeng.vec3 = allocator.alloc(zeng.vec3, position_data_len / 12) catch unreachable;
-                    var mesh_collider_indices: []u32 = undefined;
-
-                    @memcpy(@as([*]u8, @ptrCast(mesh_collider_positions)), buffers[position_buffer][position_data_offset .. position_data_offset + position_data_len]);
-
-                    mesh_collider_indices = allocator.alloc(u32, indices_data_len / 2) catch unreachable;
-                    var curr_byte_offset: usize = 0;
-                    while (curr_byte_offset < indices_data_len) {
-                        defer curr_byte_offset += 2;
-
-                        var i: u16 = undefined;
-                        @memcpy(@as([*]u8, @ptrCast(&i)), buffers[indices_data_buffer][indices_data_offset + curr_byte_offset .. indices_data_offset + curr_byte_offset + 2]);
-                        const _i: u32 = @intCast(i);
-                        mesh_collider_indices[curr_byte_offset / 2] = _i;
-                    }
-
-                    const collider_mesh = zeng.cpu_mesh{ .indices = mesh_collider_indices, .positions = mesh_collider_positions };
+                    const collider_mesh = get_mesh_data_from_gltf(allocator, indices_component_type, buffers, position_buffer, position_data_len, position_data_offset, indices_data_buffer, indices_data_len, indices_data_offset);
 
                     result_collision_mesh_list.append(allocator, collider_mesh) catch unreachable;
                     result_collision_matrix_list.append(allocator, mat) catch unreachable;
@@ -1783,7 +1759,6 @@ pub fn auto_import(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, folde
 
     const gltf_bytes = get_file_bytes(full_file_path, allocator);
     const parsed_gltf = gltf_parse(gltf_bytes, allocator);
-    if (parsed_gltf == null) unreachable;
     var buffers = std.ArrayList([]u8).initCapacity(allocator, parsed_gltf.?.object.get("buffers").?.array.items.len) catch unreachable;
     const decoder = std.base64.Base64Decoder.init(std.base64.standard_alphabet_chars, '=');
     for (parsed_gltf.?.object.get("buffers").?.array.items) |buffer_n| {
@@ -1805,7 +1780,7 @@ pub fn auto_import(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, folde
         }
     }
 
-    const imported = gltf_extract_resources(parsed_gltf, buffers.items, folder_name, allocator, skin_shader, static_shader, default_texture);
+    const imported = gltf_extract_resources(parsed_gltf.?, buffers.items, folder_name, allocator, skin_shader, static_shader, default_texture);
     const cached_imported = allocator.create(imported_3d_scene) catch unreachable;
     cached_imported.* = imported;
     asset_reg.put(full_file_path, cached_imported);
@@ -1816,4 +1791,26 @@ pub fn auto_import(asset_reg: *zeng.asset_registry_t, world: *ecs.world_t, folde
     }
 
     return zeng.loader.instantiate_model_hierarchy(imported, world, allocator, collision_space);
+}
+
+pub fn get_mesh_data_from_gltf(allocator: std.mem.Allocator, indices_component_type: usize, buffers: []const []const u8, position_buffer: usize, position_data_len: usize, position_data_offset: usize, indices_data_buffer: usize, indices_data_len: usize, indices_data_offset: usize) zeng.cpu_mesh {
+    std.debug.assert(indices_component_type == 5123); // i think i only accounted for this type, prob get rid of this eventually
+
+    const mesh_collider_positions: []zeng.vec3 = allocator.alloc(zeng.vec3, position_data_len / 12) catch unreachable;
+    var mesh_collider_indices: []u32 = undefined;
+
+    @memcpy(@as([*]u8, @ptrCast(mesh_collider_positions)), buffers[position_buffer][position_data_offset .. position_data_offset + position_data_len]);
+
+    mesh_collider_indices = allocator.alloc(u32, indices_data_len / 2) catch unreachable;
+    var curr_byte_offset: usize = 0;
+    while (curr_byte_offset < indices_data_len) {
+        defer curr_byte_offset += 2;
+
+        var i: u16 = undefined;
+        @memcpy(@as([*]u8, @ptrCast(&i)), buffers[indices_data_buffer][indices_data_offset + curr_byte_offset .. indices_data_offset + curr_byte_offset + 2]);
+        const _i: u32 = @intCast(i);
+        mesh_collider_indices[curr_byte_offset / 2] = _i;
+    }
+
+    return zeng.cpu_mesh{ .indices = mesh_collider_indices, .positions = mesh_collider_positions };
 }

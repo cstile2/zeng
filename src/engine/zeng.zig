@@ -385,7 +385,7 @@ pub const shadow_map_res = struct {
         ret.shader_program = loader.load_shader(allocator, "assets/shaders/light_map_vertex.shader", "assets/shaders/light_map_fragment.shader");
 
         ret.camera_matrix = mat_tran(mat_axis_angle(zeng.vec3.RIGHT, -3.14159 / 3.0), .{ .y = -5 });
-        ret.projection_matrix = mat_ortho(-10, 10, -10, 10, 0, 40);
+        ret.projection_matrix = mat_ortho(-15, 15, -15, 15, 0, 40);
 
         zeng.gl.genFramebuffers(1, &ret.depth_map_frame_buffer_object);
 
@@ -425,10 +425,6 @@ pub const shadow_map_res = struct {
         gl.uniformMatrix4fv(light_space_matrix_location, 1, gl.FALSE, &mat);
         const model_location = gl.getUniformLocation(this.shader_program, "model");
 
-        // gl.enable(gl.CULL_FACE);
-        // gl.cullFace(gl.FRONT);
-        // defer gl.cullFace(gl.BACK);
-        // gl.cullFace(gl.BACK);
         gl.disable(gl.CULL_FACE);
 
         gl.viewport(0, 0, this.shadow_width, this.shadow_height);
@@ -440,7 +436,6 @@ pub const shadow_map_res = struct {
             const entity_matrix, const entity_mesh = bundle;
 
             gl.uniformMatrix4fv(model_location, 1, gl.FALSE, entity_matrix);
-
             zeng.gl.bindVertexArray(entity_mesh.vao_gpu);
             zeng.gl.drawElements(zeng.gl.TRIANGLES, entity_mesh.indices_length, entity_mesh.indices_type, null);
         }
@@ -567,14 +562,14 @@ pub const collision_space_t = struct {
         pub fn init(this: *@This(), allocator: std.mem.Allocator) void {
             this.allocator = allocator;
             this.chunks = std.ArrayList([]phy.convex_collider).initCapacity(allocator, 0) catch unreachable;
-            this.chunks.append(this.allocator, this.allocator.alloc(phy.convex_collider, 100000) catch unreachable) catch unreachable;
+            this.chunks.append(this.allocator, this.allocator.alloc(phy.convex_collider, 10000) catch unreachable) catch unreachable;
             this.curr_index = 0;
             this.__last_appended_ptr = null;
         }
         pub fn append(this: *@This(), collider: phy.convex_collider) void {
             if (this.curr_index >= this.chunks.getLast().len) {
                 std.debug.print("cool\n", .{});
-                this.chunks.append(this.allocator, this.allocator.alloc(phy.convex_collider, 100000) catch unreachable) catch unreachable;
+                this.chunks.append(this.allocator, this.allocator.alloc(phy.convex_collider, 10000) catch unreachable) catch unreachable;
                 this.curr_index = 0;
             }
 
@@ -618,7 +613,6 @@ pub const collision_space_t = struct {
 
         return this.all_colliders.__last_appended_ptr.?;
     }
-
     pub fn update_entity_collider(this: *@This(), entity: ecs.entity_id, entity_matrix: zeng.world_matrix) void {
         const list = this.entity_to_collider_collection.get(entity).?;
 
@@ -628,7 +622,6 @@ pub const collision_space_t = struct {
             this.scatter_collider(collider);
         }
     }
-
     pub fn unscatter_collider(this: *@This(), collider: *phy.convex_collider) void {
         const list = this.inverse.get(collider).?;
 

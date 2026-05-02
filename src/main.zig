@@ -172,17 +172,16 @@ pub const hot_reloader = struct {
         if (game_lib == null) return null;
         const ptr = c.GetProcAddress(game_lib, "get_game_api");
         const dynamic_get_game_api: *const @TypeOf(hot_reload.get_game_api) = @ptrCast(ptr orelse return null);
-        std.debug.print("script was hot reloaded!\n", .{});
         return dynamic_get_game_api().*;
     }
-    pub fn hot_reload_api(this: *@This()) !hot_reload.hot_reload_procedures {
-        var src_dir = std.fs.cwd().openDir(".", .{}) catch unreachable;
+    pub fn hot_reload_api(this: *@This()) ?hot_reload.hot_reload_procedures {
+        var src_dir = std.fs.cwd().openDir(".", .{}) catch return null;
         defer src_dir.close();
 
         if (this.dll_hinstance != null) _ = zeng.c.FreeLibrary(this.dll_hinstance.?);
 
-        try std.fs.Dir.copyFile(src_dir, "zig-out/bin/hot_reload.dll", src_dir, "zig-out/bin/hot_reload_copy.dll", .{});
-        return this.load_api() orelse unreachable;
+        std.fs.Dir.copyFile(src_dir, "zig-out/bin/hot_reload.dll", src_dir, "zig-out/bin/hot_reload_copy.dll", .{}) catch return null;
+        return this.load_api();
     }
     pub fn store_last_dll_write_time(this: *@This(), path: []const u8) void {
         this.last_dll_write_time = _get_last_dll_write_time(path);
@@ -252,15 +251,14 @@ pub const hot_reloader = struct {
         compile_dll(allocator) catch unreachable;
     }
 
-    pub fn try_new_api(this: *@This(), game_api: *hot_reload.hot_reload_procedures) void {
+    pub fn try_new_api(this: *@This(), game_api: *hot_reload.hot_reload_procedures) bool {
         const new_write_time = _get_last_dll_write_time("zig-out/bin/hot_reload.dll");
-        if (new_write_time != this.last_dll_write_time) blk: {
-            game_api.* = this.hot_reload_api() catch |err| {
-                std.debug.print("error: {}\n", .{err});
-                break :blk;
-            };
+        if (new_write_time != this.last_dll_write_time) {
+            game_api.* = this.hot_reload_api() orelse return false;
             this.last_dll_write_time = new_write_time;
+            return true;
         }
+        return false;
     }
 };
 
@@ -464,23 +462,6 @@ pub const sprite3D_mesh_res = struct {
     mesh: zeng.mesh,
 };
 
-pub fn create_tower(res: *zeng.resources_t, allocator: std.mem.Allocator) ecs.entity_id {
-    const default = res.get(rendering_defaults_res);
-    const root = zeng.loader.auto_import(res.get(zeng.asset_registry_t), res.get(ecs.world_t), "assets/gltf/people", "Female suit", default.skin_shader, default.static_shader, default.default_texture, allocator, null);
-    const skinned = zeng.find_component_of_type_actual(res.get(ecs.world_t), root, zeng.skinned_mesh, res.get(zeng.resource_fetcher_t).fresh_query(.{zeng.children_component}));
-    const sk = skinned.?.skeleton;
-
-    res.get(ecs.world_t).add(zeng.auto_animate_component{}, sk);
-    res.get(ecs.world_t).add(zeng.animation_component{ .time = 0.0, .current_animation = 0 }, sk);
-    return root;
-}
-
-pub const rendering_defaults_res = struct {
-    skin_shader: u32,
-    static_shader: u32,
-    default_texture: u32,
-};
-
 pub fn auto_animate_system(q: *ecs.query(.{ zeng.skeleton, zeng.animation_component, zeng.auto_animate_component }), time: *zeng.time_res, asset_reg: *zeng.asset_registry_t) !void {
     var it = q.iterator();
     while (it.next()) |curr| {
@@ -530,6 +511,7 @@ pub fn main() !void {
     var world: ecs.world_t = ecs.world_t.init(allocator);
     defer world.deinit();
     var fet: zeng.resource_fetcher_t = .{ .world = &world, .res = &res, .allocator = arena_allocator };
+    var main_hot_reloader = hot_reloader{};
 
     _ = try std.Thread.spawn(.{}, aud.audio_engine_run, .{});
     zeng.global_world_ptr = &world;
@@ -552,20 +534,7 @@ pub fn main() !void {
         _value.put("roughness", .{ .float_1 = 0.5 }) catch unreachable;
         break :blk _value;
     } }, .vao_gpu = cube_vao };
-    var gun_shot = aud.get_audio_file_data(zeng.loader.get_file_bytes("assets/sounds/gun_shot.wav", arena_allocator)) catch unreachable;
-    asset_registry.put("sounds/gun_shot.wav", &gun_shot);
-    var bell = aud.get_audio_file_data(zeng.loader.get_file_bytes("assets/sounds/bell.wav", arena_allocator)) catch unreachable;
-    asset_registry.put("sounds/bell.wav", &bell);
-    var ahem = aud.get_audio_file_data(zeng.loader.get_file_bytes("assets/sounds/ahem.wav", arena_allocator)) catch unreachable;
-    asset_registry.put("sounds/ahem.wav", &ahem);
-    var fireball_sound = aud.get_audio_file_data(zeng.loader.get_file_bytes("assets/sounds/fireball.wav", arena_allocator)) catch unreachable;
-    asset_registry.put("sounds/fireball.wav", &fireball_sound);
-    var spell = aud.get_audio_file_data(zeng.loader.get_file_bytes("assets/sounds/spell.wav", arena_allocator)) catch unreachable;
-    asset_registry.put("sounds/spell.wav", &spell);
-    var damage_sound = aud.get_audio_file_data(zeng.loader.get_file_bytes("assets/sounds/damage.wav", arena_allocator)) catch unreachable;
-    asset_registry.put("sounds/damage.wav", &damage_sound);
-    var step_sound = aud.get_audio_file_data(zeng.loader.get_file_bytes("assets/sounds/foot_step.wav", arena_allocator)) catch unreachable;
-    asset_registry.put("sounds/foot_step.wav", &step_sound);
+    load_sound_assets(arena_allocator, &asset_registry);
 
     var top_children = std.ArrayList(ecs.entity_id).initCapacity(allocator, 0) catch unreachable;
     defer top_children.deinit(allocator);
@@ -579,27 +548,23 @@ pub fn main() !void {
 
     const cube_entity = world.spawn(.{ cube_mesh, zeng.mat_tran(zeng.mat_identity, .{ .x = -7.0, .y = 2.0 }), zeng.floater_component{} });
 
-    const test_entity = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf/people", "KingShiny", skin_shader, static_shader, white_tex, arena_allocator, &collision_space);
-    top_children.append(allocator, test_entity) catch unreachable;
-    const test_random_skinned_mesh = zeng.find_component_of_type(&world, test_entity, zeng.skinned_mesh, fet.fresh_query(.{zeng.children_component})).?;
-    const test_skeleton_entity = world.get(test_random_skinned_mesh, zeng.skinned_mesh).?.skeleton;
-    world.add(zeng.animation_component{ .time = 0.0, .current_animation = 0 }, test_skeleton_entity);
-    world.get(test_entity, zeng.world_matrix).?.* = zeng.mat_tran(world.get(test_entity, zeng.world_matrix).?.*, .{ .x = 5 });
-    world.add(zeng.auto_animate_component{}, test_skeleton_entity);
-
-    const player_entity = zeng.player_module.construct_local_player(&asset_registry, &world, skin_shader, static_shader, uv_checker_tex, &fet, &top_children, arena_allocator);
+    const player_entity = zeng.player_module.construct_local_player(&asset_registry, &world, skin_shader, static_shader, white_tex, &fet, &top_children, arena_allocator);
     world.get(player_entity, zeng.world_matrix).?.* = zeng.mat_tran(world.get(player_entity, zeng.world_matrix).?.*, zeng.vec3{ .y = 5.0 });
 
     const map_entity = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf", "outdoor_map_6_8_25", skin_shader, static_shader, uv_checker_tex, arena_allocator, &collision_space);
     top_children.append(allocator, map_entity) catch unreachable;
 
-    const new = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf", "modular_building_set", skin_shader, static_shader, uv_checker_tex, arena_allocator, &collision_space);
-    top_children.append(allocator, new) catch unreachable;
-    world.get(new, zeng.world_matrix).?.* = zeng.mat_scal_aligned(world.get(new, zeng.world_matrix).?.*, zeng.vec3.ONE.mult_scalar(1.5));
-    zeng.sync_transforms_children(new, &world);
-    zeng.recurisve_update_collider(new, &world, &collision_space);
+    const modular_walls = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf", "modular_walls", skin_shader, static_shader, white_tex, arena_allocator, &collision_space);
+    top_children.append(allocator, modular_walls) catch unreachable;
+    // world.get(new, zeng.world_matrix).?.* = zeng.mat_scal_aligned(world.get(new, zeng.world_matrix).?.*, zeng.vec3.ONE.mult_scalar(1.5));
+    // zeng.sync_transforms_children(new, &world);
+    // zeng.recurisve_update_collider(new, &world, &collision_space);
 
-    res.insert(rendering_defaults_res{ .default_texture = uv_checker_tex, .skin_shader = skin_shader, .static_shader = static_shader });
+    const enemy = zeng.player_module.create_player(&asset_registry, &world, skin_shader, static_shader, white_tex, &fet, &top_children, allocator, .{ .net_id = zeng.get_new_netid(), .remote_peer = null });
+    world.get(enemy, zeng.world_matrix).?.* = zeng.mat_tran(world.get(enemy, zeng.world_matrix).?.*, .{ .y = 2.0 });
+    world.get(enemy, zeng.player_module.player_component).?.enemy = true;
+
+    inline for (zeng.generated_types.net_event_types) |T| res.insert(msg(T).init(allocator, true));
     res.insert_ptr(&res);
     res.insert_ptr(&asset_registry);
     res.insert_ptr(&fet);
@@ -629,9 +594,6 @@ pub fn main() !void {
     res.insert_ptr(&inverse_peer_map);
     res.insert(zeng.shadow_map_res.init(allocator));
     res.insert(zeng.mouse_state_res{ .mouse_position = undefined, .mouse_pressed = undefined, .mouse_released = undefined });
-    var spatial_hash_grid = std.AutoHashMap(phy.ivec3, std.ArrayList(*phy.convex_collider)).init(allocator);
-    defer spatial_hash_grid.deinit();
-    res.insert_ptr(&spatial_hash_grid);
     const fixed_rate: f64 = 60.0;
     const fixed_delta: f64 = 1.0 / fixed_rate;
     res.insert(zeng.time_res{ .delta_time_f64 = 0.006944, .delta_time = 0.006944, .fixed_delta_time_f64 = fixed_delta, .fixed_delta_time = @floatCast(fixed_delta) });
@@ -649,10 +611,6 @@ pub fn main() !void {
     const sdf_text_rect_mesh = zeng.mesh{ .vao_gpu = square_vao, .indices_length = square_indices_length, .indices_type = zeng.gl.UNSIGNED_INT, .material = undefined };
     var events = zeng.events_t{ .commands = &commands, .tracker = &tracker, .res = &res };
     res.insert_ptr(&events);
-
-    inline for (zeng.generated_types.net_event_types) |T| res.insert(msg(T).init(allocator, true));
-
-    top_children.append(allocator, create_tower(&res, arena_allocator)) catch unreachable;
 
     var accumulator: f64 = 0.0;
     var tick: isize = 0;
@@ -708,6 +666,10 @@ pub fn main() !void {
 
     var result: ?phy.raycast_result_t = null;
 
+    var game_api = main_hot_reloader.hot_reload_api().?;
+    main_hot_reloader.store_last_dll_write_time("zig-out/bin/hot_reload.dll");
+    var t_pressed_last_frame: bool = false;
+
     zeng.frame_timer_warmup();
     while (true) {
         zeng.start_of_frame();
@@ -716,6 +678,10 @@ pub fn main() !void {
         commands.time += res.get(zeng.time_res).delta_time_f64;
         if (res.get_maybe(zeng.multiplayer_res)) |mr| {
             zeng.net.recieve_net_messages(mr.main_socket, &res, allocator, &tracker);
+        }
+        if (main_hot_reloader.try_new_api(&game_api)) {
+            std.debug.print("script was hot reloaded successfully", .{});
+            aud.play_sound(asset_registry.get("sounds/compiled.wav", aud.audio_sample_info).*, .one_shot);
         }
 
         const mouse_state = res.get(zeng.mouse_state_res);
@@ -734,6 +700,12 @@ pub fn main() !void {
                 zeng.show_cursor();
             }
         }
+
+        if (zeng.get_key(.t) and !t_pressed_last_frame) {
+            std.debug.print("hello from host\n", .{});
+            game_api.on_button_pressed(&res);
+        }
+        t_pressed_last_frame = zeng.get_key(.t);
 
         const multiplayer = res.get_maybe(zeng.multiplayer_res);
         if (multiplayer != null) {
@@ -805,7 +777,7 @@ pub fn main() !void {
                             // std.debug.print("missing buffered input for tick: {} {} {}\n", .{ im.tick, _tick, tick });
                             break;
                         }
-                        zeng.player_module.simulate_player(world.get(player_entity, zeng.player_module.player_component).?, &im, world.get(player_entity, zeng.world_matrix).?, res.get(zeng.time_res));
+                        zeng.player_module.simulate_player(&world, world.get(player_entity, zeng.player_module.player_component).?, &im, world.get(player_entity, zeng.world_matrix).?, res.get(zeng.time_res), res.get(zeng.player_distinguishing_res));
                         zeng.player_module.simulate_collision(world.get(player_entity, zeng.player_module.player_component).?, world.get(player_entity, zeng.world_matrix).?, &collision_space, &events);
                     }
                     draw_resims = @intCast(@max(tick - snap_event.tick, 0));
@@ -878,7 +850,7 @@ pub fn main() !void {
                         buffer_velocity = 0.0;
                     }
                     // buffer_time += res.get(zeng.time_res).delta_time_f64 * buffer_velocity;
-                    buffer_time = (exponential_rtt * 0.5) * 1.6 + 0.015; // this is a made up heuristic
+                    buffer_time = (exponential_rtt * 0.5) * 1.6 + 0.03; // this is a made up heuristic
 
                     const desired_time = synced_time + buffer_time;
                     const my_time = @as(f64, @floatFromInt(tick)) * fixed_delta + accumulator;
@@ -908,7 +880,7 @@ pub fn main() !void {
                         const remote_player_input = world.get(ent, rpc.input_message).?;
                         remote_player_input.* = current_frame_input;
                     } else {
-                        std.debug.print("missed input for tick: {}\n", .{tick});
+                        std.debug.print("bad input for tick: {}\n", .{tick});
                     }
                     const TARGET_TICK_EARLINESS = 2;
                     if (remote_player_entry.value_ptr.input_buffer.get(tick + TARGET_TICK_EARLINESS).tick != tick + TARGET_TICK_EARLINESS) { // also check if this client is ready for 2 TICKS IN THE FUTURE. we want a small grace window in case network spikes
@@ -1224,7 +1196,7 @@ pub fn main() !void {
         { // enact queued messages + commands
             var got_hit_events = res.get(msg(rpc.got_hit)).iterator();
             while (got_hit_events.iterate()) |got_hit_event| {
-                aud.play_sound(damage_sound, .one_shot);
+                aud.play_sound(asset_registry.get("sounds/damage.wav", aud.audio_sample_info).*, .one_shot);
                 const cam_matrix = world.get(main_camera, zeng.world_matrix).?;
                 const delta = got_hit_event.source_position.sub(zeng.mat_position(cam_matrix.*)).normalized();
                 hit_indicator_direction = delta;
@@ -1235,7 +1207,7 @@ pub fn main() !void {
             }
             var hitmarker_events = res.get(msg(rpc.hitmarker)).iterator();
             while (hitmarker_events.iterate()) |_| {
-                aud.play_sound(bell, .one_shot);
+                aud.play_sound(asset_registry.get("sounds/bell.wav", aud.audio_sample_info).*, .one_shot);
             }
             var delete_events = res.get(msg(zeng.delete_event)).iterator();
             while (delete_events.iterate()) |curr_delete_event| {
@@ -1301,25 +1273,25 @@ pub fn camera_fly_system(cam: *zeng.main_camera_res, world: *ecs.world_t, q: *ec
     }
 }
 /// Render all meshes and skinned meshes (if they also have a world_matrix component)
-pub fn draw_mesh_system(world: *ecs.world_t, cam: *zeng.main_camera_res, render_q: *ecs.query(.{ zeng.world_matrix, zeng.mesh }), skinned_q: *ecs.query(.{ zeng.world_matrix, zeng.skinned_mesh }), shadow_map: *zeng.shadow_map_res) !void {
+pub fn draw_mesh_system(world: *ecs.world_t, cam: *zeng.main_camera_res, static_mesh_query: *ecs.query(.{ zeng.world_matrix, zeng.mesh }), skinned_mesh_query: *ecs.query(.{ zeng.world_matrix, zeng.skinned_mesh }), shadow_map: *zeng.shadow_map_res) !void {
     const cam_matrix = world.get(cam.id, zeng.world_matrix).?;
     const cam_cam = world.get(cam.id, zeng.camera).?;
 
     const inv_camera_matrix: [16]f32 = zeng.mat_invert(cam_matrix.*);
     const shadow_light_space_matrix = zeng.mat_mult(shadow_map.projection_matrix, zeng.mat_invert(shadow_map.camera_matrix));
 
-    var render_iterator = render_q.iterator();
-    while (render_iterator.next()) |transform_mesh| {
+    var static_mesh_iterator = static_mesh_query.iterator();
+    while (static_mesh_iterator.next()) |transform_mesh| {
         const transform, const mesh = transform_mesh;
 
-        zeng.render.draw_mesh(mesh.*, transform.*, cam_cam.projection_matrix, inv_camera_matrix, zeng.mat_position(cam_matrix.*), shadow_light_space_matrix, shadow_map);
+        zeng.render.draw_animated_skinned_mesh(world, mesh.*, transform.*, cam_cam.projection_matrix, inv_camera_matrix, zeng.mat_position(cam_matrix.*), shadow_light_space_matrix, shadow_map);
     }
 
-    var skinned_iterator = skinned_q.iterator();
-    while (skinned_iterator.next()) |transform_skin| {
+    var skinned_mesh_iterator = skinned_mesh_query.iterator();
+    while (skinned_mesh_iterator.next()) |transform_skin| {
         const transform, const skin = transform_skin;
 
-        zeng.render.draw_animated_skinned_mesh(world, skin.*, transform.*, cam_cam.projection_matrix, inv_camera_matrix, zeng.mat_position(cam_matrix.*));
+        zeng.render.draw_animated_skinned_mesh(world, skin.*, transform.*, cam_cam.projection_matrix, inv_camera_matrix, zeng.mat_position(cam_matrix.*), shadow_light_space_matrix, shadow_map);
     }
 }
 
@@ -1339,7 +1311,7 @@ pub fn sprite3D_render_system(q: *ecs.query(.{ zeng.world_matrix, zeng.sprite3D 
         zeng.mat_position_set(&m, p);
         m = zeng.mat_scal(m, zeng.vec3.ONE.mult_scalar(0.5));
 
-        zeng.render.draw_mesh(square_mesh.mesh, m, cam_cam.projection_matrix, inv_camera_matrix, zeng.mat_position(cam_matrix.*), shadow_light_space_matrix, shadow_map);
+        zeng.render.draw_animated_skinned_mesh(world, square_mesh.mesh, m, cam_cam.projection_matrix, inv_camera_matrix, zeng.mat_position(cam_matrix.*), shadow_light_space_matrix, shadow_map);
     }
 }
 
@@ -1397,8 +1369,8 @@ pub const proc = struct {
     camera_recoil: f32 = 0.0,
     lerped_camera_recoil: f32 = 0.0,
 
-    pistol_noise_position: zeng.vec2 = zeng.vec2.ZERO,
-    camera_shake_position: vec2 = zeng.vec2.ZERO,
+    pistol_noise_sampler: zeng.vec2 = zeng.vec2.ZERO,
+    camera_noise_sampler: vec2 = zeng.vec2.ZERO,
     camera_shake_amount: f32 = 0.0,
 
     player_step_phase: f32 = 0.0,
@@ -1417,9 +1389,9 @@ pub const proc = struct {
         const asset_registry = this.res.get(zeng.asset_registry_t);
 
         if (zeng.get_mouse_button(.right)) {
-            cam.fov = zeng.lerp(cam.fov, 1.0, 18 * delta_time);
+            cam.fov = zeng.lerp(cam.fov, 1.1, 18 * delta_time);
         } else {
-            cam.fov = zeng.lerp(cam.fov, 1.5, 18 * delta_time);
+            cam.fov = zeng.lerp(cam.fov, 1.6, 18 * delta_time);
         }
         cam.projection_matrix = zeng.mat_perspective_projection(cam.fov, @as(f32, @floatFromInt(graphics.width)) / @as(f32, @floatFromInt(graphics.height)), 0.01, 1000.0);
 
@@ -1442,7 +1414,7 @@ pub const proc = struct {
             this.player_step_phase = 0.5;
         } else {
             const old_phase = this.player_step_phase;
-            this.player_step_phase += player_c.velocity.length() * delta_time * 0.3;
+            this.player_step_phase += player_c.velocity.length() * delta_time * 0.34;
 
             if (old_phase < 0.5 and this.player_step_phase >= 0.5 or old_phase < 1.0 and this.player_step_phase >= 1.0) {
                 aud.play_sound(asset_registry.get("sounds/foot_step.wav", aud.audio_sample_info).*, .one_shot);
@@ -1456,7 +1428,7 @@ pub const proc = struct {
             zeng.mat_axis_angle(zeng.vec3.UP, @floatCast(local_player_input.rot_x)),
             zeng.mat_mult(zeng.mat_axis_angle(zeng.vec3.RIGHT, @as(f32, @floatCast(local_player_input.rot_y)) + this.lerped_camera_recoil), zeng.mat_identity),
         );
-        cam_matrix.* = zeng.mat_mult(zeng.mat_axis_angle(zeng.vec3.FORWARD, util.perlin(this.camera_shake_position) * 0.05 * this.camera_shake_amount), cam_matrix.*);
+        cam_matrix.* = zeng.mat_mult(zeng.mat_axis_angle(zeng.vec3.FORWARD, util.perlin(this.camera_noise_sampler) * 0.05 * this.camera_shake_amount), cam_matrix.*);
         // cam_matrix.* = zeng.mat_mult(zeng.mat_axis_angle(zeng.mat_forward(cam_matrix.*), 0.01 * @sin(2.0 * 3.1415 * this.player_step_phase)), cam_matrix.*);
         zeng.mat_position_set(cam_matrix, camera_target_position.add(zeng.vec3{ .y = 0.8 })); // + 0.02 * @sin(4.0 * 3.1415 * this.player_step_phase) }));
 
@@ -1484,23 +1456,25 @@ pub const proc = struct {
 
         const estimated_rotational_velocity = zeng.vec2.sub(.{ .x = @floatCast(local_player_input.rot_x), .y = @floatCast(local_player_input.rot_y) }, this.camera_last_frame_rotations).div_scalar(delta_time);
 
-        this.camera_rotational_velocity = this.camera_rotational_velocity.lerp(estimated_rotational_velocity.mult_scalar(0.003), 13.0 * delta_time);
+        this.camera_rotational_velocity = this.camera_rotational_velocity.lerp(estimated_rotational_velocity.mult_scalar(0.002).clamp(0.01), 12.0 * delta_time);
 
-        const shake_multiplier: f32 = 1.0;
-        // if (zeng.get_mouse_button(.right)) shake_multiplier = 0.1;
         const offset_player_step_phase = this.player_step_phase + 0.25;
 
         var bob_lerp_target: zeng.vec3 = .ZERO;
         if (player_c.velocity.length() < 0.0001 or !player_c.grounded) {} else {
-            bob_lerp_target = zeng.vec3.mult_scalar(.{ .x = @sin(2.0 * 3.1415 * offset_player_step_phase), .y = @cos(4.0 * 3.1415 * offset_player_step_phase) * 0.1 }, 0.02);
+            bob_lerp_target = zeng.vec3.mult_scalar(.{ .x = @sin(2.0 * 3.1415 * offset_player_step_phase), .y = @cos(4.0 * 3.1415 * offset_player_step_phase) * -0.2 }, 0.02);
         }
         this.pistol_lerped_bob = this.pistol_lerped_bob.lerp(bob_lerp_target, 10 * delta_time);
-        var pistol_lerped_location = pistol_local_position.lerp(pistol_local_position2, this.pistol_lerp_amount);
-        const pistol_effect: zeng.vec3 = zeng.vec3.ZERO.add(.{ .x = this.camera_rotational_velocity.x, .y = -this.camera_rotational_velocity.y }).add(zeng.vec3.mult_scalar(.{ .x = util.perlin(this.pistol_noise_position), .y = util.perlin(this.pistol_noise_position.add(.{ .y = 1.0 })), .z = util.perlin(this.pistol_noise_position.add(.{ .y = 2.0 })) }, 0.01 * shake_multiplier)).add(this.pistol_lerped_bob).mult_scalar(pistol_effect_multiplier);
-        pistol_lerped_location = pistol_lerped_location.add(pistol_effect);
 
-        this.pistol_noise_position = this.pistol_noise_position.add(zeng.vec2.mult_scalar(.{ .x = 1.0 }, 0.25 * delta_time));
-        this.camera_shake_position = this.camera_shake_position.add(zeng.vec2.mult_scalar(.{ .x = 1.0 }, 20.0 * delta_time));
+        var pistol_output_position = pistol_local_position.lerp(pistol_local_position2, this.pistol_lerp_amount);
+        var pistol_position_effect: zeng.vec3 = .ZERO;
+        pistol_position_effect = pistol_position_effect.add(.{ .x = this.camera_rotational_velocity.x, .y = -this.camera_rotational_velocity.y });
+        pistol_position_effect = pistol_position_effect.add(zeng.vec3.mult_scalar(.{ .x = util.perlin(this.pistol_noise_sampler), .y = util.perlin(this.pistol_noise_sampler.add(.{ .y = 1.0 })), .z = util.perlin(this.pistol_noise_sampler.add(.{ .y = 2.0 })) }, 0.01));
+        pistol_position_effect = pistol_position_effect.add(this.pistol_lerped_bob);
+        pistol_output_position = pistol_output_position.add(pistol_position_effect.mult_scalar(pistol_effect_multiplier));
+
+        this.pistol_noise_sampler = this.pistol_noise_sampler.add(zeng.vec2.mult_scalar(.{ .x = 1.0 }, 0.25 * delta_time));
+        this.camera_noise_sampler = this.camera_noise_sampler.add(zeng.vec2.mult_scalar(.{ .x = 1.0 }, 20.0 * delta_time));
 
         this.camera_last_frame_rotations = .{ .x = @floatCast(local_player_input.rot_x), .y = @floatCast(local_player_input.rot_y) };
         this.camera_last_rotational_velocity = estimated_rotational_velocity;
@@ -1509,9 +1483,11 @@ pub const proc = struct {
         this.pistol_recoil_rotation += this.pistol_recoil_rotation_speed * delta_time;
         this.pistol_recoil_rotation = @max(0, this.pistol_recoil_rotation);
 
-        const new_pistol_mat = zeng.mat_mult(cam_matrix.*, zeng.mat_tran(zeng.mat_axis_angle(zeng.vec3.RIGHT, this.pistol_recoil_rotation), pistol_lerped_location));
+        var pistol_output_rotation: zeng.vec2 = .ZERO;
+        pistol_output_rotation = pistol_output_rotation.add(.{ .x = this.camera_rotational_velocity.x * 6.0, .y = this.camera_rotational_velocity.y * 6.0 + this.pistol_recoil_rotation });
 
-        world.get(pistol_entity, zeng.world_matrix).?.* = new_pistol_mat;
+        const output_pistol_mat = zeng.mat_mult(cam_matrix.*, zeng.mat_tran(zeng.mat_mult(zeng.mat_axis_angle(zeng.vec3.UP, pistol_output_rotation.x), zeng.mat_axis_angle(zeng.vec3.RIGHT, pistol_output_rotation.y)), pistol_output_position));
+        world.get(pistol_entity, zeng.world_matrix).?.* = output_pistol_mat;
         zeng.sync_transforms_children(pistol_entity, world);
 
         this.camera_recoil -= 0.5 * delta_time;
@@ -1525,36 +1501,28 @@ pub const proc = struct {
 };
 
 // play test ready:
-// a decent map w/ decent graphics + navmesh
-// lag compensation
-// zombies with A* pathfinding
-// probably a cool hook to get jensen interested
+// zombies with A* pathfinding [in_progress]
+// a decent map w/ decent graphics + navmesh [in_progress]
+// lag compensation []
+// probably a cool hook to get jensen interested []
 
-// =========================================================================================
+pub fn load_sound_assets(allocator: std.mem.Allocator, asset_registry: *zeng.asset_registry_t) void {
+    var open_dir = std.fs.cwd().openDir("assets/sounds", .{ .iterate = true }) catch unreachable;
+    defer open_dir.close();
+    var it = open_dir.iterate();
 
-// world_colliders: hashmap(client_id, convex_collider)
-// spatial_hash_grid: hashmap(cell, array_hashmap(client_id, void))
+    while (it.next() catch unreachable) |f| {
+        const file_name = std.fmt.allocPrint(allocator, "assets/sounds/{s}", .{f.name}) catch unreachable;
 
-// entity stores a spatial_client_component: .{ client_id: client_id_t }
+        const sample_info_ptr = allocator.create(aud.audio_sample_info) catch unreachable;
+        sample_info_ptr.* = aud.get_audio_file_data(zeng.loader.get_file_bytes(file_name, allocator)) catch unreachable;
 
-// for a whole scene, mesh primitives are spawned as mesh entities
-// those mesh entities keep a list of client_components, which are all the triangle colliders from that mesh
-// 1 entity -> 1 mesh_primitive, 1 mesh_primitive -> many collider_data, 1 collider_data -> 1 client so, 1 entity -> many clients
+        const key_name = std.fmt.allocPrint(allocator, "sounds/{s}", .{f.name}) catch unreachable;
+        asset_registry.put(key_name, sample_info_ptr);
+    }
+}
 
-// convex_collider: simply data defining the shape/size of this collider (and maybe include matrix)
-// client: a key to a convex_collider entry in the SHG, used to add/remove that collider from the grid
-
-// if convex collider does not contain its own matrix state, then when it is used by the SHG system, the matrix of the entity will need to be fetched via world.get(id, zeng.world_matrix);
-// this kind of sucks, but it frees us from having to keep the matrices in sync, and reduces memory usage.
-// but it also probably prevents the cache from going fast?
-
-// after its all said and done, importing process will be like this:
-// gltf_import will spawn mesh entities that also (depending on import options) have a client_list component, and its mesh triangles will be as colliders in the SHG.
-// when the entity moves, grid.update(client_id) should be called for each client_id in client_list
-// so when the map is imported, and then resized, we would need to call grid.update(client_id) for each client_id in the client_list of each mesh entity seen when traversing from the root scene entity.
-
-// we will also be able to support dynamic entities as well. prob just need to consolidate ray casting triangles with gjk shapecasting
-
-// TOO SLOW
-// all_colliders: list(collider) (stable pointers)
-// spatial_hash_grid: hashmap(cell, *collider)
+// CHECK IF THIS IS TRUE:
+// The crazy thing about godot script loading at runtime, is that the script doesn't need declarations from the host program ahead of time
+// The host program loads the code, and as long as it is correct when brought into the runtime, no code errors will happen.
+// This is an extremely underrated property of scripting languages.
