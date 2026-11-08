@@ -1813,3 +1813,52 @@ pub fn get_mesh_data_from_gltf(allocator: std.mem.Allocator, indices_component_t
 
     return zeng.cpu_mesh{ .indices = mesh_collider_indices, .positions = mesh_collider_positions };
 }
+
+pub fn gltf_extract_mesh(io: std.Io, allocator: std.mem.Allocator, folder_name: []const u8, file_name: []const u8) zeng.cpu_mesh {
+    const full_file_path = std.fmt.allocPrint(allocator, "{s}/{s}.gltf", .{ folder_name, file_name }) catch unreachable;
+    const gltf_bytes = get_file_bytes(full_file_path, allocator, io);
+    const parsed_gltf = gltf_parse(gltf_bytes, allocator);
+    var buffers = std.ArrayList([]u8).initCapacity(allocator, parsed_gltf.?.object.get("buffers").?.array.items.len) catch unreachable;
+    const decoder = std.base64.Base64Decoder.init(std.base64.standard_alphabet_chars, '=');
+    for (parsed_gltf.?.object.get("buffers").?.array.items) |buffer_n| {
+        const byte_length: usize = @intCast(buffer_n.object.get("byteLength").?.integer);
+        const uri = buffer_n.object.get("uri");
+        const PREFIX = "data:application/octet-stream;base64,";
+        if (uri.?.string.len > PREFIX.len and std.mem.eql(u8, uri.?.string[0..PREFIX.len], PREFIX)) {
+            std.debug.assert(decoder.calcSizeForSlice(uri.?.string[PREFIX.len..]) catch unreachable == byte_length);
+            const data = allocator.alloc(u8, byte_length) catch unreachable;
+
+            decoder.decode(data, uri.?.string[PREFIX.len..]) catch unreachable;
+
+            buffers.append(allocator, data) catch unreachable;
+        } else {
+            const full_data_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ folder_name, uri.?.string }) catch unreachable;
+            const bin_bytes = get_file_bytes(full_data_path, allocator, io);
+
+            buffers.append(allocator, bin_bytes) catch unreachable;
+        }
+    }
+
+    const root_n = parsed_gltf.?;
+    const nodes_n = root_n.object.get("nodes").?;
+    const accessors_n = root_n.object.get("accessors").?;
+    const bufferviews_n = root_n.object.get("bufferViews").?;
+
+    const current_node_index: usize = 0;
+    const current_node_n = nodes_n.array.items[current_node_index];
+    const mesh_index_n = current_node_n.object.get("mesh");
+    const mesh_n = root_n.object.get("meshes").?.array.items[@intCast(mesh_index_n.?.integer)];
+    const primitive_n = mesh_n.object.get("primitives").?.array.items[0];
+    const attributes_n = primitive_n.object.get("attributes").?;
+
+    var position_buffer: usize, var position_data_offset: usize, var position_data_len: usize, var position_component_type: usize = .{ 0, 0, 0, 5126 };
+    if (attributes_n.object.get("POSITION")) |position_accessor_n| {
+        position_buffer, position_data_offset, position_data_len, position_component_type = get_offsest_and_length(@intCast(position_accessor_n.integer), accessors_n.*, bufferviews_n.*);
+    }
+
+    const indices_data_buffer, const indices_data_offset: usize, const indices_data_len: usize, const indices_component_type: usize = get_offsest_and_length(@intCast(primitive_n.object.get("indices").?.integer), accessors_n.*, bufferviews_n.*);
+
+    const collider_mesh = get_mesh_data_from_gltf(allocator, indices_component_type, buffers.items, position_buffer, position_data_len, position_data_offset, indices_data_buffer, indices_data_len, indices_data_offset);
+
+    return collider_mesh;
+}

@@ -509,7 +509,6 @@ pub fn main(init: std.process.Init) !void {
     var world: ecs.world_t = ecs.world_t.init(allocator);
     defer world.deinit();
     var fet: zeng.resource_fetcher_t = .{ .world = &world, .res = &res, .allocator = arena_allocator };
-    // var main_hot_reloader = hot_reloader{};
 
     _ = try std.Thread.spawn(.{}, aud.audio_engine_run, .{});
     zeng.global_world_ptr = &world;
@@ -547,16 +546,13 @@ pub fn main(init: std.process.Init) !void {
     const cube_entity = world.spawn(.{ cube_mesh, zeng.mat_tran(zeng.mat_identity, .{ .x = -7.0, .y = 2.0 }), zeng.floater_component{} });
 
     const player_entity = zeng.player_module.construct_local_player(&asset_registry, &world, skin_shader, static_shader, white_tex, &fet, &top_children, init.io, arena_allocator);
-    world.get(player_entity, zeng.world_matrix).?.* = zeng.mat_tran(world.get(player_entity, zeng.world_matrix).?.*, zeng.vec3{ .y = 5.0 });
+    world.get(player_entity, zeng.world_matrix).?.* = zeng.mat_tran(world.get(player_entity, zeng.world_matrix).?.*, zeng.vec3{ .y = 6.0, .x = -3.0 });
 
     const map_entity = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf", "outdoor_map_6_8_25", skin_shader, static_shader, uv_checker_tex, init.io, arena_allocator, &collision_space);
-    top_children.append(allocator, map_entity) catch unreachable;
+    zeng.sync_transforms_children(map_entity, &world);
 
     const modular_walls = zeng.loader.auto_import(&asset_registry, &world, "assets/gltf", "modular_walls", skin_shader, static_shader, white_tex, init.io, arena_allocator, &collision_space);
-    top_children.append(allocator, modular_walls) catch unreachable;
-    // world.get(new, zeng.world_matrix).?.* = zeng.mat_scal_aligned(world.get(new, zeng.world_matrix).?.*, zeng.vec3.ONE.mult_scalar(1.5));
-    // zeng.sync_transforms_children(new, &world);
-    // zeng.recurisve_update_collider(new, &world, &collision_space);
+    zeng.sync_transforms_children(modular_walls, &world);
 
     const enemy = zeng.player_module.create_player(&asset_registry, &world, skin_shader, static_shader, white_tex, &fet, &top_children, init.io, allocator, .{ .net_id = zeng.get_new_netid(), .remote_peer = null });
     world.get(enemy, zeng.world_matrix).?.* = zeng.mat_tran(world.get(enemy, zeng.world_matrix).?.*, .{ .y = 2.0 });
@@ -659,14 +655,19 @@ pub fn main(init: std.process.Init) !void {
     var hit_indicator_direction: zeng.vec3 = .ZERO;
     var hit_indicator_timer: f32 = 0.0;
 
-    // var positions: [1028]zeng.vec3 = undefined;
-    // var positions_len: usize = 0;
-
     var result: ?phy.raycast_result_t = null;
 
-    // var game_api = main_hot_reloader.hot_reload_api(init.io).?;
-    // main_hot_reloader.store_last_dll_write_time("zig-out/bin/hot_reload.dll", init.io);
-    var t_pressed_last_frame: bool = false;
+    const nav_mesh = zeng.loader.gltf_extract_mesh(init.io, allocator, "assets/gltf", "navmesh");
+    const adjacency = util.build_triangle_adjacency_from_indices(allocator, nav_mesh) catch unreachable;
+    const centroids = util.build_triangle_centroids(allocator, nav_mesh);
+    _ = util.compute_weights(allocator, adjacency, centroids);
+    // const kdtree = zeng.Vec3KdTree.init(arena_allocator, centroids.items) catch unreachable;
+    var pathfinder = try zeng.NavMeshPathfinder.init(
+        allocator,
+        nav_mesh.positions,
+        nav_mesh.indices,
+    );
+    defer pathfinder.deinit();
 
     zeng.frame_timer_warmup();
     while (true) {
@@ -677,10 +678,6 @@ pub fn main(init: std.process.Init) !void {
         if (res.get_maybe(zeng.multiplayer_res)) |mr| {
             zeng.net.recieve_net_messages(mr.main_socket, &res, allocator, &tracker);
         }
-        // if (main_hot_reloader.try_new_api(init.io, &game_api)) {
-        //     std.debug.print("script was hot reloaded successfully", .{});
-        //     aud.play_sound(asset_registry.get("sounds/compiled.wav", aud.audio_sample_info).*, .one_shot);
-        // }
 
         const mouse_state = res.get(zeng.mouse_state_res);
         mouse_state.mouse_position = vec2{ .x = @floatFromInt(zeng.global_mouse_screen_pos[0]), .y = @floatFromInt(zeng.global_mouse_screen_pos[1]) };
@@ -698,11 +695,6 @@ pub fn main(init: std.process.Init) !void {
                 zeng.show_cursor();
             }
         }
-
-        if (zeng.get_key(.t) and !t_pressed_last_frame) {
-            // game_api.on_button_pressed(&res);
-        }
-        t_pressed_last_frame = zeng.get_key(.t);
 
         const multiplayer = res.get_maybe(zeng.multiplayer_res);
         if (multiplayer != null) {
@@ -921,6 +913,28 @@ pub fn main(init: std.process.Init) !void {
             fet.run_system(frame_interpolator_tick_store_system);
             fet.run_system(zeng.player_module.shoot_system);
 
+            if (try pathfinder.find_path(allocator, zeng.mat_position(world.get(enemy, zeng.world_matrix).?.*), zeng.mat_position(world.get(player_entity, zeng.world_matrix).?.*))) |waypoints| {
+                defer allocator.free(waypoints);
+
+                if (zeng.get_key(.p)) {
+                    var shg_result: zeng.phy.raycast_result_t = undefined;
+                    var ri: usize = 1;
+                    while (ri < @min(10, waypoints.len)) {
+                        const direction = waypoints[ri].sub(zeng.mat_position(world.get(enemy, zeng.world_matrix).?.*)).slide(zeng.vec3.UP);
+                        shg_result = phy.ray_cast_collision_space(zeng.mat_position(world.get(enemy, zeng.world_matrix).?.*), direction, &collision_space, &events);
+                        if (shg_result.hitting or shg_result.t < 1.0) {
+                            break;
+                        }
+                        ri += 1;
+                    }
+                    ri = @min(ri, waypoints.len - 1);
+
+                    var wapointdelta = waypoints[ri].sub(zeng.mat_position(world.get(enemy, zeng.world_matrix).?.*));
+                    const D = wapointdelta.normalized().mult_scalar(0.04).add(.{ .y = -0.001 });
+                    world.get(enemy, zeng.world_matrix).?.* = zeng.mat_tran(world.get(enemy, zeng.world_matrix).?.*, D);
+                }
+            }
+
             if (multiplayer != null) {
                 if (multiplayer.?.is_server) { // periodic client/server communication
                     var client_it = peer_map.iterator();
@@ -1034,6 +1048,7 @@ pub fn main(init: std.process.Init) !void {
             } else {
                 zeng.render.draw_text(std.fmt.bufPrint(buffer[0..], "{d:.6}", .{@as(f64, @floatFromInt(tick)) * fixed_delta + accumulator}) catch unreachable, if (zeng.get_key(.p)) font_mikado else font_jetbrains, sdf_text_rect_mesh, 0, 25, 0.35, graphics);
             }
+            // zeng.render.draw_text(std.fmt.bufPrint(buffer[0..], "{d:.4}", .{}) catch unreachable, if (zeng.get_key(.p)) font_mikado else font_jetbrains, sdf_text_rect_mesh, 0, 0, 0.35, graphics);
 
             var ticker_display_time: f64 = undefined;
             if (multiplayer != null and multiplayer.?.is_server) {
@@ -1229,6 +1244,24 @@ pub fn main(init: std.process.Init) !void {
         }
         hit_indicator_timer -= res.get(zeng.time_res).delta_time;
 
+        // const p = kdtree.nearest(zeng.mat_position(world.get(player_entity, zeng.world_matrix).?.*)).?.point;
+        // zeng.render.debug_draw_triangle(.{ p, p.add(zeng.vec3.UP), p.add(zeng.vec3.UP) }, &res);
+
+        if (try pathfinder.find_path(allocator, zeng.mat_position(world.get(enemy, zeng.world_matrix).?.*), zeng.mat_position(world.get(player_entity, zeng.world_matrix).?.*))) |waypoints| {
+            defer allocator.free(waypoints);
+            // Follow waypoints in order.
+            for (waypoints) |wp| {
+                zeng.render.debug_draw_triangle(.{ wp, wp.add(zeng.vec3.UP.mult_scalar(0.2)), wp.add(zeng.vec3.RIGHT.mult_scalar(0.2)) }, &res);
+            }
+            // const D = waypoints[1].sub(waypoints[0]).normalized().mult_scalar(0.04).add(.{ .y = -0.001 });
+            // world.get(enemy, zeng.world_matrix).?.* = zeng.mat_tran(world.get(enemy, zeng.world_matrix).?.*, D);
+        }
+        var tri_i: usize = 0;
+        while (tri_i < nav_mesh.indices.len) {
+            defer tri_i += 3;
+
+            zeng.render.debug_draw_triangle(.{ nav_mesh.positions[nav_mesh.indices[tri_i]], nav_mesh.positions[nav_mesh.indices[tri_i + 1]], nav_mesh.positions[nav_mesh.indices[tri_i + 2]] }, &res);
+        }
         fba.reset();
 
         zeng.swap_buffers(graphics);
@@ -1507,7 +1540,6 @@ pub fn load_sound_assets(io: std.Io, allocator: std.mem.Allocator, asset_registr
     var open_dir = std.Io.Dir.cwd().openDir(io, "assets/sounds", .{ .iterate = true }) catch unreachable;
     defer open_dir.close(io);
     var it = open_dir.iterate();
-
     while (it.next(io) catch unreachable) |f| {
         const file_name = std.fmt.allocPrint(allocator, "assets/sounds/{s}", .{f.name}) catch unreachable;
 
@@ -1519,7 +1551,4 @@ pub fn load_sound_assets(io: std.Io, allocator: std.mem.Allocator, asset_registr
     }
 }
 
-// CHECK IF THIS IS TRUE:
-// The crazy thing about godot script loading at runtime, is that the script doesn't need declarations from the host program ahead of time
-// The host program loads the code, and as long as it is correct when brought into the runtime, no code errors will happen.
-// This is an extremely underrated property of scripting languages.
+// NEXT UP: test the kd functionality to get closest point on the navmesh

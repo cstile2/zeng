@@ -25,15 +25,15 @@ pub const peer_info_t = struct {
     socklen: socklen_t,
 };
 
+/// This denotes the length of a socket
 pub const socklen_t = i32;
+/// This is a handle to a socket - this is what we send FROM
 pub const socket_t = zeng.c.SOCKET;
+/// This is an address to a socket (not a socket itself) - this is what we send TO
 pub const sockaddr_t = zeng.c.sockaddr;
 
 fn WINDOWS_set_socket_non_blocking(sock: socket_t) !void {
     var one: c_ulong = 1;
-    // const one_ptr = @as([*]const u8, @ptrCast(&one))[0..4];
-    // const err = try std.os.windows.WSAIoctl(sock, FIONBIO, one_ptr, ""[0..0], null, null); // windows' way of setting a socket to non blocking (disgusting)
-    // zeng.c.WSAIoctl(sock, FIONBIO, lpvInBuffer: ?*anyopaque, cbInBuffer: c_ulong, lpvOutBuffer: ?*anyopaque, cbOutBuffer: c_ulong, lpcbBytesReturned: [*c]c_ulong, lpOverlapped: [*c]struct__OVERLAPPED, lpCompletionRoutine: ?*const fn (c_ulong, c_ulong, [*c]struct__OVERLAPPED, c_ulong) void)
     const err = zeng.c.ioctlsocket(sock, @bitCast(FIONBIO), &one);
     if (err != 0) unreachable;
 }
@@ -104,7 +104,6 @@ pub fn track_packet_for_send(rem_message: remote_message, tracker: *packet_ack_t
 
     return data_with_header;
 }
-
 pub fn track_packet_from_recieve(headerful_bytes: []const u8, tracker: *packet_ack_tracker_t, allocator: std.mem.Allocator) ?[]const u8 {
     var header: packet_ack_tracker_t.header_t = undefined;
 
@@ -144,6 +143,46 @@ pub fn track_packet_from_recieve(headerful_bytes: []const u8, tracker: *packet_a
     tracker.theirs.insert(header.sequence_number).acked = true;
 
     return headerful_bytes[curr..];
+}
+
+pub fn do_setup(address_string: []const u8, port: u16, is_server: bool) !struct { socket_t, sockaddr_t } {
+    var wsa_data: zeng.c.WSADATA = undefined;
+    _ = zeng.c.WSAStartup(zeng.c.MAKEWORD(2, 2), &wsa_data);
+
+    if (is_server) {
+        // const my_socket: socket_t = std.os.windows.ws2_32.socket(std.os.windows.ws2_32.AF.INET, std.os.windows.ws2_32.SOCK.DGRAM, std.os.windows.ws2_32.IPPROTO.UDP);
+        const my_socket = zeng.c.socket(zeng.c.AF_INET, zeng.c.SOCK_DGRAM, zeng.c.IPPROTO_UDP);
+        try WINDOWS_set_socket_non_blocking(my_socket);
+
+        var service: zeng.c.sockaddr_in = undefined;
+        service.sin_family = zeng.c.AF_INET;
+        service.sin_addr.S_un.S_addr = zeng.c.INADDR_ANY;
+        service.sin_port = zeng.c.htons(port);
+        const result = zeng.c.bind(my_socket, @ptrCast(&service), @sizeOf(@TypeOf(service)));
+        if (result == zeng.c.SOCKET_ERROR) unreachable;
+
+        return .{ my_socket, @bitCast(service) };
+    } else {
+        // const my_socket: socket_t = std.os.windows.ws2_32.socket(std.os.windows.ws2_32.AF.INET, std.os.windows.ws2_32.SOCK.DGRAM, std.os.windows.ws2_32.IPPROTO.UDP);
+        const my_socket = zeng.c.socket(zeng.c.AF_INET, zeng.c.SOCK_DGRAM, zeng.c.IPPROTO_UDP);
+        try WINDOWS_set_socket_non_blocking(my_socket);
+
+        // const str = std.heap.c_allocator.dupeSentinel(u8, address_string, 0) catch unreachable;
+        // defer std.heap.c_allocator.free(str);
+        const str = std.fmt.allocPrintSentinel(std.heap.c_allocator, "{s}:{}", .{ address_string, port }, 0) catch unreachable;
+
+        var service: zeng.c.sockaddr_in = undefined;
+        var len: c_int = @sizeOf(@TypeOf(service));
+        const result = zeng.c.WSAStringToAddressA(str, zeng.c.AF_INET, null, @ptrCast(&service), &len);
+        if (result != 0) unreachable;
+
+        return .{ my_socket, @bitCast(service) };
+    }
+}
+pub fn undo_setup(socket: socket_t) void {
+    const err = zeng.c.closesocket(socket);
+    if (err == -1) unreachable; // idk if this is correct
+    _ = zeng.c.WSACleanup();
 }
 
 pub fn send_net_messages(commands: *zeng.commands_t, delta_time: f64, tracker: *packet_ack_tracker_t) void {
@@ -237,43 +276,4 @@ pub fn recieve_net_messages(socket: socket_t, res: *zeng.resources_t, allocator:
             }
         }
     }
-}
-
-pub fn do_setup(address_string: []const u8, port: u16, is_server: bool) !struct { socket_t, sockaddr_t } {
-    var wsa_data: zeng.c.WSADATA = undefined;
-    _ = zeng.c.WSAStartup(zeng.c.MAKEWORD(2, 2), &wsa_data);
-
-    if (is_server) {
-        // const my_socket: socket_t = std.os.windows.ws2_32.socket(std.os.windows.ws2_32.AF.INET, std.os.windows.ws2_32.SOCK.DGRAM, std.os.windows.ws2_32.IPPROTO.UDP);
-        const my_socket = zeng.c.socket(zeng.c.AF_INET, zeng.c.SOCK_DGRAM, zeng.c.IPPROTO_UDP);
-        try WINDOWS_set_socket_non_blocking(my_socket);
-
-        var service: zeng.c.sockaddr_in = undefined;
-        service.sin_family = zeng.c.AF_INET;
-        service.sin_addr.S_un.S_addr = zeng.c.INADDR_ANY;
-        service.sin_port = zeng.c.htons(port);
-        const result = zeng.c.bind(my_socket, @ptrCast(&service), @sizeOf(@TypeOf(service)));
-        if (result == zeng.c.SOCKET_ERROR) unreachable;
-
-        return .{ my_socket, @bitCast(service) };
-    } else {
-        // const my_socket: socket_t = std.os.windows.ws2_32.socket(std.os.windows.ws2_32.AF.INET, std.os.windows.ws2_32.SOCK.DGRAM, std.os.windows.ws2_32.IPPROTO.UDP);
-        const my_socket = zeng.c.socket(zeng.c.AF_INET, zeng.c.SOCK_DGRAM, zeng.c.IPPROTO_UDP);
-        try WINDOWS_set_socket_non_blocking(my_socket);
-
-        // const str = std.heap.c_allocator.dupeSentinel(u8, address_string, 0) catch unreachable;
-        // defer std.heap.c_allocator.free(str);
-        const str = std.fmt.allocPrintSentinel(std.heap.c_allocator, "{s}:{}", .{ address_string, port }, 0) catch unreachable;
-
-        var service: zeng.c.sockaddr_in = undefined;
-        var len: c_int = @sizeOf(@TypeOf(service));
-        const result = zeng.c.WSAStringToAddressA(str, zeng.c.AF_INET, null, @ptrCast(&service), &len);
-        if (result != 0) unreachable;
-
-        return .{ my_socket, @bitCast(service) };
-    }
-}
-pub fn undo_setup(socket: socket_t) void {
-    _ = std.os.windows.ws2_32.closesocket(socket);
-    _ = zeng.c.WSACleanup();
 }

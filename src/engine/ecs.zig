@@ -418,7 +418,6 @@ pub const world_t = struct {
     }
     /// print world information
     pub fn print(this: world_t) void {
-        std.debug.print("=================================", .{});
         for (this.tables.values()) |*arch_table| {
             std.debug.print("\n-----", .{});
             var curr: u64 = 0;

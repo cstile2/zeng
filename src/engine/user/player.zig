@@ -283,9 +283,11 @@ pub fn simulate_player(world: *ecs.world_t, _player: *player_component, input: *
         const move_vect = basis_right.mult_scalar(input.move_vect.x).add(basis_forward.mult_scalar(input.move_vect.y));
         simulate_player_wth_move_vect(move_vect, _player, input, matrix, time);
     } else {
-        const p = zeng.mat_position(world.get(main_player_res.main_player_id, zeng.world_matrix).?.*);
-        const d = p.sub(zeng.mat_position(matrix.*)).slide(.UP).clamp(1.0);
-        simulate_player_wth_move_vect(d, _player, input, matrix, time);
+        _ = world;
+        _ = main_player_res;
+        // const p = zeng.mat_position(world.get(main_player_res.main_player_id, zeng.world_matrix).?.*);
+        // const d = p.sub(zeng.mat_position(matrix.*)).slide(.UP).clamp(1.0);
+        // simulate_player_wth_move_vect(d, _player, input, matrix, time);
     }
 }
 
